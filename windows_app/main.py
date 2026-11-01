@@ -184,7 +184,7 @@ class BoardWidget(QWidget):
     def __init__(self, interactive=True):
         super().__init__()
         self.interactive=interactive; self.board=chess.Board()
-        self.selected=None; self.targets=set(); self.locked=False
+        self.selected=None; self.targets=set(); self.locked=False; self.flipped=False; self.theme_index=0; self.drag_source=None
         self.setMinimumSize(320,320); self.setSizePolicy(QSizePolicy.Policy.Expanding,QSizePolicy.Policy.Expanding)
     def sizeHint(self): return QSize(420,420)
     def set_position(self, board, locked=False):
@@ -202,8 +202,12 @@ class BoardWidget(QWidget):
         checked=self.board.king(self.board.turn) if self.board.is_check() else None
         for row in range(8):
             for file in range(8):
-                sq=chess.square(file,7-row); x=x0+file*c; y=y0+row*c
-                col=QColor("#C7B894") if (file+7-row)%2==0 else QColor("#273545")
+                board_file=7-file if self.flipped else file
+                board_rank=row if self.flipped else 7-row
+                sq=chess.square(board_file,board_rank); x=x0+file*c; y=y0+row*c
+                themes=[("#C7B894","#273545"),("#E8D8B8","#8A6748"),("#E9EDF2","#68849C"),("#C6D2B3","#566E4A")]
+                light,dark=themes[self.theme_index%len(themes)]
+                col=QColor(light) if (board_file+board_rank)%2==1 else QColor(dark)
                 if last and sq in (last.from_square,last.to_square):
                     col=QColor("#758D68") if (file+7-row)%2==0 else QColor("#536F51")
                 if sq==self.selected: col=QColor("#D1A653")
@@ -219,9 +223,11 @@ class BoardWidget(QWidget):
                     p.drawText(int(x),int(y),int(c),int(c),Qt.AlignmentFlag.AlignCenter,piece.unicode_symbol())
         p.setPen(QColor(MUTED)); p.setFont(QFont("Segoe UI",9))
         for f in range(8):
-            p.drawText(int(x0+f*c),int(y0+side+3),int(c),14,Qt.AlignmentFlag.AlignHCenter,chess.FILE_NAMES[f])
+            label_file=7-f if self.flipped else f
+            p.drawText(int(x0+f*c),int(y0+side+3),int(c),14,Qt.AlignmentFlag.AlignHCenter,chess.FILE_NAMES[label_file])
         for r in range(8):
-            p.drawText(int(x0-17),int(y0+r*c+c/2-7),14,14,Qt.AlignmentFlag.AlignCenter,str(8-r))
+            label_rank=r+1 if self.flipped else 8-r
+            p.drawText(int(x0-17),int(y0+r*c+c/2-7),14,14,Qt.AlignmentFlag.AlignCenter,str(label_rank))
         p.setPen(QPen(QColor(LINE),1)); p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRect(int(x0),int(y0),int(side),int(side))
     def mousePressEvent(self,event):
@@ -230,7 +236,11 @@ class BoardWidget(QWidget):
         f=int((x-x0)/c); r=int((y-y0)/c)
         if not(0<=f<8 and 0<=r<8):
             self.selected=None; self.targets=set(); self.update(); return
-        sq=chess.square(f,7-r)
+        board_file=7-f if self.flipped else f
+        board_rank=r if self.flipped else 7-r
+        sq=chess.square(board_file,board_rank)
+        piece_at=self.board.piece_at(sq)
+        self.drag_source=sq if piece_at and piece_at.color==self.board.turn else None
         if self.selected is not None and sq in self.targets:
             moves=[m for m in self.board.legal_moves if m.from_square==self.selected and m.to_square==sq]
             if moves:
@@ -248,6 +258,36 @@ class BoardWidget(QWidget):
         else:
             self.selected=None; self.targets=set()
         self.update()
+    def mouseReleaseEvent(self,event):
+        if not self.interactive or self.locked or event.button()!=Qt.MouseButton.LeftButton:
+            return
+        source=self.drag_source
+        self.drag_source=None
+        if source is None:
+            return
+        x0,y0,c,side=self.board_geometry()
+        col=int((event.position().x()-x0)/c); row=int((event.position().y()-y0)/c)
+        if not(0<=col<8 and 0<=row<8):
+            return
+        board_file=7-col if self.flipped else col
+        board_rank=row if self.flipped else 7-row
+        target=chess.square(board_file,board_rank)
+        if target==source:
+            return
+        moves=[m for m in self.board.legal_moves if m.from_square==source and m.to_square==target]
+        if moves:
+            move=moves[0]
+            if move.promotion:
+                opts=["Donna","Torre","Alfiere","Cavallo"]
+                pieces={"Donna":chess.QUEEN,"Torre":chess.ROOK,"Alfiere":chess.BISHOP,"Cavallo":chess.KNIGHT}
+                choice,ok=QInputDialog.getItem(self,"Promozione","Promuovi il pedone a:",opts,0,False)
+                if not ok: return
+                move=chess.Move(move.from_square,move.to_square,promotion=pieces[choice])
+            self.selected=None; self.targets=set(); self.moveRequested.emit(move.uci()); self.update()
+    def toggle_orientation(self):
+        self.flipped=not self.flipped; self.selected=None; self.targets=set(); self.update()
+    def cycle_theme(self):
+        self.theme_index=(self.theme_index+1)%4; self.update()
 
 class EngineAnalysisWorker(QThread):
     analysisReady = Signal(str, int)
