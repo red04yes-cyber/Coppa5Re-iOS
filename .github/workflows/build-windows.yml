@@ -15,9 +15,6 @@ jobs:
   build-windows:
     runs-on: windows-latest
     timeout-minutes: 45
-    env:
-      C5R_SIGNING_CERT_BASE64: ${{ secrets.C5R_SIGNING_CERT_BASE64 }}
-      C5R_SIGNING_CERT_PASSWORD: ${{ secrets.C5R_SIGNING_CERT_PASSWORD }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -41,30 +38,6 @@ jobs:
       - name: Build standalone EXE
         run: |
           pyinstaller --noconfirm --clean --onefile --windowed --name Coppa5Re --distpath dist --workpath build/windows --specpath build/windows windows_app/main.py
-      - name: Sign executable (when a trusted certificate is configured)
-        if: ${{ env.C5R_SIGNING_CERT_BASE64 != '' && env.C5R_SIGNING_CERT_PASSWORD != '' }}
-        shell: pwsh
-        run: |
-          $pfxPath = Join-Path $env:RUNNER_TEMP "c5r-signing.pfx"
-          try {
-            $bytes = [Convert]::FromBase64String($env:C5R_SIGNING_CERT_BASE64)
-            [IO.File]::WriteAllBytes($pfxPath, $bytes)
-            $sdkBin = Join-Path "${env:ProgramFiles(x86)}" "Windows Kits\10\bin"
-            $signTool = Get-ChildItem $sdkBin -Filter signtool.exe -Recurse -ErrorAction Stop |
-              Where-Object { $_.FullName -match '\\x64\\signtool.exe$' } |
-              Sort-Object FullName -Descending | Select-Object -First 1
-            if (-not $signTool) { throw "Windows SDK signtool.exe non trovato" }
-            & $signTool.FullName sign /f $pfxPath /p $env:C5R_SIGNING_CERT_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 "dist/Coppa5Re.exe"
-            if ($LASTEXITCODE -ne 0) { throw "Firma digitale non riuscita (exit code $LASTEXITCODE)" }
-            & $signTool.FullName verify /pa /v "dist/Coppa5Re.exe"
-            if ($LASTEXITCODE -ne 0) { throw "Verifica della firma digitale non riuscita" }
-          }
-          finally {
-            if (Test-Path $pfxPath) { Remove-Item $pfxPath -Force }
-          }
-      - name: Note when no signing certificate is configured
-        if: ${{ env.C5R_SIGNING_CERT_BASE64 == '' || env.C5R_SIGNING_CERT_PASSWORD == '' }}
-        run: Write-Host "Certificato non configurato: l'EXE viene prodotto senza firma digitale."
       - name: Verify executable
         run: |
           if (!(Test-Path "dist/Coppa5Re.exe")) { throw "Coppa5Re.exe non trovato" }
