@@ -957,7 +957,12 @@ class MainWindow(QMainWindow):
     def install_shortcuts(self):
         shortcuts=[("Ctrl+S",self.save),("Ctrl+E",self.export_all_pgn),
                    ("Ctrl+Shift+B",self.export_backup),("Ctrl+1",lambda:self.tabs.setCurrentIndex(1)),
-                   ("Ctrl+2",lambda:self.tabs.setCurrentIndex(2)),("Ctrl+3",lambda:self.tabs.setCurrentIndex(3))]
+                   ("Ctrl+2",lambda:self.tabs.setCurrentIndex(2)),("Ctrl+3",lambda:self.tabs.setCurrentIndex(3)),
+                   ("Ctrl+Z",lambda:self.undo(self.live_cards[0].game_id)),
+                   ("Alt+Left",lambda:self.live_cards[0].previous_move()),
+                   ("Alt+Right",lambda:self.live_cards[0].next_move()),
+                   ("F2",lambda:self.live_cards[0].board.toggle_orientation()),
+                   ("F3",lambda:self.live_cards[1].board.toggle_orientation())]
         self.shortcuts=[]
         for key,callback in shortcuts:
             shortcut=QShortcut(QKeySequence(key),self)
