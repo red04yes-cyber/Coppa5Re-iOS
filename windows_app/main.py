@@ -186,11 +186,21 @@ class BoardWidget(QWidget):
         super().__init__()
         self.interactive=interactive; self.board=chess.Board()
         self.selected=None; self.targets=set(); self.locked=False; self.flipped=False; self.theme_index=0; self.drag_source=None
+        self.move_flash=0.0; self.flash_timer=QTimer(self); self.flash_timer.setInterval(45); self.flash_timer.timeout.connect(self.fade_move_flash)
         self.setMinimumSize(320,320); self.setSizePolicy(QSizePolicy.Policy.Expanding,QSizePolicy.Policy.Expanding)
     def sizeHint(self): return QSize(420,420)
     def set_position(self, board, locked=False):
+        previous_len=len(self.board.move_stack)
+        previous_last=self.board.peek() if self.board.move_stack else None
         self.board=board.copy(stack=True); self.locked=locked
+        new_last=self.board.peek() if self.board.move_stack else None
+        if len(self.board.move_stack)>previous_len or (new_last and new_last!=previous_last):
+            self.move_flash=1.0; self.flash_timer.start()
         self.selected=None; self.targets=set(); self.update()
+    def fade_move_flash(self):
+        self.move_flash=max(0.0,self.move_flash-0.075)
+        self.update()
+        if self.move_flash<=0: self.flash_timer.stop()
     def board_geometry(self):
         side=max(8,min(self.width()-38,self.height()-38))
         cell=side/8
@@ -231,6 +241,14 @@ class BoardWidget(QWidget):
             p.drawText(int(x0-17),int(y0+r*c+c/2-7),14,14,Qt.AlignmentFlag.AlignCenter,str(label_rank))
         p.setPen(QPen(QColor(LINE),1)); p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRect(int(x0),int(y0),int(side),int(side))
+        if last and self.move_flash>0:
+            pulse=QColor(216,179,106,int(190*self.move_flash))
+            p.setPen(QPen(pulse,max(1,int(7*self.move_flash))))
+            for square in (last.from_square,last.to_square):
+                file=chess.square_file(square); rank=chess.square_rank(square)
+                display_file=7-file if self.flipped else file
+                display_row=rank if self.flipped else 7-rank
+                p.drawRect(int(x0+display_file*c+2),int(y0+display_row*c+2),int(c-4),int(c-4))
     def mousePressEvent(self,event):
         if not self.interactive or self.locked or event.button()!=Qt.MouseButton.LeftButton: return
         x0,y0,c,side=self.board_geometry(); x=event.position().x(); y=event.position().y()
