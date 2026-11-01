@@ -92,7 +92,7 @@ try:
     playoff_pgn = window.build_playoff_pgn("sf1")
     assert playoff_pgn.headers["Result"] == "1/2-1/2"
     assert playoff_pgn.headers["TimeControl"] == "1800+10"
-    assert playoff_pgn.headers["C5R_ArmageddonWinner"] == window.playoff_pgn_name(pair[0]) if hasattr(window, "playoff_pgn_name") else pair[0] == window.playoff_winners["sf1"]
+    assert playoff_pgn.headers["C5R_ArmageddonWinner"] == PLAYERS[pair[0]][0]
 
     window.playoff_results.pop("sf2", None)
     clock = window.clock_data("sf2")
