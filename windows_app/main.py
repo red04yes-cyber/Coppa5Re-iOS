@@ -911,7 +911,9 @@ class MainWindow(QMainWindow):
         self.pen_reason=QLineEdit(); self.pen_reason.setPlaceholderText("Ritardo, infrazione, decisione arbitro…"); grid.addWidget(self.pen_reason,1,2)
         add=QPushButton("REGISTRA PENALITÀ"); add.setObjectName("PrimaryButton"); add.clicked.connect(self.add_penalty); grid.addWidget(add,1,3)
         l.addWidget(card); self.pen_list=QListWidget(); l.addWidget(self.pen_list,1)
-        row=QHBoxLayout(); row.addStretch(); rem=QPushButton("Annulla voce selezionata"); rem.clicked.connect(self.remove_penalty); row.addWidget(rem); l.addLayout(row)
+        row=QHBoxLayout(); row.addStretch()
+        edit=QPushButton("Modifica selezionata"); edit.clicked.connect(self.edit_penalty); row.addWidget(edit)
+        rem=QPushButton("Annulla voce selezionata"); rem.clicked.connect(self.remove_penalty); row.addWidget(rem); l.addLayout(row)
         return page
     def bracket_card(self,title,a,b):
         f=QFrame(); f.setObjectName("Card"); v=QVBoxLayout(f)
@@ -930,11 +932,29 @@ class MainWindow(QMainWindow):
         l.addLayout(grid); l.addStretch(); return page
     def add_penalty(self):
         p=self.pen_player.currentData(); amount=float(self.pen_amount.value()); reason=self.pen_reason.text().strip() or "Penalità manuale"
-        self.penalties.append({"player":p,"points":-amount,"reason":reason,"time":datetime.now().strftime("%d/%m/%Y %H:%M")})
+        entry={"player":p,"points":-amount,"reason":reason,"time":datetime.now().strftime("%d/%m/%Y %H:%M")}
+        self.penalties.append(entry)
+        self.log_operation("Penalità aggiunta",p,"0",f"{-amount:+.1f}",reason)
         self.pen_reason.clear(); self.save(); self.refresh_all()
+    def edit_penalty(self):
+        i=self.pen_list.currentRow()
+        if not 0<=i<len(self.penalties): return
+        item=self.penalties[i]
+        amount,ok=QInputDialog.getDouble(self,"Modifica penalità","Importo della detrazione (punti):",
+            abs(float(item.get("points",0))),0.5,10.0,1)
+        if not ok: return
+        reason,ok=QInputDialog.getText(self,"Modifica motivazione","Motivazione:",text=item.get("reason",""))
+        if not ok: return
+        before=dict(item); item["points"]=-abs(amount); item["reason"]=reason.strip() or "Penalità manuale"
+        item["time"]=datetime.now().strftime("%d/%m/%Y %H:%M")
+        self.log_operation("Penalità modificata",item.get("player"),before,item)
+        self.save(); self.refresh_all()
     def remove_penalty(self):
         i=self.pen_list.currentRow()
-        if 0<=i<len(self.penalties): del self.penalties[i]; self.save(); self.refresh_all()
+        if 0<=i<len(self.penalties):
+            item=self.penalties.pop(i)
+            self.log_operation("Penalità annullata",item.get("player"),item,"0")
+            self.save(); self.refresh_all()
     def export_pgn(self,gid):
         b=self.get_board(gid); _,r,w,bl=game(gid); node=chess.pgn.Game.from_board(b)
         node.headers["Event"]=APP_NAME; node.headers["Round"]=str(r); node.headers["White"]=name(w); node.headers["Black"]=name(bl)
