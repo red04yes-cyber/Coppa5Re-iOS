@@ -621,7 +621,9 @@ class MainWindow(QMainWindow):
         self.results={}; self.penalties=[]; self.moves={}; self.boards={}; self.broadcast=None; self.engine_path=None; self.engine_enabled=True; self.engine_service=None; self.analysis_running_gid=None
         self._odds_cache_key=None; self._odds_cache=None
         self.time_control="15+3"; self.clocks={}; self.audit_log=[]; self.match_notes={}; self.referee=""
-        self.tie_break="Nessuno"; self.playoff_results={}; self.eval_history={}; self.clock_ticks=0; self.board_theme=0
+        self.tie_break="Regolamento Art. 8"; self.playoff_results={}; self.eval_history={}; self.clock_ticks=0; self.board_theme=0
+        self.game_terminations={}; self.move_reviews={}; self.withdrawn_players={}; self.recovery_path=storage_path().with_name("recovery.json")
+        self.offer_recovery()
         self.load_state(); self.build_ui(); self.refresh_all()
         self.clock_timer=QTimer(self); self.clock_timer.timeout.connect(self.tick_clocks); self.clock_timer.start(1000)
         self.install_shortcuts()
@@ -635,6 +637,8 @@ class MainWindow(QMainWindow):
                 self.audit_log=data.get("audit_log",[]); self.match_notes=data.get("match_notes",{})
                 self.referee=data.get("referee",""); self.tie_break=data.get("tie_break","Nessuno")
                 self.playoff_results=data.get("playoff_results",{}); self.playoff_winners=data.get("playoff_winners",{}); self.eval_history=data.get("eval_history",{})
+                self.game_terminations=data.get("game_terminations",{}); self.move_reviews=data.get("move_reviews",{})
+                self.withdrawn_players=data.get("withdrawn_players",{})
                 saved_schedule=data.get("schedule")
                 if saved_schedule:
                     parsed=[(g["id"],int(g["round"]),g["white"],g["black"]) for g in saved_schedule]
@@ -652,8 +656,48 @@ class MainWindow(QMainWindow):
                                   "schedule":stored_schedule,"engine_path":self.engine_path,"engine_enabled":self.engine_enabled,"time_control":self.time_control,
                                   "clocks":self.clocks,"audit_log":self.audit_log,"match_notes":self.match_notes,
                                   "referee":self.referee,"tie_break":self.tie_break,"playoff_results":self.playoff_results,
-                                  "eval_history":self.eval_history,"playoff_winners":getattr(self,"playoff_winners",{}),"saved_at":datetime.now().isoformat(timespec="seconds")},ensure_ascii=False,indent=2),encoding="utf-8")
+                                  "eval_history":self.eval_history,"playoff_winners":getattr(self,"playoff_winners",{}),
+                                  "game_terminations":self.game_terminations,"move_reviews":self.move_reviews,
+                                  "withdrawn_players":self.withdrawn_players,
+                                  "saved_at":datetime.now().isoformat(timespec="seconds")},ensure_ascii=False,indent=2),encoding="utf-8")
         tmp.replace(path)
+    def offer_recovery(self):
+        path=getattr(self,"recovery_path",storage_path().with_name("recovery.json"))
+        if not path.exists():
+            return
+        try:
+            snapshot=json.loads(path.read_text(encoding="utf-8"))
+            if not snapshot.get("moves") and not any(c.get("started") for c in snapshot.get("clocks",{}).values()):
+                path.unlink(missing_ok=True)
+                return
+            answer=QMessageBox.question(
+                self,
+                "Ripristino partita",
+                "È stata trovata una partita non salvata. Vuoi ripristinarla?",
+                QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if answer==QMessageBox.StandardButton.Yes:
+                storage_path().write_text(json.dumps(snapshot,ensure_ascii=False,indent=2),encoding="utf-8")
+                self.statusBar().showMessage("Recovery trovato: dati dell'ultima partita ripristinati.",5000)
+            path.unlink(missing_ok=True)
+        except Exception as exc:
+            QMessageBox.warning(self,"Recovery non leggibile",f"Il file di ripristino non è valido: {exc}")
+            path.unlink(missing_ok=True)
+
+    def save_recovery(self):
+        active=any(
+            (self.moves.get(gid) and not self.results.get(gid)) or self.clock_data(gid).get("started")
+            for gid,_,_,_ in GAMES
+        )
+        if not active:
+            self.recovery_path.unlink(missing_ok=True)
+            return
+        self.save()
+        tmp=self.recovery_path.with_suffix(".tmp")
+        shutil.copy2(storage_path(),tmp)
+        tmp.replace(self.recovery_path)
+
     def toggle_engine(self):
         if not self.find_engine():
             QMessageBox.warning(self,"Stockfish non disponibile","Il motore non è presente nella build corrente."); return
