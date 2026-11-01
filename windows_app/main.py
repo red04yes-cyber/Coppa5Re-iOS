@@ -1,12 +1,12 @@
 from __future__ import annotations
-import json, os, random, sys, shutil, hashlib, math
+import json, os, random, sys, shutil, hashlib, math, csv, time
 from datetime import datetime
 from pathlib import Path
 from itertools import combinations
 import chess
 import chess.pgn
-from PySide6.QtCore import Qt, QSize, Signal, QThread
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtCore import Qt, QSize, Signal, QThread, QTimer
+from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPdfWriter, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QComboBox,
     QDoubleSpinBox, QLineEdit, QVBoxLayout, QHBoxLayout, QGridLayout, QTabWidget,
