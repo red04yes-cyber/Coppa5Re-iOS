@@ -391,6 +391,7 @@ class BoardCard(QFrame):
         self.selector.currentIndexChanged.connect(self.select_game)
         self.selector.setMinimumWidth(220); top.addWidget(self.selector); lay.addLayout(top)
         self.match=QLabel(); self.match.setObjectName("MatchTitle"); lay.addWidget(self.match)
+        self.state_label=QLabel(); self.state_label.setObjectName("Eyebrow"); lay.addWidget(self.state_label)
         self.clock_label=QLabel(); self.clock_label.setObjectName("Muted"); lay.addWidget(self.clock_label)
         self.history_index=None
         self.board=BoardWidget(True); self.board.moveRequested.connect(self.move); lay.addWidget(self.board,1)
@@ -500,6 +501,8 @@ class BoardCard(QFrame):
         visible=chess.Board()
         for move in board.move_stack[:self.history_index]: visible.push(move)
         self.match.setText(f"{name(w)}  <span style='color:{GOLD}'>vs</span>  {name(b)}")
+        clock_state=self.app.clock_data(gid)
+        self.state_label.setText("CONCLUSA" if self.app.results.get(gid) else ("IN CORSO" if clock_state.get("started") else "LIVE"))
         self.turn.setText("PARTITA CONCLUSA · SCACCHIERA BLOCCATA" if self.app.results.get(gid) else
                           f"AL MUOVERE: {'BIANCO' if board.turn else 'NERO'} · {board.fullmove_number}ª mossa")
         self.board.set_position(visible,bool(self.app.results.get(gid)) or self.history_index<len(board.move_stack))
@@ -1283,7 +1286,7 @@ class MainWindow(QMainWindow):
     def build_odds(self):
         page=QWidget(); l=QVBoxLayout(page)
         h=QLabel("QUOTE E PROBABILITÀ"); h.setObjectName("SectionTitle"); l.addWidget(h)
-        desc=QLabel("Simulazione Monte Carlo sulle partite ancora da giocare, ricalcolata dopo ogni risultato e penalità. Quote eque indicative: non sono quote bookmaker né suggerimenti di puntata.")
+        desc=QLabel("Le probabilità derivano da 15.000 simulazioni Monte Carlo: partono dai pronostici 1-X-2 di ciascun accoppiamento, correggono moderatamente la forma sui risultati registrati e sottraggono le penalità dal punteggio. Quota equa = 1 / probabilità stimata. Sono stime illustrative, non quote bookmaker.")
         desc.setObjectName("Muted"); desc.setWordWrap(True); l.addWidget(desc)
         self.odds_table=QTableWidget(0,4); self.odds_table.setHorizontalHeaderLabels(["GIOCATORE","VINCENTE TORNEO","QUOTA EQUA","TOP 4"])
         self.odds_table.verticalHeader().setVisible(False); self.odds_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -1415,7 +1418,7 @@ class MainWindow(QMainWindow):
             previous=x["points"]; vals=[f"{rank}°",name(x["id"]),str(x["played"]),str(x["wins"]),str(x["draws"]),str(x["losses"]),
                    f"{x['penalty']:+.1f}" if x["penalty"] else "—",f"{x['points']:.1f}"]
             for c,val in enumerate(vals):
-                item=QTableWidgetItem(val); item.setTextAlignment(Qt.AlignmentFlag.AlignCenter if c!=1 else Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignLeft)
+                item=QTableWidgetItem(("🥇 " if rank==1 else "🥈 " if rank==2 else "🥉 " if rank==3 else "")+val if c==0 else val); item.setTextAlignment(Qt.AlignmentFlag.AlignCenter if c!=1 else Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignLeft)
                 if x["id"]=="simone": item.setForeground(QColor(GOLD))
                 if c==7: item.setFont(QFont("Segoe UI",11,QFont.Weight.Bold))
                 self.st_table.setItem(i,c,item)
