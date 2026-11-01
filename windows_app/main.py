@@ -522,7 +522,7 @@ class MainWindow(QMainWindow):
                 self.time_control=data.get("time_control","15+3"); self.clocks=data.get("clocks",{})
                 self.audit_log=data.get("audit_log",[]); self.match_notes=data.get("match_notes",{})
                 self.referee=data.get("referee",""); self.tie_break=data.get("tie_break","Nessuno")
-                self.playoff_results=data.get("playoff_results",{}); self.eval_history=data.get("eval_history",{})
+                self.playoff_results=data.get("playoff_results",{}); self.playoff_winners=data.get("playoff_winners",{}); self.eval_history=data.get("eval_history",{})
                 saved_schedule=data.get("schedule")
                 if saved_schedule:
                     parsed=[(g["id"],int(g["round"]),g["white"],g["black"]) for g in saved_schedule]
@@ -540,7 +540,7 @@ class MainWindow(QMainWindow):
                                   "schedule":stored_schedule,"engine_path":self.engine_path,"time_control":self.time_control,
                                   "clocks":self.clocks,"audit_log":self.audit_log,"match_notes":self.match_notes,
                                   "referee":self.referee,"tie_break":self.tie_break,"playoff_results":self.playoff_results,
-                                  "eval_history":self.eval_history,"saved_at":datetime.now().isoformat(timespec="seconds")},ensure_ascii=False,indent=2),encoding="utf-8")
+                                  "eval_history":self.eval_history,"playoff_winners":getattr(self,"playoff_winners",{}),"saved_at":datetime.now().isoformat(timespec="seconds")},ensure_ascii=False,indent=2),encoding="utf-8")
         tmp.replace(path)
     def find_engine(self):
         candidates=[]
@@ -1215,7 +1215,7 @@ class MainWindow(QMainWindow):
         self.final=self.bracket_card("FINALE","Vincente SF1","Vincente SF2")
         self.third=self.bracket_card("3° / 4° POSTO","Perdente SF1","Perdente SF2")
         self.playoff_cards={"sf1":self.sf1,"sf2":self.sf2,"final":self.final,"third":self.third}
-        self.playoff_winners={}
+        self.playoff_winners=getattr(self,"playoff_winners",{})
         for key,card in self.playoff_cards.items():
             card.result_box=QComboBox()
             for value,label in RESULT_OPTIONS: card.result_box.addItem(label,value)
