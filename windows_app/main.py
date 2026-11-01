@@ -664,6 +664,11 @@ class MainWindow(QMainWindow):
                 timed_out.append((gid,"0-1" if side=="white" else "1-0"))
         for gid,result in timed_out:
             self.clock_data(gid)["started"]=False
+            board=self.get_board(gid)
+            flagged_side=chess.WHITE if result=="0-1" else chess.BLACK
+            opponent=not flagged_side
+            if board.has_insufficient_material(opponent):
+                result="1/2-1/2"
             self.set_result(gid,result,confirm=False,detail="tempo scaduto")
         if changed:
             self.clock_ticks+=1
