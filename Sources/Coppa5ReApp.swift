@@ -226,7 +226,7 @@ struct GameRow: View {
                 Spacer()
                 Text(store.results[game.id] ?? "Da giocare")
                     .font(.subheadline.bold())
-                    .foregroundStyle(store.results[game.id] == nil ? .secondary : .yellow)
+                    .foregroundColor(store.results[game.id] == nil ? .secondary : .yellow)
                 Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
             }.contentShape(Rectangle())
         }
