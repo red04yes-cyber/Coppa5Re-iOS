@@ -2136,13 +2136,33 @@ QLabel{{background:transparent;}}
 
 def main():
     if "--bundle-smoke" in sys.argv:
-        app=QApplication(["Coppa5Re"]); app.setApplicationName(APP_NAME); app.setStyle("Fusion"); app.setStyleSheet(STYLE)
-        win=MainWindow()
-        engine_ok=bool(win.find_engine())
-        logo_widgets=win.findChildren(LogoWidget)
-        logo_ok=bool(logo_widgets) and all(widget.renderer.isValid() for widget in logo_widgets)
-        win.close()
-        sys.exit(0 if engine_ok and logo_ok else 2)
+        report=Path(os.environ.get("TEMP",str(Path.home())))/"c5r-bundle-smoke.txt"
+        win=None
+        try:
+            app=QApplication(["Coppa5Re"]); app.setApplicationName(APP_NAME); app.setStyle("Fusion"); app.setStyleSheet(STYLE)
+            win=MainWindow()
+            engine_path=win.find_engine()
+            logo_widgets=win.findChildren(LogoWidget)
+            logo_status=[widget.renderer.isValid() for widget in logo_widgets]
+            engine_ok=bool(engine_path and Path(engine_path).is_file())
+            logo_ok=bool(logo_widgets) and all(logo_status)
+            report.write_text(
+                f"engine_ok={engine_ok}\\nengine_path={engine_path}\\n"
+                f"logo_count={len(logo_widgets)}\\nlogo_status={logo_status}\\n"
+                f"meipass={getattr(sys,'_MEIPASS',None)}\\n",
+                encoding="utf-8",
+            )
+            win.close()
+            sys.exit(0 if engine_ok and logo_ok else 2)
+        except Exception as exc:
+            try:
+                report.write_text(f"ERROR: {type(exc).__name__}: {exc}\\n",encoding="utf-8")
+            except Exception:
+                pass
+            if win is not None:
+                try: win.close()
+                except Exception: pass
+            sys.exit(3)
     app=QApplication(sys.argv); app.setApplicationName(APP_NAME); app.setStyle("Fusion"); app.setStyleSheet(STYLE)
     win=MainWindow(); win.show(); sys.exit(app.exec())
 if __name__=="__main__": main()
