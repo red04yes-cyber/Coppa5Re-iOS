@@ -57,14 +57,14 @@ class BoardWidget(QWidget):
     def set_position(self, board, locked=False):
         self.board=board.copy(stack=True); self.locked=locked
         self.selected=None; self.targets=set(); self.update()
-    def geometry(self):
+    def board_geometry(self):
         side=max(8,min(self.width()-38,self.height()-38))
         cell=side/8
         return (self.width()-side)/2,(self.height()-side)/2,cell,side
     def paintEvent(self, event):
         p=QPainter(self); p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.fillRect(self.rect(),QColor(PANEL))
-        x0,y0,c,side=self.geometry()
+        x0,y0,c,side=self.board_geometry()
         last=self.board.peek() if self.board.move_stack else None
         checked=self.board.king(self.board.turn) if self.board.is_check() else None
         for row in range(8):
@@ -93,7 +93,7 @@ class BoardWidget(QWidget):
         p.drawRect(int(x0),int(y0),int(side),int(side))
     def mousePressEvent(self,event):
         if not self.interactive or self.locked or event.button()!=Qt.MouseButton.LeftButton: return
-        x0,y0,c,side=self.geometry(); x=event.position().x(); y=event.position().y()
+        x0,y0,c,side=self.board_geometry(); x=event.position().x(); y=event.position().y()
         f=int((x-x0)/c); r=int((y-y0)/c)
         if not(0<=f<8 and 0<=r<8):
             self.selected=None; self.targets=set(); self.update(); return
