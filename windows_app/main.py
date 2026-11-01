@@ -381,7 +381,23 @@ class BoardCard(QFrame):
         if value:
             self.game_id=value
             self.refresh()
-    def move(self,uci): self.app.record_move(self.game_id,uci)
+    def move(self,uci):
+        if self.history_index is not None and self.history_index < len(self.app.get_board(self.game_id).move_stack):
+            self.app.statusBar().showMessage("Torna all'ultima posizione per continuare a giocare.",2500); return
+        self.app.record_move(self.game_id,uci)
+    def previous_move(self):
+        full=self.app.get_board(self.game_id)
+        self.history_index=max(0,(len(full.move_stack) if self.history_index is None else self.history_index)-1)
+        self.refresh()
+    def next_move(self):
+        full=self.app.get_board(self.game_id)
+        self.history_index=min(len(full.move_stack),(len(full.move_stack) if self.history_index is None else self.history_index)+1)
+        self.refresh()
+    def refresh_clock(self):
+        self.clock_label.setText(self.app.clock_text(self.game_id))
+        state=self.app.clock_data(self.game_id)
+        self.clock_btn.setEnabled(not self.app.results.get(self.game_id) and not state.get("started"))
+        self.clock_btn.setText("OROLOGIO IN CORSO" if state.get("started") else "AVVIA OROLOGIO")
     def update_evaluation(self, gid, board):
         path=self.app.engine_path or self.app.find_engine()
         if not path:
@@ -422,11 +438,19 @@ class BoardCard(QFrame):
     def refresh(self):
         self.refresh_selector()
         gid,r,w,b=game(self.game_id); board=self.app.get_board(gid)
+        if self.history_index is None: self.history_index=len(board.move_stack)
+        self.history_index=min(self.history_index,len(board.move_stack))
+        visible=chess.Board()
+        for move in board.move_stack[:self.history_index]: visible.push(move)
         self.match.setText(f"{name(w)}  <span style='color:{GOLD}'>vs</span>  {name(b)}")
         self.turn.setText("PARTITA CONCLUSA · SCACCHIERA BLOCCATA" if self.app.results.get(gid) else
                           f"AL MUOVERE: {'BIANCO' if board.turn else 'NERO'} · {board.fullmove_number}ª mossa")
-        self.board.set_position(board,bool(self.app.results.get(gid)))
+        self.board.set_position(visible,bool(self.app.results.get(gid)) or self.history_index<len(board.move_stack))
         self.update_evaluation(gid, board)
+        self.view_ply.setText(f"{self.history_index} / {len(board.move_stack)}")
+        self.prev_move_btn.setEnabled(self.history_index>0)
+        self.next_move_btn.setEnabled(self.history_index<len(board.move_stack))
+        self.refresh_clock()
         replay=chess.Board(); san=[]
         for mv in board.move_stack:
             prefix=f"{replay.fullmove_number}. " if replay.turn==chess.WHITE else f"{replay.fullmove_number}... "
