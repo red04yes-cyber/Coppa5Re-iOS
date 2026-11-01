@@ -67,8 +67,11 @@ jobs:
         run: |
           python -c "from PySide6.QtWidgets import QApplication; from windows_app.main import MainWindow; app=QApplication([]); w=MainWindow(); base=w.odds(n=1200); assert abs(sum(v[0] for v in base.values())-1)<0.01; assert abs(sum(v[1] for v in base.values())-4)<0.01; w.results['R1-M1']='1-0'; assert w.odds(n=1200)!=base; w.open_broadcast(); assert not w.broadcast.isFullScreen(); assert all(c.board.interactive for c in w.live_cards); assert all(not c.board.interactive for c in w.broadcast.cards); w.broadcast.close(); w.close(); print('odds and streaming OK')"
       - name: Build standalone EXE
+        shell: pwsh
         run: |
-          pyinstaller --noconfirm --clean --onefile --windowed --name Coppa5Re --add-data "windows_app/stockfish;stockfish" --add-data "windows_app/assets;assets" --distpath dist --workpath build/windows --specpath build/windows windows_app/main.py
+          $stockfishPath = (Resolve-Path "windows_app/stockfish").Path
+          $assetsPath = (Resolve-Path "windows_app/assets").Path
+          pyinstaller --noconfirm --clean --onefile --windowed --name Coppa5Re --add-data "$stockfishPath;stockfish" --add-data "$assetsPath;assets" --distpath dist --workpath build/windows --specpath build/windows windows_app/main.py
       - name: Verify executable
         run: |
           if (!(Test-Path "dist/Coppa5Re.exe")) { throw "Coppa5Re.exe non trovato" }
