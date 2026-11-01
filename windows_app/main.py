@@ -1046,12 +1046,12 @@ class MainWindow(QMainWindow):
             opponent=not flagged_side
             if board.has_insufficient_material(opponent):
                 result="1/2-1/2"
-            self.set_result(gid,result,confirm=False,detail="tempo scaduto")
+            self.set_result(gid,result,confirm=False,detail="caduta della bandierina · tempo esaurito",termination="time forfeit")
         if changed:
             self.clock_ticks+=1
             for card in getattr(self,"live_cards",[]): card.refresh_clock()
             if self.broadcast and self.broadcast.isVisible(): self.broadcast.refresh_from_app()
-            if self.clock_ticks%5==0: self.save()
+            if self.clock_ticks%5==0: self.save_recovery()
     def log_operation(self,action,entity,before,after,detail=""):
         self.audit_log.append({"time":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "referee":self.referee,"action":action,"entity":str(entity),
@@ -1284,13 +1284,20 @@ class MainWindow(QMainWindow):
         grid.addWidget(QLabel("ARBITRO"),0,0)
         self.referee_input=QLineEdit(self.referee); self.referee_input.setPlaceholderText("Nome arbitro / direttore di gara")
         grid.addWidget(self.referee_input,0,1)
-        grid.addWidget(QLabel("CRITERIO DI SPAREGGIO"),1,0)
-        tie_rules=QLabel("Art. 8 · Punti → Scontro diretto (solo due pari) → Sonneborn–Berger → Numero di vittorie → Armageddon / mini-girone")
+        grid.addWidget(QLabel("SPAREGGI · ART. 8"),1,0)
+        tie_rules=QLabel("Ordine automatico: punti; scontro diretto (solo due pari); Sonneborn–Berger; numero di vittorie. Se resta la parità: Armageddon da definire prima del torneo; con 3+ giocatori, mini-girone.")
         tie_rules.setWordWrap(True); tie_rules.setObjectName("Muted")
         grid.addWidget(tie_rules,1,1)
+        grid.addWidget(QLabel("REGISTRA RITIRO"),2,0)
+        self.withdraw_combo=QComboBox()
+        for pid in ORDER: self.withdraw_combo.addItem(name(pid),pid)
+        grid.addWidget(self.withdraw_combo,2,1)
+        withdraw=QPushButton("REGISTRA RITIRO · ART. 11")
+        withdraw.clicked.connect(lambda:self.withdraw_player(self.withdraw_combo.currentData()))
+        grid.addWidget(withdraw,3,1)
         save=QPushButton("SALVA IMPOSTAZIONI"); save.setObjectName("PrimaryButton"); save.clicked.connect(self.save_settings)
-        grid.addWidget(save,2,1); layout.addWidget(card)
-        desc=QLabel("Il criterio selezionato viene applicato soltanto in caso di pari punti. Con “Nessuno” gli ex aequo restano tali.")
+        grid.addWidget(save,4,1); layout.addWidget(card)
+        desc=QLabel("I controlli tempo sono fissi per regolamento: qualificazione 15+3; semifinali e finali 30+10. I ritiri seguono la soglia di due partite dell'Art. 11.")
         desc.setObjectName("Muted"); desc.setWordWrap(True); layout.addWidget(desc)
         layout.addStretch(); return page
 
@@ -1317,8 +1324,9 @@ class MainWindow(QMainWindow):
 
     def refresh_dashboard(self):
         if not hasattr(self,"dashboard_summary"): return
-        done=len(self.results); running=sum(1 for gid,_,_,_ in GAMES if self.clock_data(gid).get("started") or self.moves.get(gid))
-        self.dashboard_summary.setText(f"PARTITE CONCLUSE  {done}/10     ·     IN CORSO  {running}     ·     CONTROLLO {self.time_control}")
+        done=sum(1 for value in self.results.values() if value!="VOID"); running=sum(1 for gid,_,_,_ in GAMES if self.clock_data(gid).get("started") or self.moves.get(gid))
+        retired=sum(1 for player in ORDER if player in self.withdrawn_players)
+        self.dashboard_summary.setText(f"PARTITE CONCLUSE  {done}/10     ·     IN CORSO  {running}     ·     RITIRATI {retired}     ·     15+3 / PLAYOFF 30+10")
         leader=self.standings()[0]
         self.dashboard_detail.setText(f"LEADER ATTUALE  ·  {name(leader['id'])}  ·  {leader['points']:.1f} punti     |     ARBITRO  ·  {self.referee or 'non impostato'}")
 
@@ -1344,7 +1352,7 @@ class MainWindow(QMainWindow):
                 for gid,rnd,w,b in GAMES:
                     if frozenset((w,b))!=frozenset((p,opponent)): continue
                     result=self.results.get(gid)
-                    if not result: continue
+                    if not result or result=="VOID": continue
                     score=1 if (result=="1-0" and p==w) or (result=="0-1" and p==b) else (.5 if result=="1/2-1/2" else 0)
                     if score==1: wins+=1
                     elif score==.5: draws+=1
@@ -1636,7 +1644,7 @@ class MainWindow(QMainWindow):
     def build_standings(self):
         page=QWidget(); l=QVBoxLayout(page)
         h=QLabel("CLASSIFICA GENERALE"); h.setObjectName("SectionTitle"); l.addWidget(h)
-        d=QLabel("Vittoria 1 pt · patta 0,5 pt · sconfitta 0 pt · penalità sottratte. Gli ex aequo restano pari finché non viene definito uno spareggio.")
+        d=QLabel("Vittoria 1 pt · patta 0,5 pt · sconfitta 0 pt · penalità sottratte. Spareggi Art. 8 in ordine: scontro diretto (solo due), Sonneborn–Berger, vittorie; poi Armageddon o mini-girone.")
         d.setObjectName("Muted"); l.addWidget(d)
         self.st_table=QTableWidget(0,8); self.st_table.setHorizontalHeaderLabels(["POS","GIOCATORE","G","V","X","P","PEN.","PT"])
         self.st_table.verticalHeader().setVisible(False); self.st_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -1786,7 +1794,13 @@ class MainWindow(QMainWindow):
                 if x["id"]=="simone": item.setForeground(QColor(GOLD))
                 if c==7: item.setFont(QFont("Segoe UI",11,QFont.Weight.Bold))
                 self.st_table.setItem(i,c,item)
-        self.st_summary.setText(f"PARTITE CONCLUSE  {len(self.results)}/10     ·     RIMANENTI  {10-len(self.results)}     ·     PENALITÀ  {len(self.penalties)}")
+        concluded=sum(1 for value in self.results.values() if value!="VOID")
+        voided=sum(1 for value in self.results.values() if value=="VOID")
+        unresolved_ties=len({row["points"] for row in rows})<len(rows) and any(
+            sum(1 for row in rows if row["points"]==points and self.tie_break_value(row["id"],[x["id"] for x in rows if x["points"]==points])==self.tie_break_value(next(x["id"] for x in rows if x["points"]==points),[x["id"] for x in rows if x["points"]==points]))>1
+            for points in {row["points"] for row in rows})
+        self.st_summary.setText(f"PARTITE CONCLUSE  {concluded}/10  ·  ANNULLATE {voided}  ·  PENALITÀ {len(self.penalties)}" +
+            ("  ·  SPAREGGIO ART. 8 DA DISPUTARE" if unresolved_ties else ""))
     def refresh_odds(self):
         values=self.odds(); ordered=sorted(PLAYERS,key=lambda p:values[p][0],reverse=True); self.odds_table.setRowCount(5)
         for i,p in enumerate(ordered):
@@ -1843,11 +1857,13 @@ class MainWindow(QMainWindow):
         self.broadcast.raise_()
         self.broadcast.activateWindow()
     def closeEvent(self,event):
+        if hasattr(self,"clock_timer"): self.clock_timer.stop()
         service=getattr(self,"engine_service",None)
         if service is not None and service.isRunning():
             service.stop()
             service.wait(6000)
         self.save()
+        self.recovery_path.unlink(missing_ok=True)
         if self.broadcast: self.broadcast.close()
         event.accept()
 
