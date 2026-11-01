@@ -514,7 +514,10 @@ class StockfishService(QThread):
                             self.gameReady.emit(game_id, positions)
 
                 except Exception as exc:
-                    self.analysisFailed.emit(game_id, str(exc))
+                    if kind=="move":
+                        self.moveFailed.emit(game_id,str(exc))
+                    else:
+                        self.analysisFailed.emit(game_id, str(exc))
 
         except Exception as exc:
             self.analysisFailed.emit("", str(exc))
@@ -837,6 +840,7 @@ class MainWindow(QMainWindow):
         service = StockfishService(path, self)
         service.positionReady.connect(self.on_engine_position_ready)
         service.moveReady.connect(self.on_move_review_ready)
+        service.moveFailed.connect(self.on_move_review_failed)
         service.gameReady.connect(self.on_game_analysis_ready)
         service.analysisFailed.connect(self.on_game_analysis_failed)
         self.engine_service = service
@@ -899,6 +903,8 @@ class MainWindow(QMainWindow):
             self.boards[gid]=chess.Board(); self.moves[gid]=[]; self.clocks.pop(gid,None)
             self.log_operation("Scacchiera resettata",gid,"","posizione iniziale")
             self.save(); self.refresh_all()
+    def on_move_review_failed(self,gid,error):
+        self.statusBar().showMessage(f"Game Review non disponibile per {gid}: {error}",5000)
     def on_move_review_ready(self,gid,review):
         reviews=self.move_reviews.setdefault(gid,[])
         reviews[:]=[item for item in reviews if int(item.get("ply",-1))!=int(review.get("ply",-2))]
@@ -993,7 +999,13 @@ class MainWindow(QMainWindow):
             self.game_terminations[gid]={"termination":termination or ("adjudication" if value=="VOID" else "normal"),"detail":detail}
         self.log_operation("Risultato",gid,old or "In corso",value or "In corso",detail)
         self.save(); self.save_recovery(); self.refresh_all()
-        self.statusBar().showMessage("Risultato salvato · classifica e quote aggiornate.",3000)
+        if value not in (None,"VOID") and self.moves.get(gid) and not self.move_reviews.get(gid):
+            if self.analysis_running_gid is None:
+                service=self.get_engine_service()
+                if service is not None:
+                    self.analysis_running_gid=gid
+                    service.request_game(gid,self.moves[gid])
+        self.statusBar().showMessage("Risultato salvato · classifica, quote e Game Review aggiornati.",3000)
     def time_control_for_game(self,gid):
         return "30+10" if gid in ("sf1","sf2","final","third") or str(gid).startswith("PO-") else "15+3"
     def clock_data(self,gid):
@@ -1335,8 +1347,12 @@ class MainWindow(QMainWindow):
         finished=[g for g in GAMES if self.results.get(g[0])]
         self.archive_table.setRowCount(len(finished))
         for row,(gid,rnd,white,black) in enumerate(finished):
+            precision,_=self.game_precision_summary(gid)
+            term=self.game_terminations.get(gid,{})
+            detail=term.get("detail","") if isinstance(term,dict) else str(term or "")
+            status="RITIRO / ANNULLATA" if self.results[gid]=="VOID" else (detail or f"{len(self.moves.get(gid,[]))} mosse · {len(self.match_notes.get(gid,[]))} note")
             values=[f"ROUND {rnd}",gid,name(white),name(black),self.results[gid],
-                    f"{len(self.moves.get(gid,[]))} mosse · {len(self.match_notes.get(gid,[]))} note"]
+                    f"{precision} · {status}" if self.move_reviews.get(gid) else status]
             for col,value in enumerate(values):
                 item=QTableWidgetItem(value); item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.archive_table.setItem(row,col,item)
@@ -1858,7 +1874,9 @@ class MainWindow(QMainWindow):
         for i,x in enumerate(rows):
             current_key=(x["points"],self.tie_break_value(x["id"],[r["id"] for r in rows if r["points"]==x["points"]]))
             if previous is None or current_key!=previous: rank=i+1
-            previous=current_key; vals=[f"{rank}°",name(x["id"]),str(x["played"]),str(x["wins"]),str(x["draws"]),str(x["losses"]),
+            previous=current_key
+            display_name=name(x["id"])+(" · RITIRATO" if x["id"] in self.withdrawn_players else "")
+            vals=[f"{rank}°",display_name,str(x["played"]),str(x["wins"]),str(x["draws"]),str(x["losses"]),
                    f"{x['penalty']:+.1f}" if x["penalty"] else "—",f"{x['points']:.1f}"]
             for c,val in enumerate(vals):
                 item=QTableWidgetItem(("🥇 " if rank==1 else "🥈 " if rank==2 else "🥉 " if rank==3 else "")+val if c==0 else val); item.setTextAlignment(Qt.AlignmentFlag.AlignCenter if c!=1 else Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignLeft)
