@@ -793,10 +793,13 @@ class MainWindow(QMainWindow):
         stream=QPushButton("◉  VISTA STREAMING"); stream.setObjectName("PrimaryButton"); stream.clicked.connect(self.open_broadcast); header.addWidget(stream)
         outer.addLayout(header)
         self.tabs=QTabWidget()
+        self.tabs.addTab(self.build_dashboard(),"DASHBOARD")
         self.tabs.addTab(self.build_live(),"LIVE ARENA"); self.tabs.addTab(self.build_draw_page(),"ESTRAZIONE")
         self.tabs.addTab(self.build_calendar(),"CALENDARIO"); self.tabs.addTab(self.build_standings(),"CLASSIFICA")
         self.tabs.addTab(self.build_odds(),"QUOTE")
         self.tabs.addTab(self.build_penalties(),"PENALITÀ"); self.tabs.addTab(self.build_playoffs(),"PLAYOFF")
+        self.tabs.addTab(self.build_archive(),"ARCHIVIO"); self.tabs.addTab(self.build_h2h(),"TESTA A TESTA")
+        self.tabs.addTab(self.build_audit(),"REGISTRO"); self.tabs.addTab(self.build_settings(),"IMPOSTAZIONI")
         outer.addWidget(self.tabs,1)
         foot=QLabel("COPPA DEI 5 RE  /  DAL 15 NOVEMBRE 2026  /  DATI LOCALI SU QUESTO PC"); foot.setObjectName("Footnote")
         outer.addWidget(foot); self.setCentralWidget(root)
@@ -1234,6 +1237,7 @@ class MainWindow(QMainWindow):
                 label.setText(f"ROUND {rnd}  ·  Riposa: {name(BYES[rnd])}  ·  BYE")
         self.refresh_draw_page()
         self.refresh_standings(); self.refresh_odds(); self.refresh_penalties(); self.refresh_playoffs()
+        self.refresh_dashboard(); self.refresh_archive(); self.refresh_h2h(); self.refresh_audit()
         if self.broadcast and self.broadcast.isVisible(): self.broadcast.refresh_from_app()
     def refresh_standings(self):
         rows=self.standings(); self.st_table.setRowCount(5); previous=None; rank=0
