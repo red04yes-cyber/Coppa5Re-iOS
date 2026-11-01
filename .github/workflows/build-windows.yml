@@ -30,11 +30,11 @@ jobs:
           python -m pip install -r windows_app/requirements.txt
       - name: Check Python syntax
         run: python -m compileall -q windows_app/main.py
-      - name: Smoke test Qt and chess engine
+      - name: Smoke test Qt, chess and tournament draw
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          python -c "import chess; from PySide6.QtWidgets import QApplication; app=QApplication([]); b=chess.Board(); assert len(list(b.legal_moves)) == 20; print('Qt and chess engine OK')"
+          python -c "import chess; from PySide6.QtWidgets import QApplication; from windows_app.main import MainWindow, make_random_schedule, validate_schedule, DEFAULT_GAMES; app=QApplication([]); assert len(list(chess.Board().legal_moves)) == 20; validate_schedule(DEFAULT_GAMES); [validate_schedule(make_random_schedule()) for _ in range(100)]; window=MainWindow(); assert len(window.standings()) == 5; print('Qt, chess, schedule generator and desktop UI OK')"
       - name: Build standalone EXE
         run: |
           pyinstaller --noconfirm --clean --onefile --windowed --name Coppa5Re --distpath dist --workpath build/windows --specpath build/windows windows_app/main.py
