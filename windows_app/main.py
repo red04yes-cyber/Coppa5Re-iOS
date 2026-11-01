@@ -438,8 +438,11 @@ class BoardCard(QFrame):
     def refresh(self):
         self.refresh_selector()
         gid,r,w,b=game(self.game_id); board=self.app.get_board(gid)
-        if self.history_index is None: self.history_index=len(board.move_stack)
+        prior_ply=getattr(self,"known_ply",len(board.move_stack))
+        if self.history_index is None or self.history_index==prior_ply:
+            self.history_index=len(board.move_stack)
         self.history_index=min(self.history_index,len(board.move_stack))
+        self.known_ply=len(board.move_stack)
         visible=chess.Board()
         for move in board.move_stack[:self.history_index]: visible.push(move)
         self.match.setText(f"{name(w)}  <span style='color:{GOLD}'>vs</span>  {name(b)}")
