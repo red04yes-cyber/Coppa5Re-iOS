@@ -509,6 +509,71 @@ class MainWindow(QMainWindow):
         if value is None: self.results.pop(gid,None)
         else: self.results[gid]=value
         self.save(); self.refresh_all(); self.statusBar().showMessage("Risultato salvato · classifica e quote aggiornate.",3000)
+    def clock_data(self,gid):
+        if gid not in self.clocks:
+            base,_=self.time_control.split("+"); seconds=int(base)*60
+            self.clocks[gid]={"white":seconds,"black":seconds,"started":False}
+        else:
+            base,_=self.time_control.split("+"); seconds=int(base)*60
+            self.clocks[gid].setdefault("white",seconds)
+            self.clocks[gid].setdefault("black",seconds)
+            self.clocks[gid].setdefault("started",False)
+        return self.clocks[gid]
+    def increment_seconds(self):
+        return int(self.time_control.split("+")[1])
+    def clock_text(self,gid):
+        c=self.clock_data(gid)
+        def fmt(v):
+            v=max(0,int(v)); return f"{v//60:02d}:{v%60:02d}"
+        return f"BIANCO {fmt(c['white'])}   ·   NERO {fmt(c['black'])}"
+    def start_clock(self,gid):
+        if self.results.get(gid): return
+        self.clock_data(gid)["started"]=True
+        self.save(); self.refresh_all()
+        self.statusBar().showMessage("Cronometro avviato.",2000)
+    def set_time_control(self,value):
+        if value==self.time_control: return
+        if self.results or any(self.moves.values()):
+            QMessageBox.information(self,"Tempo di gioco","Il controllo del tempo si può cambiare solo prima di iniziare il girone.")
+            self.live_time.blockSignals(True)
+            self.live_time.setCurrentText(self.time_control)
+            self.live_time.blockSignals(False)
+            return
+        self.time_control=value; self.clocks={}
+        self.save(); self.refresh_all()
+    def tick_clocks(self):
+        changed=False; timed_out=[]
+        for gid,_,white,black in GAMES:
+            clock=self.clock_data(gid)
+            if not clock.get("started") or self.results.get(gid): continue
+            side="white" if self.get_board(gid).turn else "black"
+            clock[side]=max(0,int(clock[side])-1); changed=True
+            if clock[side]<=0:
+                timed_out.append((gid,"0-1" if side=="white" else "1-0"))
+        for gid,result in timed_out:
+            self.clock_data(gid)["started"]=False
+            self.set_result(gid,result,confirm=False,detail="tempo scaduto")
+        if changed:
+            self.clock_ticks+=1
+            for card in getattr(self,"live_cards",[]): card.refresh_clock()
+            if self.broadcast and self.broadcast.isVisible(): self.broadcast.refresh_from_app()
+            if self.clock_ticks%5==0: self.save()
+    def log_operation(self,action,entity,before,after,detail=""):
+        self.audit_log.append({"time":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "referee":self.referee,"action":action,"entity":str(entity),
+            "before":str(before),"after":str(after),"detail":str(detail)})
+        self._odds_cache_key=None
+    def add_match_note(self,gid,text,kind="Nota"):
+        text=text.strip()
+        if not text: return
+        self.match_notes.setdefault(gid,[]).append({"time":datetime.now().strftime("%d/%m/%Y %H:%M"),
+            "referee":self.referee,"kind":kind,"text":text})
+        self.log_operation(kind,gid,"",text)
+        self.save(); self.statusBar().showMessage("Annotazione arbitrale salvata.",2500)
+    def prompt_match_note(self,gid):
+        text,ok=QInputDialog.getMultiLineText(self,"Nota / incidente",
+            f"Partita {gid} · arbitro: {self.referee or 'non indicato'}","")
+        if ok: self.add_match_note(gid,text,"Incidente" if "incidente" in text.lower() else "Nota")
     def raw_stats(self):
         pts={p:0.0 for p in PLAYERS}; played={p:0 for p in PLAYERS}
         wins={p:0 for p in PLAYERS}; draws={p:0 for p in PLAYERS}; losses={p:0 for p in PLAYERS}
