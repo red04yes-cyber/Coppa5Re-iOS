@@ -1,34 +1,47 @@
 # Coppa dei 5 Re — Windows Desktop
 
-Applicazione desktop Windows nativa (PySide6 / Qt), non un sito web.
+Applicazione desktop Windows nativa (PySide6 / Qt), offline e con dati salvati localmente.
 
-## Funzioni
-- Due scacchiere contemporanee e giocabili, con verifica mosse legali, scacco e promozione.
-- Storico mosse, annulla mossa ed esportazione PGN.
-- Calendario round-robin a 5 turni, sorteggio e modifica controllata degli accoppiamenti.
-- Inserimento risultati, classifica automatica e registro penalità.
-- Simulazione Monte Carlo delle probabilità e delle quote eque: 15.000 scenari, aggiornata a ogni risultato, penalità o modifica del calendario. Non sono quote bookmaker.
-- Tabellone playoff provvisorio.
-- Vista streaming in finestra separata e ridimensionabile: la regia rimane disponibile per continuare a registrare le mosse. Il pulsante “Torna alla regia” riporta immediatamente ai controlli.
-- Evaluation bar opzionale per entrambe le scacchiere, tramite motore UCI Stockfish.
-- Salvataggio automatico locale su questo PC; l'app funziona offline.
+## Funzioni principali
+- Dashboard C5R, navigazione laterale con sezioni e logo nero/oro del torneo.
+- Due scacchiere contemporanee con mosse legali, promozione, trascinamento pezzi o selezione a due clic.
+- Scacchiere ruotabili dal punto di vista Bianco/Nero e quattro temi selezionabili.
+- Controllo del tempo del torneo selezionabile tra **15+3** e **30+10**, con cronometri indipendenti, incremento dopo ogni mossa e gestione della bandierina.
+- Rilevamento automatico di scacco matto, stallo, patte automatiche e patte reclamabili.
+- Navigazione avanti/indietro nello storico delle mosse, annullamento ed esportazione PGN.
+- Indicatori LIVE / IN CORSO / CONCLUSA e modalità streaming pulita, senza controlli amministrativi.
+- Sorteggio, modifica e convalida del calendario round-robin.
+- Classifica con medaglie, criteri di spareggio configurabili, statistiche testa a testa e simulazioni Monte Carlo per quote/probabilità.
+- Archivio delle partite concluse e analisi delle posizioni con Stockfish.
+- Playoff interattivi: semifinali, finale e finale 3°/4° posto; in caso di patta è possibile registrare il vincitore dello spareggio.
+- Registro arbitro, note e incidenti; storico di modifiche a risultati e penalità; penalità modificabili e annullabili.
+- Filtri di calendario per turno, giocatore e stato della partita.
+- Esportazione PGN completa, classifica CSV/PDF, registro CSV e backup/ripristino JSON.
+- Scorciatoie da tastiera e salvataggio automatico.
 
-## Evaluation bar / Stockfish
-L'integrazione del motore è opzionale. Per attivarla:
-1. Procurati una build Windows di Stockfish compatibile con il tuo PC.
-2. Premi “Configura Stockfish” sotto una delle scacchiere e seleziona `stockfish.exe`.
-3. Il percorso viene salvato localmente; l'analisi viene eseguita in background a profondità 12, senza bloccare l'interfaccia.
+## Stockfish integrato
+La build Windows scarica il pacchetto ufficiale **Stockfish 19 x86-64 universal** durante la compilazione e incorpora l'eseguibile nel programma, insieme alla licenza GPL e al riferimento al codice sorgente. L'analisi gira in background e il processo viene avviato senza finestra console visibile. Non occorre installare né selezionare manualmente `stockfish.exe`.
 
-In alternativa, l'app rileva automaticamente `stockfish.exe` se si trova accanto all'eseguibile o in `%APPDATA%\Coppa5Re\`. Il motore non è incluso nell'EXE in questa build: va fornito separatamente. La barra mostra una stima del vantaggio dal punto di vista del Bianco e una percentuale indicativa, non una probabilità ufficiale di vittoria.
+La evaluation bar mostra una valutazione dal punto di vista del Bianco. La funzione Analizza partita valuta ogni posizione registrata e salva l'analisi nell'archivio locale.
 
-## Generare l'EXE
-Il workflow GitHub Actions “Build Coppa dei 5 Re for Windows” compila l'app su un runner Windows e carica l'artifact “Coppa5Re-Windows-EXE”.
+Stockfish è distribuito secondo GNU GPL v3. La licenza e il riferimento alla versione sorgente sono inclusi nel bundle di compilazione.
 
-## Avvio locale per sviluppo
-1. Crea un ambiente virtuale Python.
-2. Installa `windows_app/requirements.txt`.
-3. Avvia `windows_app/main.py`.
+## Quote e probabilità
+Le percentuali sono stime Monte Carlo (15.000 scenari) basate sui pronostici 1-X-2 iniziali, corretti moderatamente in base alla forma osservata e ai punti/penalità del torneo. Quota equa = 1 / probabilità stimata. Non sono quote bookmaker e non suggeriscono puntate.
 
-I dati locali sono salvati in `%APPDATA%\Coppa5Re\tournament.json`.
+## Build Windows
+Il workflow GitHub Actions “Build Coppa dei 5 Re for Windows”:
+1. installa le dipendenze Python;
+2. scarica Stockfish 19 e il relativo testo di licenza;
+3. esegue test automatici su motore UCI, scacchi, calendario, quote e modalità streaming;
+4. compila l'eseguibile one-file `Coppa5Re.exe` e carica l'artifact `Coppa5Re-Windows-EXE`.
 
-Le probabilità e le quote sono stime simulate, non quote bookmaker e non gestiscono denaro o puntate reali.
+## Dati locali e sviluppo
+I dati sono salvati in `%APPDATA%\Coppa5Re\tournament.json`.
+
+Per avviare in sviluppo:
+1. crea un ambiente virtuale Python;
+2. installa `windows_app/requirements.txt`;
+3. avvia `windows_app/main.py`.
+
+La build pubblicata è un EXE Windows. La presenza del motore integrato non equivale a una firma digitale Authenticode: Smart App Control di Windows potrebbe comunque richiedere un editore attendibile/reputazione del file.
