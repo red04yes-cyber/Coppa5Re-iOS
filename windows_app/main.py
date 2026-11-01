@@ -509,7 +509,7 @@ class MainWindow(QMainWindow):
         self.results={}; self.penalties=[]; self.moves={}; self.boards={}; self.broadcast=None; self.engine_path=None
         self._odds_cache_key=None; self._odds_cache=None
         self.time_control="15+3"; self.clocks={}; self.audit_log=[]; self.match_notes={}; self.referee=""
-        self.tie_break="scontro diretto"; self.playoff_results={}; self.eval_history={}; self.clock_ticks=0; self.board_theme=0
+        self.tie_break="Nessuno"; self.playoff_results={}; self.eval_history={}; self.clock_ticks=0; self.board_theme=0
         self.load_state(); self.build_ui(); self.refresh_all()
         self.clock_timer=QTimer(self); self.clock_timer.timeout.connect(self.tick_clocks); self.clock_timer.start(1000)
         self.install_shortcuts()
@@ -521,7 +521,7 @@ class MainWindow(QMainWindow):
                 self.results=data.get("results",{}); self.penalties=data.get("penalties",[]); self.moves=data.get("moves",{}); self.engine_path=data.get("engine_path")
                 self.time_control=data.get("time_control","15+3"); self.clocks=data.get("clocks",{})
                 self.audit_log=data.get("audit_log",[]); self.match_notes=data.get("match_notes",{})
-                self.referee=data.get("referee",""); self.tie_break=data.get("tie_break","scontro diretto")
+                self.referee=data.get("referee",""); self.tie_break=data.get("tie_break","Nessuno")
                 self.playoff_results=data.get("playoff_results",{}); self.eval_history=data.get("eval_history",{})
                 saved_schedule=data.get("schedule")
                 if saved_schedule:
@@ -710,11 +710,34 @@ class MainWindow(QMainWindow):
         for item in self.penalties:
             if item.get("player") in out: out[item["player"]]+=float(item.get("points",0))
         return out
+    def tie_break_value(self,p,group=None):
+        raw,played,wins,draws,losses=self.raw_stats()
+        selected=set(group or PLAYERS.keys())
+        value=0.0
+        for gid,r,white,black in GAMES:
+            result=self.results.get(gid)
+            if not result or p not in (white,black): continue
+            opponent=black if p==white else white
+            if self.tie_break=="Scontro diretto" and opponent not in selected: continue
+            score=1.0 if (result=="1-0" and p==white) or (result=="0-1" and p==black) else (0.5 if result=="1/2-1/2" else 0.0)
+            if self.tie_break=="Scontro diretto": value+=score
+            elif self.tie_break=="Sonneborn-Berger": value+=raw[opponent]*score
+            elif self.tie_break=="Buchholz": value+=raw[opponent]
+            elif self.tie_break=="Numero vittorie": value+=wins[p]
+        return value
     def standings(self):
         pts,played,wins,draws,losses=self.raw_stats(); pen=self.penalty_points()
         rows=[{"id":p,"played":played[p],"wins":wins[p],"draws":draws[p],"losses":losses[p],
                "penalty":pen[p],"points":pts[p]+pen[p]} for p in PLAYERS]
-        return sorted(rows,key=lambda x:(-x["points"],ORDER.index(x["id"])))
+        grouped={}
+        for row in rows: grouped.setdefault(row["points"],[]).append(row)
+        ordered=[]
+        for points in sorted(grouped,reverse=True):
+            group=grouped[points]
+            group_ids=[row["id"] for row in group]
+            group.sort(key=lambda row:(-self.tie_break_value(row["id"],group_ids),ORDER.index(row["id"])))
+            ordered.extend(group)
+        return ordered
     def odds(self,n=15000):
         raw,played,_,_,_=self.raw_stats(); pen=self.penalty_points()
         current={p:raw[p]+pen[p] for p in PLAYERS}
