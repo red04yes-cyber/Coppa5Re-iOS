@@ -899,7 +899,82 @@ class MainWindow(QMainWindow):
             self.boards[gid]=chess.Board(); self.moves[gid]=[]; self.clocks.pop(gid,None)
             self.log_operation("Scacchiera resettata",gid,"","posizione iniziale")
             self.save(); self.refresh_all()
-    def set_result(self,gid,value,confirm=True,detail="inserimento manuale"):
+    def on_move_review_ready(self,gid,review):
+        reviews=self.move_reviews.setdefault(gid,[])
+        reviews[:]=[item for item in reviews if int(item.get("ply",-1))!=int(review.get("ply",-2))]
+        reviews.append(review)
+        reviews.sort(key=lambda item:int(item.get("ply",0)))
+        self.log_operation("Game Review",gid,"",review.get("label",""),f"ply {review.get('ply')} · {review.get('expected_points_loss',0):.3f} EP lost")
+        self.save()
+        for card in getattr(self,"live_cards",[]):
+            if card.game_id==gid:
+                card.refresh_move_quality()
+    def offer_draw(self,gid):
+        if self.results.get(gid): return
+        _,_,white,black=game(gid)
+        answer=QMessageBox.question(self,"Patta consensuale",
+            f"Confermate entrambi i giocatori ({name(white)} e {name(black)}) la patta?",
+            QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if answer==QMessageBox.StandardButton.Yes:
+            self.set_result(gid,"1/2-1/2",confirm=True,detail="Patta consensuale",termination="normal")
+    def resign_game(self,gid):
+        if self.results.get(gid): return
+        board=self.get_board(gid)
+        _,_,white,black=game(gid)
+        resigning=white if board.turn==chess.WHITE else black
+        result="0-1" if board.turn==chess.WHITE else "1-0"
+        answer=QMessageBox.question(self,"Abbandono",
+            f"Confermi l'abbandono di {name(resigning)}? Il risultato sarà {result}.",
+            QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if answer==QMessageBox.StandardButton.Yes:
+            self.set_result(gid,result,confirm=True,detail=f"Abbandono di {name(resigning)}",termination="abandoned")
+    def force_game_result(self,gid):
+        options=["1-0","1/2-1/2","0-1","Annullata / esclusa"]
+        choice,ok=QInputDialog.getItem(self,"Forzatura risultato",f"Partita {gid} · risultato deciso dall'arbitro:",options,0,False)
+        if not ok: return
+        value={"Annullata / esclusa":"VOID"}.get(choice,choice)
+        reason,ok=QInputDialog.getText(self,"Motivazione arbitro","Motivo della decisione:",text="Decisione del direttore di gara")
+        if not ok: return
+        self.set_result(gid,value,confirm=True,detail=reason or "Forzatura arbitrale",termination="adjudication")
+    def withdraw_player(self,player_id):
+        if player_id in self.withdrawn_players:
+            QMessageBox.information(self,"Ritiro già registrato",f"{name(player_id)} risulta già ritirato.")
+            return
+        matches=[g for g in GAMES if player_id in (g[2],g[3])]
+        played=[g for g in matches if self.results.get(g[0]) not in (None,"VOID")]
+        answer=QMessageBox.question(self,"Conferma ritiro",
+            f"{name(player_id)} ha {len(played)} partite concluse su 4.\n"
+            "Art. 11: con almeno 2 partite i risultati già ottenuti restano validi; "
+            "con meno di 2 vengono annullati. Le partite restanti saranno assegnate a tavolino agli avversari.\n\n"
+            "Confermare il ritiro?",
+            QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if answer!=QMessageBox.StandardButton.Yes: return
+        keep_results=len(played)>=2
+        for gid,_,white,black in matches:
+            old=self.results.get(gid)
+            if keep_results:
+                if old in (None,"VOID"):
+                    opponent=black if white==player_id else white
+                    opponent_is_white=(opponent==white)
+                    result="1-0" if opponent_is_white else "0-1"
+                    self.results[gid]=result
+                    self.game_terminations[gid]={"termination":"adjudication","detail":f"Forfait per ritiro di {name(player_id)}"}
+                    self.clock_data(gid)["started"]=False
+                    self.log_operation("Forfait per ritiro",gid,old or "In corso",result,name(player_id))
+            else:
+                self.results[gid]="VOID"
+                self.game_terminations[gid]={"termination":"adjudication","detail":f"Risultato annullato ai sensi dell'Art. 11 (ritiro prima di 2 partite)"}
+                self.clock_data(gid)["started"]=False
+                self.log_operation("Partita annullata per ritiro",gid,old or "In corso","VOID",name(player_id))
+        self.withdrawn_players[player_id]={"time":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "played_at_withdrawal":len(played),"kept_results":keep_results}
+        self.log_operation("Giocatore ritirato",player_id,"Attivo","Ritirato",f"{len(played)} partite completate")
+        self.save(); self.refresh_all()
+        self.statusBar().showMessage(f"Ritiro di {name(player_id)} registrato secondo l'Art. 11.",4500)
+    def set_result(self,gid,value,confirm=True,detail="inserimento manuale",termination=None):
         old=self.results.get(gid)
         if old==value: return
         if old is not None and confirm:
@@ -909,12 +984,15 @@ class MainWindow(QMainWindow):
                 QMessageBox.StandardButton.No)
             if answer!=QMessageBox.StandardButton.Yes:
                 self.refresh_all(); return
-        if value is None: self.results.pop(gid,None)
+        if value is None:
+            self.results.pop(gid,None)
+            self.game_terminations.pop(gid,None)
         else:
             self.results[gid]=value
             self.clock_data(gid)["started"]=False
+            self.game_terminations[gid]={"termination":termination or ("adjudication" if value=="VOID" else "normal"),"detail":detail}
         self.log_operation("Risultato",gid,old or "In corso",value or "In corso",detail)
-        self.save(); self.refresh_all()
+        self.save(); self.save_recovery(); self.refresh_all()
         self.statusBar().showMessage("Risultato salvato · classifica e quote aggiornate.",3000)
     def time_control_for_game(self,gid):
         return "30+10" if gid in ("sf1","sf2","final","third") or str(gid).startswith("PO-") else "15+3"
