@@ -535,9 +535,9 @@ class BoardCard(QFrame):
         clock_state=self.app.clock_data(gid)
         self.state_label.setText("CONCLUSA" if self.app.results.get(gid) else ("IN CORSO" if clock_state.get("started") or board.move_stack else "LIVE"))
         self.turn.setText("PARTITA CONCLUSA · SCACCHIERA BLOCCATA" if self.app.results.get(gid) else
-                          f"AL MUOVERE: {'BIANCO' if board.turn else 'NERO'} · {board.fullmove_number}ª mossa")
+                          f"{'REVISIONE · ' if self.history_index<len(board.move_stack) else ''}AL MUOVERE: {'BIANCO' if visible.turn else 'NERO'} · {visible.fullmove_number}ª mossa")
         self.board.set_position(visible,bool(self.app.results.get(gid)) or self.history_index<len(board.move_stack))
-        self.update_evaluation(gid, board)
+        self.update_evaluation(gid, visible)
         self.view_ply.setText(f"{self.history_index} / {len(board.move_stack)}")
         self.prev_move_btn.setEnabled(self.history_index>0)
         self.next_move_btn.setEnabled(self.history_index<len(board.move_stack))
