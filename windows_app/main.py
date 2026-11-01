@@ -485,13 +485,19 @@ class StockfishService(QThread):
                             before_score = before_info["score"].pov(mover_color).score(mate_score=10000)
                             best_move = before_info.get("pv", [None])[0]
                             san = board.san(move)
+                            piece_values={chess.PAWN:1,chess.KNIGHT:3,chess.BISHOP:3,chess.ROOK:5,chess.QUEEN:9}
+                            material_before=sum(len(board.pieces(pt,mover_color))*val for pt,val in piece_values.items())-sum(len(board.pieces(pt,not mover_color))*val for pt,val in piece_values.items())
                             board.push(move)
                             after_info = engine.analyse(board, chess.engine.Limit(time=0.25))
                             after_score = after_info["score"].pov(mover_color).score(mate_score=10000)
                             before_ep = 1.0 / (1.0 + math.exp(-max(-4000, min(4000, before_score or 0)) / 400.0))
                             after_ep = 1.0 / (1.0 + math.exp(-max(-4000, min(4000, after_score or 0)) / 400.0))
                             ep_loss = max(0.0, before_ep-after_ep)
-                            if best_move == move:
+                            material_after=sum(len(board.pieces(pt,mover_color))*val for pt,val in piece_values.items())-sum(len(board.pieces(pt,not mover_color))*val for pt,val in piece_values.items())
+                            apparent_sacrifice=(material_after-material_before)<=-3
+                            if apparent_sacrifice and best_move==move and after_score is not None and after_score>-100 and ep_loss<=0.02:
+                                label = "BRILLANTE"
+                            elif best_move == move:
                                 label = "MIGLIORE"
                             elif ep_loss <= 0.01:
                                 label = "OTTIMA"
