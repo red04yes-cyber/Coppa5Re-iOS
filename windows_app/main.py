@@ -546,6 +546,8 @@ class BoardCard(QFrame):
         self.view_ply=QLabel("0 / 0"); self.view_ply.setObjectName("Muted")
         nav.addWidget(self.prev_move_btn); nav.addWidget(self.view_ply,1); nav.addWidget(self.next_move_btn); lay.addLayout(nav)
         self.history=QLabel("MOSSE  ·  Nessuna mossa"); self.history.setObjectName("Muted"); self.history.setWordWrap(True); self.history.setMaximumHeight(48); lay.addWidget(self.history)
+        self.move_quality=QLabel("GAME REVIEW C5R · in attesa della prima mossa")
+        self.move_quality.setObjectName("Muted"); self.move_quality.setWordWrap(True); lay.addWidget(self.move_quality)
         self.eval_bar=QProgressBar(); self.eval_bar.setRange(0,1000); self.eval_bar.setValue(500)
         self.eval_bar.setTextVisible(True); self.eval_bar.setFormat("VALUTAZIONE · motore non configurato")
         self.eval_bar.setFixedHeight(19); lay.addWidget(self.eval_bar)
@@ -566,10 +568,14 @@ class BoardCard(QFrame):
         self.theme_btn=QPushButton("TEMA"); self.theme_btn.clicked.connect(self.board.cycle_theme)
         notes=QPushButton("NOTA"); notes.clicked.connect(lambda:self.app.prompt_match_note(self.game_id))
         view_notes=QPushButton("VEDI NOTE"); view_notes.clicked.connect(lambda:self.app.show_match_notes(self.game_id))
+        draw_offer=QPushButton("PATTA CONCORDATA"); draw_offer.clicked.connect(lambda:self.app.offer_draw(self.game_id))
+        resign=QPushButton("ABBANDONO"); resign.clicked.connect(lambda:self.app.resign_game(self.game_id))
+        force=QPushButton("FORZA RISULTATO"); force.clicked.connect(lambda:self.app.force_game_result(self.game_id))
         control_top.addWidget(self.undo); control_top.addWidget(self.clock_btn); control_top.addStretch()
         control_top.addWidget(self.rotate_btn); control_top.addWidget(self.theme_btn)
-        control_bottom.addWidget(notes); control_bottom.addWidget(view_notes); control_bottom.addWidget(self.engine_btn)
-        control_bottom.addStretch(); control_bottom.addWidget(pgn); control_bottom.addWidget(reset)
+        control_bottom.addWidget(notes); control_bottom.addWidget(view_notes)
+        control_bottom.addWidget(draw_offer); control_bottom.addWidget(resign); control_bottom.addWidget(force)
+        control_bottom.addWidget(self.engine_btn); control_bottom.addStretch(); control_bottom.addWidget(pgn); control_bottom.addWidget(reset)
         controls.addLayout(control_top); controls.addLayout(control_bottom); lay.addLayout(controls)
         self.refresh()
     def refresh_selector(self):
@@ -602,6 +608,17 @@ class BoardCard(QFrame):
         state=self.app.clock_data(self.game_id)
         self.clock_btn.setEnabled(not self.app.results.get(self.game_id) and not state.get("started"))
         self.clock_btn.setText("OROLOGIO IN CORSO" if state.get("started") else "AVVIA OROLOGIO")
+    def refresh_move_quality(self):
+        reviews=self.app.move_reviews.get(self.game_id,[])
+        if not reviews:
+            self.move_quality.setText("GAME REVIEW C5R · analisi in attesa")
+            return
+        review=reviews[-1]
+        player=name(review.get("player",""))
+        loss=float(review.get("expected_points_loss",0))*100
+        self.move_quality.setText(
+            f"ULTIMA MOSSA · {player}: {review.get('label','—')}  ·  perdita punti attesi {loss:.1f}%"
+        )
     def update_evaluation(self, gid, board):
         if not self.app.engine_enabled:
             self.eval_bar.setValue(500)
@@ -657,6 +674,7 @@ class BoardCard(QFrame):
         self.prev_move_btn.setEnabled(self.history_index>0)
         self.next_move_btn.setEnabled(self.history_index<len(board.move_stack))
         self.refresh_clock()
+        self.refresh_move_quality()
         replay=chess.Board(); san=[]
         for mv in board.move_stack[:self.history_index]:
             prefix=f"{replay.fullmove_number}. " if replay.turn==chess.WHITE else f"{replay.fullmove_number}... "
@@ -848,19 +866,26 @@ class MainWindow(QMainWindow):
             move=chess.Move.from_uci(uci)
             if move not in b.legal_moves:
                 self.statusBar().showMessage("Mossa illegale: non registrata.",3000); return
-            mover="white" if b.turn else "black"
+            board_before=b.copy(stack=True)
+            mover_color=b.turn
+            white_player=game(gid)[2]; black_player=game(gid)[3]
+            player_id=white_player if mover_color else black_player
+            mover="white" if mover_color else "black"
             clock=self.clock_data(gid)
             b.push(move)
             if clock.get("started"): clock[mover]+=self.increment_seconds(gid)
             self.moves[gid]=[x.uci() for x in b.move_stack]
             self.log_operation("Mossa",gid,"",uci)
+            service=self.get_engine_service()
+            if service is not None:
+                service.request_move(gid,board_before,move.uci(),player_id,len(b.move_stack))
             outcome=b.outcome(claim_draw=True)
             if outcome is not None:
                 clock["started"]=False
-                self.set_result(gid,b.result(claim_draw=True),confirm=False,
-                    detail=outcome.termination.name.replace("_"," ").lower())
-                self.statusBar().showMessage("Partita terminata automaticamente: "+outcome.termination.name.replace("_"," ").lower(),5000)
-            self.save(); self.refresh_all()
+                reason=outcome.termination.name.replace("_"," ").lower()
+                self.set_result(gid,b.result(claim_draw=True),confirm=False,detail=reason,termination="normal")
+                self.statusBar().showMessage("Partita terminata automaticamente: "+reason,5000)
+            self.save(); self.save_recovery(); self.refresh_all()
         except Exception as exc:
             self.statusBar().showMessage(f"Mossa non registrata: {exc}",4000)
     def undo(self,gid):
