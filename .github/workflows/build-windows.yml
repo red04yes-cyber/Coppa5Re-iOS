@@ -51,6 +51,9 @@ jobs:
           License: GNU General Public License v3. The full license is in COPYING.txt.
           "@ | Set-Content (Join-Path $target "SOURCE.txt") -Encoding UTF8
           Get-ChildItem $target | Format-Table Name,Length
+      - name: Test bundled Stockfish UCI without console window
+        run: |
+          python -c "import chess, chess.engine, subprocess; si=subprocess.STARTUPINFO(); si.dwFlags|=subprocess.STARTF_USESHOWWINDOW; si.wShowWindow=subprocess.SW_HIDE; e=chess.engine.SimpleEngine.popen_uci('windows_app/stockfish/stockfish.exe',timeout=12,cwd='windows_app/stockfish',creationflags=subprocess.CREATE_NO_WINDOW,startupinfo=si); info=e.analyse(chess.Board(),chess.engine.Limit(depth=3)); assert info.get('score') is not None; e.quit(); print('Stockfish UCI OK without visible console')"
       - name: Check Python syntax
         run: python -m compileall -q windows_app/main.py
       - name: Smoke test Qt, chess and tournament draw
