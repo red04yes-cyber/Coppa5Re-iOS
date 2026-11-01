@@ -434,7 +434,7 @@ class BoardCard(QFrame):
         self.undo=QPushButton("↶  Annulla"); self.undo.clicked.connect(lambda:self.app.undo(self.game_id))
         pgn=QPushButton("PGN"); pgn.clicked.connect(lambda:self.app.export_pgn(self.game_id))
         reset=QPushButton("Reset"); reset.clicked.connect(lambda:self.app.reset_board(self.game_id))
-        engine=QPushButton("STOCKFISH"); engine.setEnabled(bool(self.app.find_engine()))
+        self.engine_btn=QPushButton("STOCKFISH · ON" if self.app.engine_enabled else "STOCKFISH · OFF"); self.engine_btn.clicked.connect(self.app.toggle_engine); self.engine_btn.setEnabled(bool(self.app.find_engine()))
         self.clock_btn=QPushButton("AVVIA OROLOGIO"); self.clock_btn.clicked.connect(lambda:self.app.start_clock(self.game_id))
         self.rotate_btn=QPushButton("RUOTA"); self.rotate_btn.clicked.connect(self.board.toggle_orientation)
         self.theme_btn=QPushButton("TEMA"); self.theme_btn.clicked.connect(self.board.cycle_theme)
@@ -442,7 +442,7 @@ class BoardCard(QFrame):
         view_notes=QPushButton("VEDI NOTE"); view_notes.clicked.connect(lambda:self.app.show_match_notes(self.game_id))
         control_top.addWidget(self.undo); control_top.addWidget(self.clock_btn); control_top.addStretch()
         control_top.addWidget(self.rotate_btn); control_top.addWidget(self.theme_btn)
-        control_bottom.addWidget(notes); control_bottom.addWidget(view_notes); control_bottom.addWidget(engine)
+        control_bottom.addWidget(notes); control_bottom.addWidget(view_notes); control_bottom.addWidget(self.engine_btn)
         control_bottom.addStretch(); control_bottom.addWidget(pgn); control_bottom.addWidget(reset)
         controls.addLayout(control_top); controls.addLayout(control_bottom); lay.addLayout(controls)
         self.refresh()
@@ -477,6 +477,8 @@ class BoardCard(QFrame):
         self.clock_btn.setEnabled(not self.app.results.get(self.game_id) and not state.get("started"))
         self.clock_btn.setText("OROLOGIO IN CORSO" if state.get("started") else "AVVIA OROLOGIO")
     def update_evaluation(self, gid, board):
+        if not self.app.engine_enabled:
+            self.eval_bar.setValue(500); self.eval_bar.setFormat("ANALISI STOCKFISH DISATTIVATA"); return
         signature=board.fen()
         if signature==self.last_eval_signature:
             return
@@ -599,7 +601,7 @@ class MainWindow(QMainWindow):
         if path.exists():
             try:
                 data=json.loads(path.read_text(encoding="utf-8"))
-                self.results=data.get("results",{}); self.penalties=data.get("penalties",[]); self.moves=data.get("moves",{}); self.engine_path=data.get("engine_path")
+                self.results=data.get("results",{}); self.penalties=data.get("penalties",[]); self.moves=data.get("moves",{}); self.engine_path=data.get("engine_path"); self.engine_enabled=bool(data.get("engine_enabled",True))
                 self.time_control=data.get("time_control","15+3"); self.clocks=data.get("clocks",{})
                 self.audit_log=data.get("audit_log",[]); self.match_notes=data.get("match_notes",{})
                 self.referee=data.get("referee",""); self.tie_break=data.get("tie_break","Nessuno")
@@ -618,11 +620,17 @@ class MainWindow(QMainWindow):
         path=storage_path(); tmp=path.with_suffix(".tmp")
         stored_schedule=[{"id":gid,"round":rnd,"white":white,"black":black} for gid,rnd,white,black in GAMES]
         tmp.write_text(json.dumps({"results":self.results,"penalties":self.penalties,"moves":self.moves,
-                                  "schedule":stored_schedule,"engine_path":self.engine_path,"time_control":self.time_control,
+                                  "schedule":stored_schedule,"engine_path":self.engine_path,"engine_enabled":self.engine_enabled,"time_control":self.time_control,
                                   "clocks":self.clocks,"audit_log":self.audit_log,"match_notes":self.match_notes,
                                   "referee":self.referee,"tie_break":self.tie_break,"playoff_results":self.playoff_results,
                                   "eval_history":self.eval_history,"playoff_winners":getattr(self,"playoff_winners",{}),"saved_at":datetime.now().isoformat(timespec="seconds")},ensure_ascii=False,indent=2),encoding="utf-8")
         tmp.replace(path)
+    def toggle_engine(self):
+        if not self.find_engine():
+            QMessageBox.warning(self,"Stockfish non disponibile","Il motore non è presente nella build corrente."); return
+        self.engine_enabled=not self.engine_enabled
+        self.log_operation("Stockfish","",not self.engine_enabled,self.engine_enabled)
+        self.save(); self.refresh_all()
     def find_engine(self):
         candidates=[]
         if self.engine_path:
