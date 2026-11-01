@@ -1932,6 +1932,14 @@ class MainWindow(QMainWindow):
             if value!="1/2-1/2":
                 self.playoff_winners.pop(key,None)
         self.log_operation("Risultato playoff",key,old or "In corso",value or "In corso",detail)
+        if key in ("sf1","sf2") and old is not None and old!=value:
+            for downstream in ("final","third"):
+                previous=self.playoff_results.pop(downstream,None)
+                previous_winner=self.playoff_winners.pop(downstream,None)
+                if previous is not None or previous_winner is not None:
+                    self.log_operation("Playoff downstream azzerato",downstream,
+                        previous or "In corso", "Da rigiocare",
+                        f"È cambiato il risultato di {key}")
         self.save(); self.save_recovery(); self.refresh_playoffs()
     def set_playoff_winner(self,key,player):
         old=self.playoff_winners.get(key)
@@ -1942,6 +1950,13 @@ class MainWindow(QMainWindow):
             if player not in pair: return
             self.playoff_winners[key]=player
         self.log_operation("Vincitore Armageddon",key,old or "Da definire",player or "Da definire")
+        if key in ("sf1","sf2") and old!=player:
+            for downstream in ("final","third"):
+                previous=self.playoff_results.pop(downstream,None)
+                previous_winner=self.playoff_winners.pop(downstream,None)
+                if previous is not None or previous_winner is not None:
+                    self.log_operation("Playoff downstream azzerato",downstream,
+                        previous or "In corso","Da rigiocare",f"È cambiato il vincitore di {key}")
         self.save(); self.refresh_playoffs()
     def offer_playoff_draw(self,key):
         pair=getattr(self,"playoff_pairs",{}).get(key,(None,None))
@@ -2094,6 +2109,7 @@ class MainWindow(QMainWindow):
             card.result_box.blockSignals(True)
             card.result_box.setCurrentIndex(max(0,card.result_box.findData(result)))
             card.result_box.blockSignals(False)
+            card.result_box.setEnabled(all(pair))
             card.winner_box.blockSignals(True); card.winner_box.clear()
             card.winner_box.addItem("Vincitore da definire",None)
             for player in pair:
