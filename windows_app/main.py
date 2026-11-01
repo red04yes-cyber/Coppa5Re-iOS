@@ -1591,6 +1591,14 @@ QLabel{{background:transparent;}}
 """
 
 def main():
+    if "--bundle-smoke" in sys.argv:
+        app=QApplication(["Coppa5Re"]); app.setApplicationName(APP_NAME); app.setStyle("Fusion"); app.setStyleSheet(STYLE)
+        win=MainWindow()
+        engine_ok=bool(win.find_engine())
+        logo_widgets=win.findChildren(LogoWidget)
+        logo_ok=bool(logo_widgets) and all(widget.renderer.isValid() for widget in logo_widgets)
+        win.close()
+        sys.exit(0 if engine_ok and logo_ok else 2)
     app=QApplication(sys.argv); app.setApplicationName(APP_NAME); app.setStyle("Fusion"); app.setStyleSheet(STYLE)
     win=MainWindow(); win.show(); sys.exit(app.exec())
 if __name__=="__main__": main()
