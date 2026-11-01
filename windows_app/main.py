@@ -7,6 +7,7 @@ import chess
 import chess.pgn
 from PySide6.QtCore import Qt, QSize, Signal, QThread, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPdfWriter, QKeySequence, QShortcut
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QComboBox,
     QDoubleSpinBox, QLineEdit, QVBoxLayout, QHBoxLayout, QGridLayout, QTabWidget,
@@ -289,6 +290,21 @@ class BoardWidget(QWidget):
     def cycle_theme(self):
         self.theme_index=(self.theme_index+1)%4; self.update()
 
+class LogoWidget(QWidget):
+    def __init__(self,width=100,height=110,parent=None):
+        super().__init__(parent)
+        self.setFixedSize(width,height)
+        base=Path(getattr(sys,"_MEIPASS",Path(__file__).resolve().parent))
+        logo=base/"assets"/"c5r-logo.svg"
+        if not logo.exists():
+            logo=Path(__file__).resolve().parent/"assets"/"c5r-logo.svg"
+        self.renderer=QSvgRenderer(str(logo))
+    def paintEvent(self,event):
+        painter=QPainter(self)
+        self.renderer.render(painter,self.rect())
+        painter.end()
+
+
 class EngineAnalysisWorker(QThread):
     analysisReady = Signal(str, int)
 
@@ -477,7 +493,7 @@ class BroadcastWindow(QWidget):
         super().__init__(); self.app=app; self.setWindowTitle("C5R · Regia streaming")
         self.setStyleSheet(f"background:{BG};color:{TEXT};")
         root=QVBoxLayout(self); head=QHBoxLayout()
-        logo=QLabel("♛  COPPA DEI 5 RE"); logo.setStyleSheet(f"color:{GOLD};font-size:23px;font-weight:900;letter-spacing:3px;")
+        logo=LogoWidget(100,110)
         live=QLabel("● LIVE  ·  VISTA SPETTATORE"); live.setStyleSheet(f"color:{GREEN};font-weight:900;")
         head.addWidget(logo); head.addStretch(); head.addWidget(live); root.addLayout(head)
         row=QHBoxLayout(); self.cards=[SpectatorCard("TAVOLO 01"),SpectatorCard("TAVOLO 02")]
@@ -780,8 +796,8 @@ class MainWindow(QMainWindow):
         return output.copy()
     def build_ui(self):
         root=QWidget(); outer=QVBoxLayout(root); outer.setContentsMargins(22,18,22,16); outer.setSpacing(14)
-        header=QHBoxLayout(); crown=QLabel("♛"); crown.setStyleSheet(f"color:{GOLD};font-size:36px;font-weight:900;")
-        header.addWidget(crown); texts=QVBoxLayout()
+        header=QHBoxLayout(); logo=LogoWidget(76,82)
+        header.addWidget(logo); texts=QVBoxLayout()
         title=QLabel("COPPA DEI 5 RE"); title.setObjectName("BrandTitle")
         sub=QLabel("CONTROL ROOM  ·  TOURNAMENT EDITION"); sub.setObjectName("Eyebrow")
         texts.addWidget(title); texts.addWidget(sub); header.addLayout(texts); header.addStretch()
@@ -813,7 +829,7 @@ class MainWindow(QMainWindow):
     def build_dashboard(self):
         page=QWidget(); root=QVBoxLayout(page)
         hero=QFrame(); hero.setObjectName("Card"); hl=QHBoxLayout(hero)
-        crown=QLabel("♛"); crown.setStyleSheet(f"color:{GOLD};font-size:64px;font-weight:900;")
+        crown=LogoWidget(170,190)
         title=QLabel("<span style='font-size:27px;font-weight:900;color:#EEF1F5'>C5R · COPPA DEI 5 RE</span><br><span style='color:#D8B36A;letter-spacing:3px'>CHESS TOURNAMENT CONTROL ROOM</span>")
         title.setTextFormat(Qt.TextFormat.RichText)
         hl.addWidget(crown); hl.addWidget(title,1); root.addWidget(hero)
