@@ -1035,7 +1035,7 @@ class MainWindow(QMainWindow):
     def start_clock(self,gid):
         if self.results.get(gid): return
         self.clock_data(gid)["started"]=True
-        self.log_operation("Orologio avviato",gid,"fermo",self.time_control)
+        self.log_operation("Orologio avviato",gid,"fermo",self.time_control_for_game(gid))
         self.save(); self.refresh_all()
         self.statusBar().showMessage("Cronometro avviato.",2000)
     def set_time_control(self,value):
@@ -1051,19 +1051,49 @@ class MainWindow(QMainWindow):
             clock[side]=max(0,int(clock[side])-1); changed=True
             if clock[side]<=0:
                 timed_out.append((gid,"0-1" if side=="white" else "1-0"))
+        for key in ("sf1","sf2","final","third"):
+            clock=self.clock_data(key)
+            if not clock.get("started") or self.playoff_results.get(key): continue
+            side=clock.get("side_to_move","white")
+            clock[side]=max(0,int(clock[side])-1); changed=True
+            if clock[side]<=0:
+                timed_out.append((key,"0-1" if side=="white" else "1-0"))
         for gid,result in timed_out:
             self.clock_data(gid)["started"]=False
-            board=self.get_board(gid)
-            flagged_side=chess.WHITE if result=="0-1" else chess.BLACK
-            opponent=not flagged_side
-            if board.has_insufficient_material(opponent):
-                result="1/2-1/2"
-            self.set_result(gid,result,confirm=False,detail="caduta della bandierina · tempo esaurito",termination="time forfeit")
+            if gid in ("sf1","sf2","final","third"):
+                self.set_playoff_result(gid,result,detail="Caduta della bandierina · tempo esaurito")
+            else:
+                board=self.get_board(gid)
+                flagged_side=chess.WHITE if result=="0-1" else chess.BLACK
+                opponent=not flagged_side
+                if board.has_insufficient_material(opponent):
+                    result="1/2-1/2"
+                self.set_result(gid,result,confirm=False,detail="Caduta della bandierina · tempo esaurito",termination="time forfeit")
         if changed:
             self.clock_ticks+=1
             for card in getattr(self,"live_cards",[]): card.refresh_clock()
+            if hasattr(self,"playoff_cards"): self.refresh_playoffs()
             if self.broadcast and self.broadcast.isVisible(): self.broadcast.refresh_from_app()
             if self.clock_ticks%5==0: self.save_recovery()
+    def start_playoff_clock(self,key):
+        if self.playoff_results.get(key): return
+        clock=self.clock_data(key)
+        clock["started"]=True
+        self.log_operation("Orologio playoff avviato",key,"fermo","30+10")
+        self.save(); self.refresh_playoffs()
+    def switch_playoff_clock(self,key):
+        if self.playoff_results.get(key): return
+        clock=self.clock_data(key)
+        if not clock.get("started"): return
+        side=clock.get("side_to_move","white")
+        clock[side]=int(clock[side])+10
+        clock["side_to_move"]="black" if side=="white" else "white"
+        self.save(); self.refresh_playoffs()
+    def playoff_clock_text(self,key):
+        clock=self.clock_data(key)
+        def fmt(seconds):
+            seconds=max(0,int(seconds)); return f"{seconds//60:02d}:{seconds%60:02d}"
+        return f"BIANCO {fmt(clock['white'])} · NERO {fmt(clock['black'])} · TOCCA A {clock.get('side_to_move','white').upper()}"
     def log_operation(self,action,entity,before,after,detail=""):
         self.audit_log.append({"time":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "referee":self.referee,"action":action,"entity":str(entity),
@@ -1241,7 +1271,17 @@ class MainWindow(QMainWindow):
             button=QPushButton(label); button.setObjectName("PrimaryButton" if i==0 else "")
             button.clicked.connect(callback); actions.addWidget(button,i//3,i%3)
         root.addLayout(actions)
-        tip=QLabel("Usa LIVE ARENA per giocare, CALENDARIO per registrare i risultati e ARCHIVIO per consultare le partite concluse.")
+        referee_row=QHBoxLayout()
+        self.dashboard_match_combo=QComboBox()
+        for gid,rnd,white,black in GAMES:
+            self.dashboard_match_combo.addItem(f"R{rnd} · {name(white)} – {name(black)}",gid)
+        referee_row.addWidget(self.dashboard_match_combo,1)
+        draw=QPushButton("PATTA CONCORDATA"); draw.clicked.connect(lambda:self.offer_draw(self.dashboard_match_combo.currentData()))
+        resign=QPushButton("ABBANDONO"); resign.clicked.connect(lambda:self.resign_game(self.dashboard_match_combo.currentData()))
+        force=QPushButton("FORZA RISULTATO"); force.clicked.connect(lambda:self.force_game_result(self.dashboard_match_combo.currentData()))
+        referee_row.addWidget(draw); referee_row.addWidget(resign); referee_row.addWidget(force)
+        root.addLayout(referee_row)
+        tip=QLabel("Azioni arbitrali rapide: seleziona la partita, verifica la conferma di entrambi i giocatori per la patta o registra abbandono / decisione del direttore di gara. Usa LIVE ARENA per giocare e ARCHIVIO per consultare le partite concluse.")
         tip.setObjectName("Muted"); tip.setWordWrap(True); root.addWidget(tip); root.addStretch()
         return page
 
