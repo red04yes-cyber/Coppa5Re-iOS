@@ -1817,7 +1817,7 @@ class MainWindow(QMainWindow):
     def build_playoffs(self):
         page=QWidget(); l=QVBoxLayout(page)
         h=QLabel("TABELLONE PLAYOFF"); h.setObjectName("SectionTitle"); l.addWidget(h)
-        d=QLabel("Semifinali 1ª–4ª e 2ª–3ª, finale e finale 3°/4° posto. I risultati sono indipendenti dal girone e si possono correggere dal tabellone.")
+        d=QLabel("Semifinali 1ª–4ª e 2ª–3ª. Cadenza 30+10. In caso di patta si deve disputare l'Armageddon: tempi, colore e condizioni di vittoria restano da approvare prima del torneo (Art. 10).")
         d.setObjectName("Muted"); d.setWordWrap(True); l.addWidget(d)
         grid=QGridLayout(); self.sf1=self.bracket_card("SEMIFINALE 1","1ª classificata","4ª classificata")
         self.sf2=self.bracket_card("SEMIFINALE 2","2ª classificata","3ª classificata")
@@ -1826,15 +1826,30 @@ class MainWindow(QMainWindow):
         self.playoff_cards={"sf1":self.sf1,"sf2":self.sf2,"final":self.final,"third":self.third}
         self.playoff_winners=getattr(self,"playoff_winners",{})
         for key,card in self.playoff_cards.items():
+            card.clock_label=QLabel("BIANCO 30:00 · NERO 30:00 · TOCCA A WHITE")
+            card.clock_label.setObjectName("Muted")
+            card.layout().addWidget(card.clock_label)
             card.result_box=QComboBox()
-            for value,label in RESULT_OPTIONS: card.result_box.addItem(label,value)
+            for value,label in RESULT_OPTIONS:
+                card.result_box.addItem(label,value)
             card.result_box.currentIndexChanged.connect(lambda i,k=key,c=card:self.set_playoff_result(k,c.result_box.itemData(i)))
-            card.winner_box=QComboBox(); card.winner_box.addItem("Vincitore da definire",None)
+            card.winner_box=QComboBox(); card.winner_box.addItem("Vincitore Armageddon da definire",None)
             card.winner_box.currentIndexChanged.connect(lambda i,k=key,c=card:self.set_playoff_winner(k,c.winner_box.itemData(i)))
             card.layout().addWidget(card.result_box); card.layout().addWidget(card.winner_box)
+            buttons=QHBoxLayout()
+            start=QPushButton("AVVIA 30+10"); start.clicked.connect(lambda checked=False,k=key:self.start_playoff_clock(k))
+            switch=QPushButton("CAMBIA TURNO · +10s"); switch.clicked.connect(lambda checked=False,k=key:self.switch_playoff_clock(k))
+            draw=QPushButton("PATTA / ARMAGEDDON"); draw.clicked.connect(lambda checked=False,k=key:self.offer_playoff_draw(k))
+            resign=QPushButton("ABBANDONO"); resign.clicked.connect(lambda checked=False,k=key:self.resign_playoff(k))
+            force=QPushButton("FORZA"); force.clicked.connect(lambda checked=False,k=key:self.force_playoff_result(k))
+            for button in (start,switch,draw,resign,force):
+                buttons.addWidget(button)
+            card.layout().addLayout(buttons)
+            card.clock_start_button=start; card.clock_switch_button=switch
+            card.draw_button=draw; card.resign_button=resign; card.force_button=force
         grid.addWidget(self.sf1,0,0); grid.addWidget(self.sf2,0,2); grid.addWidget(self.final,1,1); grid.addWidget(self.third,2,1)
         l.addLayout(grid); l.addStretch(); return page
-    def set_playoff_result(self,key,value):
+    def set_playoff_result(self,key,value,detail="Inserimento manuale"):
         old=self.playoff_results.get(key)
         if old==value: return
         if old is not None:
@@ -1843,16 +1858,59 @@ class MainWindow(QMainWindow):
                 QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,QMessageBox.StandardButton.No)
             if answer!=QMessageBox.StandardButton.Yes:
                 self.refresh_playoffs(); return
-        if value is None: self.playoff_results.pop(key,None)
-        else: self.playoff_results[key]=value
-        self.log_operation("Risultato playoff",key,old or "In corso",value or "In corso")
+        if value is None:
+            self.playoff_results.pop(key,None)
+            self.game_terminations.pop(key,None)
+            self.playoff_winners.pop(key,None)
+        else:
+            self.playoff_results[key]=value
+            self.game_terminations[key]={"termination":"time forfeit" if "bandierina" in detail.lower() or "tempo" in detail.lower() else ("abandoned" if "abbandono" in detail.lower() else ("adjudication" if "arbitro" in detail.lower() or "forz" in detail.lower() else "normal")),"detail":detail}
+            self.clock_data(key)["started"]=False
+            if value!="1/2-1/2":
+                self.playoff_winners.pop(key,None)
+        self.log_operation("Risultato playoff",key,old or "In corso",value or "In corso",detail)
         self.save(); self.refresh_playoffs()
     def set_playoff_winner(self,key,player):
+        old=self.playoff_winners.get(key)
         if player is None:
             self.playoff_winners.pop(key,None)
         else:
+            pair=getattr(self,"playoff_pairs",{}).get(key,(None,None))
+            if player not in pair: return
             self.playoff_winners[key]=player
+        self.log_operation("Vincitore Armageddon",key,old or "Da definire",player or "Da definire")
         self.save(); self.refresh_playoffs()
+    def offer_playoff_draw(self,key):
+        pair=getattr(self,"playoff_pairs",{}).get(key,(None,None))
+        if not all(pair):
+            QMessageBox.information(self,"Playoff","Gli abbinamenti non sono ancora definiti.")
+            return
+        answer=QMessageBox.question(self,"Patta consensuale",
+            f"{name(pair[0])} e {name(pair[1])} confermano entrambi la patta della partita 30+10?\\n"
+            "Il regolamento Art. 10 richiede poi un Armageddon. Le condizioni non sono ancora definite.",
+            QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,QMessageBox.StandardButton.No)
+        if answer==QMessageBox.StandardButton.Yes:
+            self.set_playoff_result(key,"1/2-1/2",detail="Patta consensuale · Armageddon da disputare ai sensi dell'Art. 10")
+            QMessageBox.information(self,"Armageddon richiesto",
+                "Registrata la patta. Disputate l'Armageddon secondo condizioni comunicate dal direttore di gara; quindi selezionate il vincitore nel menu dedicato.")
+    def resign_playoff(self,key):
+        pair=getattr(self,"playoff_pairs",{}).get(key,(None,None))
+        if not all(pair) or self.playoff_results.get(key): return
+        side=self.clock_data(key).get("side_to_move","white")
+        resigning=pair[0] if side=="white" else pair[1]
+        result="0-1" if side=="white" else "1-0"
+        answer=QMessageBox.question(self,"Abbandono playoff",
+            f"Confermi l'abbandono di {name(resigning)}? Risultato {result}.",
+            QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,QMessageBox.StandardButton.No)
+        if answer==QMessageBox.StandardButton.Yes:
+            self.set_playoff_result(key,result,detail=f"Abbandono di {name(resigning)}")
+    def force_playoff_result(self,key):
+        options=["1-0","1/2-1/2","0-1"]
+        choice,ok=QInputDialog.getItem(self,"Forzatura risultato playoff",f"{key.upper()} · risultato arbitrale:",options,0,False)
+        if not ok: return
+        detail,ok=QInputDialog.getText(self,"Motivazione arbitro","Motivazione:",text="Forzatura del direttore di gara")
+        if ok:
+            self.set_playoff_result(key,choice,detail=detail or "Forzatura arbitrale")
     def playoff_pair_winner(self,key,pair=None):
         if pair is None:
             pair=getattr(self,"playoff_pairs",{}).get(key,(None,None))
@@ -1983,6 +2041,14 @@ class MainWindow(QMainWindow):
             card.winner_box.setCurrentIndex(max(0,card.winner_box.findData(chosen)))
             card.winner_box.setEnabled(result=="1/2-1/2" and pair[0] is not None and pair[1] is not None)
             card.winner_box.blockSignals(False)
+            card.clock_label.setText(self.playoff_clock_text(key))
+            clock=self.clock_data(key)
+            active=bool(clock.get("started")) and result is None and all(pair)
+            card.clock_start_button.setEnabled(not active and result is None and all(pair))
+            card.clock_switch_button.setEnabled(active)
+            card.draw_button.setEnabled(result is None and all(pair))
+            card.resign_button.setEnabled(result is None and all(pair))
+            card.force_button.setEnabled(all(pair))
     def open_broadcast(self):
         if self.broadcast is None: self.broadcast=BroadcastWindow(self)
         self.broadcast.refresh_from_app()
