@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, os, random, sys, shutil, hashlib, math, csv, time, subprocess
+import json, os, random, sys, shutil, hashlib, math, csv, time, subprocess, queue, threading
 from datetime import datetime
 from pathlib import Path
 from itertools import combinations
@@ -323,81 +323,120 @@ class LogoWidget(QWidget):
         painter.end()
 
 
-class EngineAnalysisWorker(QThread):
-    analysisReady = Signal(str, int)
+class StockfishService(QThread):
+    """Un solo processo Stockfish persistente per tutta la sessione dell'app."""
+    positionReady = Signal(str, int)
+    gameReady = Signal(str, list)
+    analysisFailed = Signal(str, str)
 
-    def __init__(self, engine_path, game_id, board, parent=None):
+    def __init__(self, engine_path, parent=None):
         super().__init__(parent)
         self.engine_path = engine_path
-        self.game_id = game_id
-        self.position = board.copy(stack=True)
+        self.jobs = queue.Queue()
+        self.pending_positions = {}
+        self.scheduled_positions = set()
+        self.pending_lock = threading.Lock()
+        self.stop_event = threading.Event()
+
+    def request_position(self, game_id, board):
+        with self.pending_lock:
+            self.pending_positions[game_id] = board.copy(stack=True)
+            if game_id not in self.scheduled_positions:
+                self.scheduled_positions.add(game_id)
+                self.jobs.put(("position", game_id))
+
+    def request_game(self, game_id, moves):
+        self.jobs.put(("game", game_id, list(moves)))
+
+    def stop(self):
+        self.stop_event.set()
+        self.jobs.put(None)
 
     def run(self):
         engine = None
         try:
             import chess.engine
-            popen_args={}
-            if os.name=="nt":
-                startupinfo=subprocess.STARTUPINFO()
+            popen_args = {}
+            if os.name == "nt":
+                startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                startupinfo.wShowWindow=subprocess.SW_HIDE
-                popen_args={"creationflags":subprocess.CREATE_NO_WINDOW,"startupinfo":startupinfo}
-            engine = chess.engine.SimpleEngine.popen_uci(self.engine_path, timeout=8, cwd=str(Path(self.engine_path).parent), **popen_args)
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+                popen_args = {
+                    "creationflags": subprocess.CREATE_NO_WINDOW,
+                    "startupinfo": startupinfo,
+                }
+            engine = chess.engine.SimpleEngine.popen_uci(
+                self.engine_path,
+                timeout=12,
+                cwd=str(Path(self.engine_path).parent),
+                **popen_args,
+            )
             try:
                 engine.configure({"Threads": 2, "Hash": 96})
             except Exception:
                 pass
-            info = engine.analyse(self.position, chess.engine.Limit(depth=12, time=1.5))
-            score = info["score"].white().score(mate_score=10000)
-            if score is not None:
-                self.analysisReady.emit(self.game_id, int(score))
-        except Exception:
-            pass
+
+            while not self.stop_event.is_set():
+                try:
+                    job = self.jobs.get(timeout=0.25)
+                except queue.Empty:
+                    continue
+                if job is None:
+                    break
+
+                kind, game_id = job[0], job[1]
+                try:
+                    if kind == "position":
+                        with self.pending_lock:
+                            board = self.pending_positions.pop(game_id, None)
+                            self.scheduled_positions.discard(game_id)
+                        if board is None:
+                            continue
+                        info = engine.analyse(
+                            board,
+                            chess.engine.Limit(depth=12, time=1.0),
+                        )
+                        score = info["score"].white().score(mate_score=10000)
+                        if score is not None:
+                            self.positionReady.emit(game_id, int(score))
+
+                    elif kind == "game":
+                        moves = job[2]
+                        board = chess.Board()
+                        positions = []
+                        for ply, uci in enumerate(moves, 1):
+                            if self.stop_event.is_set():
+                                break
+                            move = chess.Move.from_uci(uci)
+                            if move not in board.legal_moves:
+                                raise ValueError(f"Mossa PGN non valida al ply {ply}: {uci}")
+                            san = board.san(move)
+                            board.push(move)
+                            info = engine.analyse(
+                                board,
+                                chess.engine.Limit(time=0.12),
+                            )
+                            score = info["score"].white().score(mate_score=10000)
+                            positions.append({
+                                "ply": ply,
+                                "san": san,
+                                "score": int(score or 0),
+                                "fen": board.fen(),
+                            })
+                        if not self.stop_event.is_set():
+                            self.gameReady.emit(game_id, positions)
+
+                except Exception as exc:
+                    self.analysisFailed.emit(game_id, str(exc))
+
+        except Exception as exc:
+            self.analysisFailed.emit("", str(exc))
         finally:
             if engine is not None:
                 try:
                     engine.quit()
                 except Exception:
                     pass
-
-
-class GameAnalysisWorker(QThread):
-    analysisReady = Signal(str, list)
-    analysisFailed = Signal(str, str)
-
-    def __init__(self,engine_path,game_id,moves,parent=None):
-        super().__init__(parent)
-        self.engine_path=engine_path; self.game_id=game_id; self.moves=list(moves)
-
-    def run(self):
-        engine=None
-        try:
-            import chess.engine
-            popen_args={}
-            if os.name=="nt":
-                startupinfo=subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                startupinfo.wShowWindow=subprocess.SW_HIDE
-                popen_args={"creationflags":subprocess.CREATE_NO_WINDOW,"startupinfo":startupinfo}
-            engine=chess.engine.SimpleEngine.popen_uci(self.engine_path,timeout=10,
-                cwd=str(Path(self.engine_path).parent),**popen_args)
-            try: engine.configure({"Threads":2,"Hash":96})
-            except Exception: pass
-            board=chess.Board(); positions=[]
-            for ply,uci in enumerate(self.moves,1):
-                if self.isInterruptionRequested(): break
-                move=chess.Move.from_uci(uci)
-                san=board.san(move); board.push(move)
-                info=engine.analyse(board,chess.engine.Limit(time=0.12))
-                score=info["score"].white().score(mate_score=10000)
-                positions.append({"ply":ply,"san":san,"score":int(score or 0),"fen":board.fen()})
-            self.analysisReady.emit(self.game_id,positions)
-        except Exception as exc:
-            self.analysisFailed.emit(self.game_id,str(exc))
-        finally:
-            if engine is not None:
-                try: engine.quit()
-                except Exception: pass
 
 
 class BoardCard(QFrame):
@@ -478,32 +517,21 @@ class BoardCard(QFrame):
         self.clock_btn.setText("OROLOGIO IN CORSO" if state.get("started") else "AVVIA OROLOGIO")
     def update_evaluation(self, gid, board):
         if not self.app.engine_enabled:
-            self.eval_bar.setValue(500); self.eval_bar.setFormat("ANALISI STOCKFISH DISATTIVATA"); return
-        signature=board.fen()
-        if signature==self.last_eval_signature:
-            return
-        self.last_eval_signature=signature
-        path=self.app.engine_path or self.app.find_engine()
-        if not path:
             self.eval_bar.setValue(500)
-            self.eval_bar.setFormat("VALUTAZIONE · Stockfish non disponibile")
+            self.eval_bar.setFormat("ANALISI STOCKFISH DISATTIVATA")
             return
-        if self.engine_worker is not None and self.engine_worker.isRunning():
-            self.pending_engine_position=(gid,board.copy(stack=True))
+        signature = board.fen()
+        if signature == self.last_eval_signature:
             return
-        self.pending_engine_position=None
-        self.eval_bar.setFormat("ANALISI STOCKFISH · profondità 12…")
-        worker=EngineAnalysisWorker(path,gid,board,self)
-        worker.analysisReady.connect(self.show_evaluation)
-        worker.finished.connect(self.run_pending_evaluation)
-        self.engine_worker=worker
-        worker.start()
-    def run_pending_evaluation(self):
-        pending=getattr(self,"pending_engine_position",None)
-        if pending:
-            self.pending_engine_position=None
-            self.last_eval_signature=None
-            self.update_evaluation(pending[0],pending[1])
+        self.last_eval_signature = signature
+        service = self.app.get_engine_service()
+        if service is None:
+            self.eval_bar.setValue(500)
+            self.eval_bar.setFormat("STOCKFISH INTEGRATO NON DISPONIBILE")
+            return
+        self.eval_bar.setFormat("ANALISI STOCKFISH · in background…")
+        service.request_position(gid, board)
+
     def show_evaluation(self, gid, score):
         if not self.app.engine_enabled or gid != self.game_id:
             return
@@ -590,7 +618,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__(); self.setWindowTitle("Coppa dei 5 Re · Control Room")
         self.resize(1500,950); self.setMinimumSize(980,680)
-        self.results={}; self.penalties=[]; self.moves={}; self.boards={}; self.broadcast=None; self.engine_path=None; self.engine_enabled=True
+        self.results={}; self.penalties=[]; self.moves={}; self.boards={}; self.broadcast=None; self.engine_path=None; self.engine_enabled=True; self.engine_service=None; self.analysis_running_gid=None
         self._odds_cache_key=None; self._odds_cache=None
         self.time_control="15+3"; self.clocks={}; self.audit_log=[]; self.match_notes={}; self.referee=""
         self.tie_break="Nessuno"; self.playoff_results={}; self.eval_history={}; self.clock_ticks=0; self.board_theme=0
@@ -634,30 +662,42 @@ class MainWindow(QMainWindow):
         self.log_operation("Stockfish","",not self.engine_enabled,self.engine_enabled)
         self.save(); self.refresh_all()
     def find_engine(self):
-        candidates=[]
-        if self.engine_path:
-            candidates.append(Path(self.engine_path))
-        candidates.extend([
-            Path(getattr(sys,"_MEIPASS",Path(__file__).resolve().parent)) / "stockfish" / "stockfish.exe",
+        # In una build PyInstaller, dare sempre priorità al motore incluso nell'EXE.
+        bundled = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)) / "stockfish" / "stockfish.exe"
+        candidates = [
+            bundled,
+            Path(__file__).resolve().parent / "stockfish" / "stockfish.exe",
             Path(sys.executable).resolve().parent / "stockfish.exe",
-            Path(__file__).resolve().parent / "stockfish.exe",
             storage_path().parent / "stockfish.exe",
-        ])
-        found=shutil.which("stockfish")
-        if found:
-            candidates.insert(0,Path(found))
+        ]
         for candidate in candidates:
             if candidate.is_file():
-                self.engine_path=str(candidate)
-                return self.engine_path
-        return None
-    def choose_engine(self):
-        path,_=QFileDialog.getOpenFileName(self,"Seleziona motore Stockfish","","Programmi (*.exe);;Tutti i file (*)")
-        if path:
-            self.engine_path=path
-            self.save()
-            self.refresh_all()
-            self.statusBar().showMessage("Stockfish configurato: valutazione attiva sulle scacchiere.",4000)
+                return str(candidate)
+        # Compatibilità per eventuali installazioni di sviluppo non bundle.
+        found = shutil.which("stockfish")
+        return found if found and Path(found).is_file() else None
+
+    def get_engine_service(self):
+        if not self.engine_enabled:
+            return None
+        if self.engine_service is not None and self.engine_service.isRunning():
+            return self.engine_service
+        path = self.find_engine()
+        if not path:
+            return None
+        service = StockfishService(path, self)
+        service.positionReady.connect(self.on_engine_position_ready)
+        service.gameReady.connect(self.on_game_analysis_ready)
+        service.analysisFailed.connect(self.on_game_analysis_failed)
+        self.engine_service = service
+        service.start()
+        return service
+
+    def on_engine_position_ready(self, game_id, score):
+        for card in getattr(self, "live_cards", []):
+            if card.game_id == game_id:
+                card.show_evaluation(game_id, score)
+
     def get_board(self,gid):
         if gid not in self.boards:
             b=chess.Board()
@@ -1085,37 +1125,47 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Archivio PGN esportato.",3000)
 
     def analyze_selected_archive_game(self):
-        row=self.archive_table.currentRow()
-        if row<0:
-            QMessageBox.information(self,"Analisi partita","Seleziona una partita conclusa nell'archivio."); return
-        finished=[g for g in GAMES if self.results.get(g[0])]
-        if row>=len(finished): return
-        gid=finished[row][0]
-        saved=self.eval_history.get(gid)
+        row = self.archive_table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "Analisi partita", "Seleziona una partita conclusa nell'archivio.")
+            return
+        finished = [g for g in GAMES if self.results.get(g[0])]
+        if row >= len(finished):
+            return
+        gid = finished[row][0]
+        saved = self.eval_history.get(gid)
         if saved:
-            self.show_game_analysis(gid,saved); return
-        path=self.find_engine()
-        if not path:
-            QMessageBox.warning(self,"Stockfish non disponibile","Il motore Stockfish integrato non è stato trovato."); return
-        moves=self.moves.get(gid,[])
+            self.show_game_analysis(gid, saved)
+            return
+        moves = self.moves.get(gid, [])
         if not moves:
-            QMessageBox.information(self,"Analisi partita","Questa partita non contiene mosse registrate."); return
-        running=getattr(self,"analysis_worker",None)
-        if running is not None and running.isRunning():
-            QMessageBox.information(self,"Analisi in corso","Attendi la fine dell'analisi già avviata."); return
+            QMessageBox.information(self, "Analisi partita", "Questa partita non contiene mosse registrate.")
+            return
+        if self.analysis_running_gid is not None:
+            QMessageBox.information(self, "Analisi in corso", "Attendi la fine dell'analisi già avviata.")
+            return
+        service = self.get_engine_service()
+        if service is None:
+            QMessageBox.warning(self, "Stockfish non disponibile", "Stockfish integrato non trovato nella build.")
+            return
+        self.analysis_running_gid = gid
         self.statusBar().showMessage(f"Stockfish sta analizzando {gid}: {len(moves)} posizioni…")
-        worker=GameAnalysisWorker(path,gid,moves,self)
-        worker.analysisReady.connect(self.on_game_analysis_ready)
-        worker.analysisFailed.connect(self.on_game_analysis_failed)
-        self.analysis_worker=worker; worker.start()
+        service.request_game(gid, moves)
 
-    def on_game_analysis_ready(self,gid,positions):
-        self.eval_history[gid]=positions
-        self.save(); self.statusBar().showMessage(f"Analisi Stockfish completata: {gid}.",3500)
-        self.show_game_analysis(gid,positions)
+    def on_game_analysis_ready(self, gid, positions):
+        if gid:
+            self.analysis_running_gid = None
+            self.eval_history[gid] = positions
+            self.save()
+            self.statusBar().showMessage(f"Analisi Stockfish completata: {gid}.", 3500)
+            self.show_game_analysis(gid, positions)
 
-    def on_game_analysis_failed(self,gid,error):
-        QMessageBox.warning(self,"Analisi non riuscita",f"Stockfish non è riuscito ad analizzare {gid}: {error}")
+    def on_game_analysis_failed(self, gid, error):
+        self.analysis_running_gid = None
+        if gid:
+            QMessageBox.warning(self, "Analisi non riuscita", f"Stockfish non è riuscito ad analizzare {gid}: {error}")
+        else:
+            self.statusBar().showMessage(f"Stockfish non si è avviato: {error}", 6000)
 
     def show_game_analysis(self,gid,positions):
         dialog=QDialog(self); dialog.setWindowTitle(f"Analisi Stockfish · {gid}"); dialog.resize(620,620)
@@ -1543,13 +1593,10 @@ class MainWindow(QMainWindow):
         self.broadcast.raise_()
         self.broadcast.activateWindow()
     def closeEvent(self,event):
-        for card in getattr(self,"live_cards",[]):
-            worker=getattr(card,"engine_worker",None)
-            if worker is not None and worker.isRunning():
-                worker.wait(3000)
-        analysis=getattr(self,"analysis_worker",None)
-        if analysis is not None and analysis.isRunning():
-            analysis.requestInterruption(); analysis.wait(3000)
+        service=getattr(self,"engine_service",None)
+        if service is not None and service.isRunning():
+            service.stop()
+            service.wait(6000)
         self.save()
         if self.broadcast: self.broadcast.close()
         event.accept()
