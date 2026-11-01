@@ -267,7 +267,7 @@ class EngineAnalysisWorker(QThread):
                 engine.configure({"Threads": 2, "Hash": 96})
             except Exception:
                 pass
-            info = engine.analyse(self.position, chess.engine.Limit(depth=12))
+            info = engine.analyse(self.position, chess.engine.Limit(depth=12, time=1.5))
             score = info["score"].white().score(mate_score=10000)
             if score is not None:
                 self.analysisReady.emit(self.game_id, int(score))
@@ -792,6 +792,10 @@ class MainWindow(QMainWindow):
         self.broadcast.raise_()
         self.broadcast.activateWindow()
     def closeEvent(self,event):
+        for card in getattr(self,"live_cards",[]):
+            worker=getattr(card,"engine_worker",None)
+            if worker is not None and worker.isRunning():
+                worker.wait(3000)
         self.save()
         if self.broadcast: self.broadcast.close()
         event.accept()
