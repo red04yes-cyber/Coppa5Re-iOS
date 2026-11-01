@@ -54,6 +54,10 @@ jobs:
       - name: Test bundled Stockfish UCI without console window
         run: |
           python -c "import chess, chess.engine, subprocess; si=subprocess.STARTUPINFO(); si.dwFlags|=subprocess.STARTF_USESHOWWINDOW; si.wShowWindow=subprocess.SW_HIDE; e=chess.engine.SimpleEngine.popen_uci('windows_app/stockfish/stockfish.exe',timeout=12,cwd='windows_app/stockfish',creationflags=subprocess.CREATE_NO_WINDOW,startupinfo=si); info=e.analyse(chess.Board(),chess.engine.Limit(depth=3)); assert info.get('score') is not None; e.quit(); print('Stockfish UCI OK without visible console')"
+      - name: Test persistent Stockfish service without console popups
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python windows_app/stockfish_service_smoke.py
       - name: Check Python syntax
         run: python -m compileall -q windows_app/main.py
       - name: Smoke test Qt, chess and tournament draw
