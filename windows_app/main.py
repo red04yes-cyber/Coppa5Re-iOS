@@ -801,6 +801,239 @@ class MainWindow(QMainWindow):
         foot=QLabel("COPPA DEI 5 RE  /  DAL 15 NOVEMBRE 2026  /  DATI LOCALI SU QUESTO PC"); foot.setObjectName("Footnote")
         outer.addWidget(foot); self.setCentralWidget(root)
         self.statusBar().showMessage("Pronto · seleziona un pezzo e poi la casa di destinazione.")
+    def build_dashboard(self):
+        page=QWidget(); root=QVBoxLayout(page)
+        hero=QFrame(); hero.setObjectName("Card"); hl=QHBoxLayout(hero)
+        crown=QLabel("♛"); crown.setStyleSheet(f"color:{GOLD};font-size:64px;font-weight:900;")
+        title=QLabel("<span style='font-size:27px;font-weight:900;color:#EEF1F5'>C5R · COPPA DEI 5 RE</span><br><span style='color:#D8B36A;letter-spacing:3px'>CHESS TOURNAMENT CONTROL ROOM</span>")
+        title.setTextFormat(Qt.TextFormat.RichText)
+        hl.addWidget(crown); hl.addWidget(title,1); root.addWidget(hero)
+        self.dashboard_summary=QLabel(); self.dashboard_summary.setObjectName("SectionTitle"); root.addWidget(self.dashboard_summary)
+        self.dashboard_detail=QLabel(); self.dashboard_detail.setObjectName("Muted"); root.addWidget(self.dashboard_detail)
+        actions=QGridLayout()
+        items=[("ESPORTA PGN TORNEO",self.export_all_pgn),("CLASSIFICA CSV",self.export_standings_csv),
+               ("CLASSIFICA PDF",self.export_standings_pdf),("BACKUP DATI",self.export_backup),
+               ("RIPRISTINA BACKUP",self.restore_backup)]
+        for i,(label,callback) in enumerate(items):
+            button=QPushButton(label); button.setObjectName("PrimaryButton" if i==0 else "")
+            button.clicked.connect(callback); actions.addWidget(button,i//3,i%3)
+        root.addLayout(actions)
+        tip=QLabel("Usa LIVE ARENA per giocare, CALENDARIO per registrare i risultati e ARCHIVIO per consultare le partite concluse.")
+        tip.setObjectName("Muted"); tip.setWordWrap(True); root.addWidget(tip); root.addStretch()
+        return page
+
+    def build_archive(self):
+        page=QWidget(); layout=QVBoxLayout(page)
+        title=QLabel("ARCHIVIO PARTITE"); title.setObjectName("SectionTitle"); layout.addWidget(title)
+        self.archive_table=QTableWidget(0,6)
+        self.archive_table.setHorizontalHeaderLabels(["TURNO","PARTITA","BIANCO","NERO","RISULTATO","MOSSE / NOTE"])
+        self.archive_table.verticalHeader().setVisible(False)
+        self.archive_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.archive_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.archive_table.horizontalHeader().setSectionResizeMode(1,QHeaderView.ResizeMode.Stretch)
+        layout.addWidget(self.archive_table,1)
+        row=QHBoxLayout(); allpgn=QPushButton("ESPORTA TUTTO IL TORNEO IN PGN")
+        allpgn.setObjectName("PrimaryButton"); allpgn.clicked.connect(self.export_all_pgn); row.addWidget(allpgn)
+        one=QPushButton("ESPORTA PARTITA SELEZIONATA")
+        one.clicked.connect(self.export_selected_archive_game); row.addWidget(one); row.addStretch()
+        layout.addLayout(row); return page
+
+    def build_h2h(self):
+        page=QWidget(); layout=QVBoxLayout(page)
+        title=QLabel("STATISTICHE TESTA A TESTA"); title.setObjectName("SectionTitle"); layout.addWidget(title)
+        desc=QLabel("Vittorie-pareggi-sconfitte per il giocatore indicato sulla riga rispetto a quello indicato nella colonna.")
+        desc.setObjectName("Muted"); desc.setWordWrap(True); layout.addWidget(desc)
+        self.h2h_table=QTableWidget(5,6)
+        self.h2h_table.setHorizontalHeaderLabels(["GIOCATORE"]+[name(p) for p in ORDER])
+        self.h2h_table.verticalHeader().setVisible(False)
+        self.h2h_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.h2h_table.horizontalHeader().setSectionResizeMode(0,QHeaderView.ResizeMode.Stretch)
+        for c in range(1,6): self.h2h_table.horizontalHeader().setSectionResizeMode(c,QHeaderView.ResizeMode.ResizeToContents)
+        layout.addWidget(self.h2h_table,1); return page
+
+    def build_audit(self):
+        page=QWidget(); layout=QVBoxLayout(page)
+        title=QLabel("REGISTRO OPERAZIONI E ARBITRAGGIO"); title.setObjectName("SectionTitle"); layout.addWidget(title)
+        self.audit_table=QTableWidget(0,7)
+        self.audit_table.setHorizontalHeaderLabels(["DATA/ORA","ARBITRO","AZIONE","OGGETTO","PRIMA","DOPO","DETTAGLI"])
+        self.audit_table.verticalHeader().setVisible(False)
+        self.audit_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.audit_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.audit_table.horizontalHeader().setSectionResizeMode(6,QHeaderView.ResizeMode.Stretch)
+        layout.addWidget(self.audit_table,1)
+        export=QPushButton("ESPORTA REGISTRO CSV"); export.clicked.connect(self.export_audit_csv)
+        layout.addWidget(export,0,Qt.AlignmentFlag.AlignRight); return page
+
+    def build_settings(self):
+        page=QWidget(); layout=QVBoxLayout(page)
+        title=QLabel("IMPOSTAZIONI TORNEO"); title.setObjectName("SectionTitle"); layout.addWidget(title)
+        card=QFrame(); card.setObjectName("Card"); grid=QGridLayout(card)
+        grid.addWidget(QLabel("ARBITRO"),0,0)
+        self.referee_input=QLineEdit(self.referee); self.referee_input.setPlaceholderText("Nome arbitro / direttore di gara")
+        grid.addWidget(self.referee_input,0,1)
+        grid.addWidget(QLabel("CRITERIO DI SPAREGGIO"),1,0)
+        self.tie_break_combo=QComboBox()
+        self.tie_break_combo.addItems(["Nessuno","Scontro diretto","Sonneborn-Berger","Buchholz","Numero vittorie"])
+        self.tie_break_combo.setCurrentText(self.tie_break if self.tie_break in ["Nessuno","Scontro diretto","Sonneborn-Berger","Buchholz","Numero vittorie"] else "Nessuno")
+        grid.addWidget(self.tie_break_combo,1,1)
+        save=QPushButton("SALVA IMPOSTAZIONI"); save.setObjectName("PrimaryButton"); save.clicked.connect(self.save_settings)
+        grid.addWidget(save,2,1); layout.addWidget(card)
+        desc=QLabel("Il criterio selezionato viene applicato soltanto in caso di pari punti. Con “Nessuno” gli ex aequo restano tali.")
+        desc.setObjectName("Muted"); desc.setWordWrap(True); layout.addWidget(desc)
+        layout.addStretch(); return page
+
+    def save_settings(self):
+        self.referee=self.referee_input.text().strip()
+        self.tie_break=self.tie_break_combo.currentText()
+        self.log_operation("Impostazioni torneo","","",f"arbitro={self.referee}; spareggio={self.tie_break}")
+        self.save(); self.refresh_all()
+        self.statusBar().showMessage("Impostazioni torneo salvate.",2500)
+
+    def install_shortcuts(self):
+        shortcuts=[("Ctrl+S",self.save),("Ctrl+E",self.export_all_pgn),
+                   ("Ctrl+Shift+B",self.export_backup),("Ctrl+1",lambda:self.tabs.setCurrentIndex(1)),
+                   ("Ctrl+2",lambda:self.tabs.setCurrentIndex(2)),("Ctrl+3",lambda:self.tabs.setCurrentIndex(3))]
+        self.shortcuts=[]
+        for key,callback in shortcuts:
+            shortcut=QShortcut(QKeySequence(key),self)
+            shortcut.activated.connect(callback); self.shortcuts.append(shortcut)
+
+    def refresh_dashboard(self):
+        if not hasattr(self,"dashboard_summary"): return
+        done=len(self.results); running=sum(1 for gid,_,_,_ in GAMES if self.clock_data(gid).get("started"))
+        self.dashboard_summary.setText(f"PARTITE CONCLUSE  {done}/10     ·     IN CORSO  {running}     ·     CONTROLLO {self.time_control}")
+        leader=self.standings()[0]
+        self.dashboard_detail.setText(f"LEADER ATTUALE  ·  {name(leader['id'])}  ·  {leader['points']:.1f} punti     |     ARBITRO  ·  {self.referee or 'non impostato'}")
+
+    def refresh_archive(self):
+        if not hasattr(self,"archive_table"): return
+        finished=[g for g in GAMES if self.results.get(g[0])]
+        self.archive_table.setRowCount(len(finished))
+        for row,(gid,rnd,white,black) in enumerate(finished):
+            values=[f"ROUND {rnd}",gid,name(white),name(black),self.results[gid],
+                    f"{len(self.moves.get(gid,[]))} mosse · {len(self.match_notes.get(gid,[]))} note"]
+            for col,value in enumerate(values):
+                item=QTableWidgetItem(value); item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.archive_table.setItem(row,col,item)
+
+    def refresh_h2h(self):
+        if not hasattr(self,"h2h_table"): return
+        for row,p in enumerate(ORDER):
+            self.h2h_table.setItem(row,0,QTableWidgetItem(name(p)))
+            for col,opponent in enumerate(ORDER,1):
+                if p==opponent:
+                    self.h2h_table.setItem(row,col,QTableWidgetItem("—")); continue
+                wins=draws=losses=0
+                for gid,rnd,w,b in GAMES:
+                    if frozenset((w,b))!=frozenset((p,opponent)): continue
+                    result=self.results.get(gid)
+                    if not result: continue
+                    score=1 if (result=="1-0" and p==w) or (result=="0-1" and p==b) else (.5 if result=="1/2-1/2" else 0)
+                    if score==1: wins+=1
+                    elif score==.5: draws+=1
+                    else: losses+=1
+                self.h2h_table.setItem(row,col,QTableWidgetItem(f"{wins}–{draws}–{losses}"))
+
+    def refresh_audit(self):
+        if not hasattr(self,"audit_table"): return
+        entries=list(reversed(self.audit_log))
+        self.audit_table.setRowCount(len(entries))
+        for row,entry in enumerate(entries):
+            vals=[entry.get("time",""),entry.get("referee",""),entry.get("action",""),
+                  entry.get("entity",""),entry.get("before",""),entry.get("after",""),entry.get("detail","")]
+            for col,value in enumerate(vals):
+                self.audit_table.setItem(row,col,QTableWidgetItem(str(value)))
+
+    def export_all_pgn(self):
+        path,_=QFileDialog.getSaveFileName(self,"Esporta tutte le partite","Coppa5Re-Torneo.pgn","PGN (*.pgn)")
+        if not path: return
+        chunks=[]
+        for gid,rnd,white,black in GAMES:
+            node=chess.pgn.Game.from_board(self.get_board(gid))
+            node.headers["Event"]=APP_NAME; node.headers["Round"]=str(rnd)
+            node.headers["White"]=name(white); node.headers["Black"]=name(black)
+            node.headers["Result"]=self.results.get(gid,"*"); node.headers["Site"]="Coppa dei 5 Re"
+            chunks.append(node.accept(chess.pgn.StringExporter(headers=True,variations=False,comments=False)))
+        Path(path).write_text("\\n\\n".join(chunks)+"\\n",encoding="utf-8")
+        self.statusBar().showMessage("Archivio PGN esportato.",3000)
+
+    def export_selected_archive_game(self):
+        row=self.archive_table.currentRow()
+        if row<0: return
+        finished=[g for g in GAMES if self.results.get(g[0])]
+        if row<len(finished): self.export_pgn(finished[row][0])
+
+    def export_standings_csv(self):
+        path,_=QFileDialog.getSaveFileName(self,"Esporta classifica","Classifica-C5R.csv","CSV (*.csv)")
+        if not path: return
+        with open(path,"w",newline="",encoding="utf-8-sig") as file:
+            writer=csv.writer(file,delimiter=";")
+            writer.writerow(["Posizione","Giocatore","Partite","Vittorie","Patte","Sconfitte","Penalità","Punti","Spareggio"])
+            for position,row in enumerate(self.standings(),1):
+                writer.writerow([position,name(row["id"]),row["played"],row["wins"],row["draws"],row["losses"],
+                    row["penalty"],row["points"],self.tie_break_value(row["id"])])
+        self.statusBar().showMessage("Classifica CSV esportata.",2500)
+
+    def export_standings_pdf(self):
+        path,_=QFileDialog.getSaveFileName(self,"Esporta classifica PDF","Classifica-C5R.pdf","PDF (*.pdf)")
+        if not path: return
+        writer=QPdfWriter(path); writer.setTitle("Classifica Coppa dei 5 Re"); writer.setResolution(150)
+        painter=QPainter(writer)
+        try:
+            painter.setPen(QColor(GOLD)); painter.setFont(QFont("Segoe UI",22,QFont.Weight.Bold))
+            painter.drawText(180,220,"COPPA DEI 5 RE")
+            painter.setPen(QColor("#222222")); painter.setFont(QFont("Segoe UI",11))
+            painter.drawText(180,300,"CLASSIFICA GENERALE")
+            painter.drawText(180,360,f"Tempo: {self.time_control}    Spareggio: {self.tie_break}")
+            y=470
+            painter.setFont(QFont("Segoe UI",9,QFont.Weight.Bold))
+            painter.drawText(180,y,"POS   GIOCATORE   G   V   X   P   PEN.   PT"); y+=65
+            painter.setFont(QFont("Segoe UI",10))
+            for i,row in enumerate(self.standings(),1):
+                values=[str(i),name(row["id"]),str(row["played"]),str(row["wins"]),str(row["draws"]),
+                        str(row["losses"]),f"{row['penalty']:+.1f}",f"{row['points']:.1f}"]
+                painter.drawText(180,y,"      ".join(values)); y+=58
+        finally:
+            painter.end()
+        self.statusBar().showMessage("Classifica PDF esportata.",2500)
+
+    def export_audit_csv(self):
+        path,_=QFileDialog.getSaveFileName(self,"Esporta registro","Registro-C5R.csv","CSV (*.csv)")
+        if not path: return
+        with open(path,"w",newline="",encoding="utf-8-sig") as file:
+            writer=csv.writer(file,delimiter=";")
+            writer.writerow(["Data","Arbitro","Azione","Oggetto","Prima","Dopo","Dettagli"])
+            for e in self.audit_log:
+                writer.writerow([e.get(k,"") for k in ("time","referee","action","entity","before","after","detail")])
+        self.statusBar().showMessage("Registro operazioni esportato.",2500)
+
+    def export_backup(self):
+        self.save()
+        path,_=QFileDialog.getSaveFileName(self,"Backup torneo","Backup-C5R.json","JSON (*.json)")
+        if path:
+            shutil.copy2(storage_path(),path)
+            self.statusBar().showMessage("Backup completo salvato.",2500)
+
+    def restore_backup(self):
+        path,_=QFileDialog.getOpenFileName(self,"Ripristina backup","","Backup torneo (*.json)")
+        if not path: return
+        try:
+            data=json.loads(Path(path).read_text(encoding="utf-8"))
+            if data.get("schedule"):
+                schedule=[(g["id"],int(g["round"]),g["white"],g["black"]) for g in data["schedule"]]
+                validate_schedule(schedule)
+            answer=QMessageBox.question(self,"Ripristina backup",
+                "I dati attuali verranno sostituiti dal backup selezionato. Continuare?",
+                QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,QMessageBox.StandardButton.No)
+            if answer!=QMessageBox.StandardButton.Yes: return
+            shutil.copy2(path,storage_path())
+            self.boards.clear(); self._odds_cache_key=None; self._odds_cache=None
+            self.results={}; self.penalties=[]; self.moves={}; self.clocks={}; self.audit_log=[]; self.match_notes={}
+            self.load_state(); self.refresh_all()
+            self.statusBar().showMessage("Backup ripristinato.",3000)
+        except Exception as exc:
+            QMessageBox.critical(self,"Backup non valido",f"Impossibile ripristinare il backup: {exc}")
+
     def build_live(self):
         page=QWidget(); l=QHBoxLayout(page); l.setContentsMargins(0,14,0,0); l.setSpacing(14)
         self.live_cards=[BoardCard(self,1,"R1-M1"),BoardCard(self,2,"R1-M2")]
