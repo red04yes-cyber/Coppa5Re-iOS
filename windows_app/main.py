@@ -326,8 +326,10 @@ class LogoWidget(QWidget):
 class StockfishService(QThread):
     """Un solo processo Stockfish persistente per tutta la sessione dell'app."""
     positionReady = Signal(str, int)
+    moveReady = Signal(str, dict)
     gameReady = Signal(str, list)
     analysisFailed = Signal(str, str)
+    moveFailed = Signal(str, str)
 
     def __init__(self, engine_path, parent=None):
         super().__init__(parent)
@@ -344,6 +346,9 @@ class StockfishService(QThread):
             if game_id not in self.scheduled_positions:
                 self.scheduled_positions.add(game_id)
                 self.jobs.put(("position", game_id))
+
+    def request_move(self, game_id, board_before, move_uci, player_id, ply):
+        self.jobs.put(("move", game_id, board_before.copy(stack=True), move_uci, player_id, ply))
 
     def request_game(self, game_id, moves):
         self.jobs.put(("game", game_id, list(moves)))
@@ -400,28 +405,110 @@ class StockfishService(QThread):
                         if score is not None:
                             self.positionReady.emit(game_id, int(score))
 
+                    elif kind == "move":
+                        board_before, move_uci, player_id, ply = job[2], job[3], job[4], job[5]
+                        move = chess.Move.from_uci(move_uci)
+                        if move not in board_before.legal_moves:
+                            raise ValueError(f"Mossa non valida: {move_uci}")
+                        mover_color = board_before.turn
+                        before_info = engine.analyse(
+                            board_before,
+                            chess.engine.Limit(time=0.30),
+                        )
+                        before_score = before_info["score"].pov(mover_color).score(mate_score=10000)
+                        best_move = before_info.get("pv", [None])[0]
+                        board_after = board_before.copy(stack=True)
+                        board_after.push(move)
+                        after_info = engine.analyse(
+                            board_after,
+                            chess.engine.Limit(time=0.30),
+                        )
+                        after_score = after_info["score"].pov(mover_color).score(mate_score=10000)
+                        before_ep = 1.0 / (1.0 + math.exp(-max(-4000, min(4000, before_score or 0)) / 400.0))
+                        after_ep = 1.0 / (1.0 + math.exp(-max(-4000, min(4000, after_score or 0)) / 400.0))
+                        ep_loss = max(0.0, before_ep - after_ep)
+                        mover_material_before = sum(
+                            len(board_before.pieces(piece_type, mover_color)) * value
+                            for piece_type, value in ((chess.PAWN, 1), (chess.KNIGHT, 3), (chess.BISHOP, 3),
+                                (chess.ROOK, 5), (chess.QUEEN, 9))
+                        ) - sum(
+                            len(board_before.pieces(piece_type, not mover_color)) * value
+                            for piece_type, value in ((chess.PAWN, 1), (chess.KNIGHT, 3), (chess.BISHOP, 3),
+                                (chess.ROOK, 5), (chess.QUEEN, 9))
+                        )
+                        mover_material_after = sum(
+                            len(board_after.pieces(piece_type, mover_color)) * value
+                            for piece_type, value in ((chess.PAWN, 1), (chess.KNIGHT, 3), (chess.BISHOP, 3),
+                                (chess.ROOK, 5), (chess.QUEEN, 9))
+                        ) - sum(
+                            len(board_after.pieces(piece_type, not mover_color)) * value
+                            for piece_type, value in ((chess.PAWN, 1), (chess.KNIGHT, 3), (chess.BISHOP, 3),
+                                (chess.ROOK, 5), (chess.QUEEN, 9))
+                        )
+                        sacrificed = mover_material_after - mover_material_before <= -3
+                        if sacrificed and best_move == move and after_score is not None and after_score > -100 and ep_loss <= 0.02:
+                            label = "BRILLANTE"
+                        elif best_move == move:
+                            label = "MIGLIORE"
+                        elif ep_loss <= 0.01:
+                            label = "OTTIMA"
+                        elif ep_loss <= 0.03:
+                            label = "BUONA"
+                        elif ep_loss <= 0.08:
+                            label = "IMPRECISIONE"
+                        elif ep_loss <= 0.20:
+                            label = "ERRORE"
+                        else:
+                            label = "GRAVE ERRORE"
+                        review = {
+                            "ply": ply, "player": player_id, "uci": move_uci,
+                            "label": label, "expected_points_loss": round(ep_loss, 4),
+                            "before_cp": int(before_score or 0), "after_cp": int(after_score or 0),
+                            "best_uci": best_move.uci() if best_move else "",
+                        }
+                        self.moveReady.emit(game_id, review)
+
                     elif kind == "game":
                         moves = job[2]
                         board = chess.Board()
                         positions = []
+                        _, _, white_player, black_player = game(game_id)
                         for ply, uci in enumerate(moves, 1):
                             if self.stop_event.is_set():
                                 break
                             move = chess.Move.from_uci(uci)
                             if move not in board.legal_moves:
                                 raise ValueError(f"Mossa PGN non valida al ply {ply}: {uci}")
+                            mover_color = board.turn
+                            player_id = white_player if mover_color else black_player
+                            before_info = engine.analyse(board, chess.engine.Limit(time=0.25))
+                            before_score = before_info["score"].pov(mover_color).score(mate_score=10000)
+                            best_move = before_info.get("pv", [None])[0]
                             san = board.san(move)
                             board.push(move)
-                            info = engine.analyse(
-                                board,
-                                chess.engine.Limit(time=0.12),
-                            )
-                            score = info["score"].white().score(mate_score=10000)
+                            after_info = engine.analyse(board, chess.engine.Limit(time=0.25))
+                            after_score = after_info["score"].pov(mover_color).score(mate_score=10000)
+                            before_ep = 1.0 / (1.0 + math.exp(-max(-4000, min(4000, before_score or 0)) / 400.0))
+                            after_ep = 1.0 / (1.0 + math.exp(-max(-4000, min(4000, after_score or 0)) / 400.0))
+                            ep_loss = max(0.0, before_ep-after_ep)
+                            if best_move == move:
+                                label = "MIGLIORE"
+                            elif ep_loss <= 0.01:
+                                label = "OTTIMA"
+                            elif ep_loss <= 0.03:
+                                label = "BUONA"
+                            elif ep_loss <= 0.08:
+                                label = "IMPRECISIONE"
+                            elif ep_loss <= 0.20:
+                                label = "ERRORE"
+                            else:
+                                label = "GRAVE ERRORE"
                             positions.append({
-                                "ply": ply,
-                                "san": san,
-                                "score": int(score or 0),
-                                "fen": board.fen(),
+                                "ply": ply, "san": san, "score": int(after_score or 0),
+                                "fen": board.fen(), "player": player_id, "uci": uci,
+                                "label": label, "expected_points_loss": round(ep_loss, 4),
+                                "before_cp": int(before_score or 0), "after_cp": int(after_score or 0),
+                                "best_uci": best_move.uci() if best_move else "",
                             })
                         if not self.stop_event.is_set():
                             self.gameReady.emit(game_id, positions)
@@ -731,6 +818,7 @@ class MainWindow(QMainWindow):
             return None
         service = StockfishService(path, self)
         service.positionReady.connect(self.on_engine_position_ready)
+        service.moveReady.connect(self.on_move_review_ready)
         service.gameReady.connect(self.on_game_analysis_ready)
         service.analysisFailed.connect(self.on_game_analysis_failed)
         self.engine_service = service
