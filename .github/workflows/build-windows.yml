@@ -41,9 +41,9 @@ jobs:
           $target = "windows_app/stockfish"
           New-Item -ItemType Directory -Force -Path $target | Out-Null
           Copy-Item $engine.FullName (Join-Path $target "stockfish.exe") -Force
-          $nets = Get-ChildItem $extract -Recurse -File -Filter "*.nnue"
-          if (-not $nets) { throw "Rete NNUE Stockfish non trovata nell'archivio" }
-          foreach ($net in $nets) { Copy-Item $net.FullName $target -Force }
+          # Stockfish 19 Windows universal ships as a self-contained executable; no separate NNUE file is required.
+          & (Join-Path $target "stockfish.exe") "quit"
+          if ($LASTEXITCODE -ne 0) { throw "Stockfish non si avvia sul runner Windows" }
           Invoke-WebRequest -Uri "https://raw.githubusercontent.com/official-stockfish/Stockfish/sf_19/Copying.txt" -OutFile (Join-Path $target "COPYING.txt")
           @"
           Stockfish 19 (sf_19), official Windows x86-64 universal release.
