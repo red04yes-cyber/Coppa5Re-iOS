@@ -1120,13 +1120,21 @@ class MainWindow(QMainWindow):
         h=QLabel("PROGRAMMA E RISULTATI"); h.setObjectName("SectionTitle"); l.addWidget(h)
         d=QLabel("Calendario round-robin già caricato. Ogni risultato aggiorna immediatamente classifica e simulazioni quote.")
         d.setObjectName("Muted"); l.addWidget(d)
+        filters=QHBoxLayout()
+        self.filter_round=QComboBox(); self.filter_round.addItems(["Tutti i turni"]+[f"Round {r}" for r in range(1,6)])
+        self.filter_player=QComboBox(); self.filter_player.addItem("Tutti i giocatori",None)
+        for pid in ORDER: self.filter_player.addItem(name(pid),pid)
+        self.filter_status=QComboBox(); self.filter_status.addItems(["Tutti gli stati","In corso","Concluse"])
+        for control in (self.filter_round,self.filter_player,self.filter_status):
+            control.currentIndexChanged.connect(self.apply_calendar_filters); filters.addWidget(control)
+        l.addLayout(filters)
         scroll=QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.Shape.NoFrame)
-        content=QWidget(); v=QVBoxLayout(content); self.calendar_combos={}; self.calendar_pairings={}; self.calendar_bye_labels={}
+        content=QWidget(); v=QVBoxLayout(content); self.calendar_combos={}; self.calendar_pairings={}; self.calendar_bye_labels={}; self.calendar_cards={}
         for gid,r,w,b in GAMES:
             card=QFrame(); card.setObjectName("Card"); row=QHBoxLayout(card)
             tag=QLabel(f"ROUND {r}"); tag.setObjectName("Eyebrow"); tag.setFixedWidth(85)
             matchup=QLabel(f"{name(w)}  <span style='color:{GOLD}'>vs</span>  {name(b)}"); matchup.setObjectName("MatchTitle")
-            self.calendar_pairings[gid]=matchup
+            self.calendar_pairings[gid]=matchup; self.calendar_cards[gid]=card
             combo=QComboBox()
             for val,label in RESULT_OPTIONS: combo.addItem(label,val)
             combo.currentIndexChanged.connect(lambda i,gid=gid,cb=combo:self.set_result(gid,cb.itemData(i)))
@@ -1135,6 +1143,22 @@ class MainWindow(QMainWindow):
             bye=QLabel(f"ROUND {r}  ·  Riposa: {name(p)}  ·  BYE"); bye.setObjectName("Muted")
             self.calendar_bye_labels[r]=bye; v.addWidget(bye)
         v.addStretch(); scroll.setWidget(content); l.addWidget(scroll,1); return page
+    def apply_calendar_filters(self):
+        if not hasattr(self,"calendar_cards"): return
+        rnd_text=self.filter_round.currentText()
+        selected_player=self.filter_player.currentData()
+        state=self.filter_status.currentText()
+        for gid,card in self.calendar_cards.items():
+            _,rnd,white,black=game(gid)
+            matches_round=(rnd_text=="Tutti i turni" or rnd_text==f"Round {rnd}")
+            matches_player=(selected_player is None or selected_player in (white,black))
+            completed=bool(self.results.get(gid))
+            matches_state=(state=="Tutti gli stati" or (state=="Concluse" and completed) or (state=="In corso" and not completed))
+            card.setVisible(matches_round and matches_player and matches_state)
+        if hasattr(self,"calendar_bye_labels"):
+            for rnd,label in self.calendar_bye_labels.items():
+                label.setVisible(rnd_text=="Tutti i turni" or rnd_text==f"Round {rnd}")
+
     def build_standings(self):
         page=QWidget(); l=QVBoxLayout(page)
         h=QLabel("CLASSIFICA GENERALE"); h.setObjectName("SectionTitle"); l.addWidget(h)
