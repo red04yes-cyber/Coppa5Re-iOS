@@ -367,6 +367,7 @@ class GameAnalysisWorker(QThread):
             except Exception: pass
             board=chess.Board(); positions=[]
             for ply,uci in enumerate(self.moves,1):
+                if self.isInterruptionRequested(): break
                 move=chess.Move.from_uci(uci)
                 san=board.san(move); board.push(move)
                 info=engine.analyse(board,chess.engine.Limit(time=0.12))
@@ -656,10 +657,14 @@ class MainWindow(QMainWindow):
     def undo(self,gid):
         b=self.get_board(gid)
         if b.move_stack and not self.results.get(gid):
-            b.pop(); self.moves[gid]=[x.uci() for x in b.move_stack]; self.save(); self.refresh_all()
+            removed=b.pop(); self.moves[gid]=[x.uci() for x in b.move_stack]
+            self.log_operation("Mossa annullata",gid,removed.uci(),"")
+            self.save(); self.refresh_all()
     def reset_board(self,gid):
         if QMessageBox.question(self,"Reset","Cancellare tutte le mosse di questa partita?")==QMessageBox.StandardButton.Yes:
-            self.boards[gid]=chess.Board(); self.moves[gid]=[]; self.clocks.pop(gid,None); self.save(); self.refresh_all()
+            self.boards[gid]=chess.Board(); self.moves[gid]=[]; self.clocks.pop(gid,None)
+            self.log_operation("Scacchiera resettata",gid,"","posizione iniziale")
+            self.save(); self.refresh_all()
     def set_result(self,gid,value,confirm=True,detail="inserimento manuale"):
         old=self.results.get(gid)
         if old==value: return
@@ -697,6 +702,7 @@ class MainWindow(QMainWindow):
     def start_clock(self,gid):
         if self.results.get(gid): return
         self.clock_data(gid)["started"]=True
+        self.log_operation("Orologio avviato",gid,"fermo",self.time_control)
         self.save(); self.refresh_all()
         self.statusBar().showMessage("Cronometro avviato.",2000)
     def set_time_control(self,value):
@@ -1491,6 +1497,9 @@ class MainWindow(QMainWindow):
             worker=getattr(card,"engine_worker",None)
             if worker is not None and worker.isRunning():
                 worker.wait(3000)
+        analysis=getattr(self,"analysis_worker",None)
+        if analysis is not None and analysis.isRunning():
+            analysis.requestInterruption(); analysis.wait(3000)
         self.save()
         if self.broadcast: self.broadcast.close()
         event.accept()
