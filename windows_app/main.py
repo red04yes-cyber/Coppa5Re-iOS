@@ -590,7 +590,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__(); self.setWindowTitle("Coppa dei 5 Re · Control Room")
         self.resize(1500,950); self.setMinimumSize(980,680)
-        self.results={}; self.penalties=[]; self.moves={}; self.boards={}; self.broadcast=None; self.engine_path=None
+        self.results={}; self.penalties=[]; self.moves={}; self.boards={}; self.broadcast=None; self.engine_path=None; self.engine_enabled=True
         self._odds_cache_key=None; self._odds_cache=None
         self.time_control="15+3"; self.clocks={}; self.audit_log=[]; self.match_notes={}; self.referee=""
         self.tie_break="Nessuno"; self.playoff_results={}; self.eval_history={}; self.clock_ticks=0; self.board_theme=0
