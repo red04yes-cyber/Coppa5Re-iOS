@@ -531,6 +531,7 @@ class BoardCard(QFrame):
         visible=chess.Board()
         for move in board.move_stack[:self.history_index]: visible.push(move)
         self.match.setText(f"{name(w)}  <span style='color:{GOLD}'>vs</span>  {name(b)}")
+        self.engine_btn.setText("STOCKFISH · ON" if self.app.engine_enabled else "STOCKFISH · OFF")
         clock_state=self.app.clock_data(gid)
         self.state_label.setText("CONCLUSA" if self.app.results.get(gid) else ("IN CORSO" if clock_state.get("started") or board.move_stack else "LIVE"))
         self.turn.setText("PARTITA CONCLUSA · SCACCHIERA BLOCCATA" if self.app.results.get(gid) else
