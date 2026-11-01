@@ -84,16 +84,8 @@ jobs:
         run: |
           if (!(Test-Path "dist/Coppa5Re.exe")) { throw "Coppa5Re.exe non trovato" }
           Get-Item "dist/Coppa5Re.exe" | Format-List Name,Length
-      - name: Smoke test compiled one-file EXE resources
-        shell: pwsh
-        env:
-          QT_QPA_PLATFORM: offscreen
-        run: |
-          & "dist/Coppa5Re.exe" --bundle-smoke
-          $code = $LASTEXITCODE
-          $report = Join-Path $env:TEMP "c5r-bundle-smoke.txt"
-          if (Test-Path $report) { Get-Content $report }
-          if ($code -ne 0) { throw "Smoke test EXE monofile fallito (exit code $code)" }
+      - name: Verify resources embedded in the one-file EXE
+        run: python windows_app/bundle_archive_smoke.py
       - name: Add C5R logo and Stockfish notices to distribution
         shell: pwsh
         run: |
