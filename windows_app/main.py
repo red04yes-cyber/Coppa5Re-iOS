@@ -482,10 +482,16 @@ class SpectatorCard(QFrame):
     def __init__(self,label):
         super().__init__(); self.setObjectName("Card")
         lay=QVBoxLayout(self); self.tag=QLabel(label); self.tag.setObjectName("Eyebrow")
-        self.match=QLabel(); self.match.setObjectName("MatchTitle"); self.board=BoardWidget(False)
-        lay.addWidget(self.tag); lay.addWidget(self.match); lay.addWidget(self.board,1)
+        self.match=QLabel(); self.match.setObjectName("MatchTitle")
+        self.status=QLabel(); self.status.setObjectName("Muted")
+        self.clock=QLabel(); self.clock.setObjectName("Muted")
+        self.board=BoardWidget(False)
+        lay.addWidget(self.tag); lay.addWidget(self.match); lay.addWidget(self.status); lay.addWidget(self.clock); lay.addWidget(self.board,1)
     def update_game(self,app,gid):
         _,r,w,b=game(gid); self.match.setText(f"{name(w)}  <span style='color:{GOLD}'>vs</span>  {name(b)}")
+        result=app.results.get(gid); clock=app.clock_data(gid)
+        self.status.setText("CONCLUSA" if result else ("IN CORSO" if clock.get("started") else "LIVE"))
+        self.clock.setText(app.clock_text(gid))
         self.board.set_position(app.get_board(gid),True)
 
 class BroadcastWindow(QWidget):
@@ -500,17 +506,7 @@ class BroadcastWindow(QWidget):
         for c in self.cards: row.addWidget(c,1)
         root.addLayout(row,1); self.footer=QLabel(); self.footer.setStyleSheet(f"color:{GOLD};font-size:15px;font-weight:800;padding:10px;")
         root.addWidget(self.footer)
-        controls=QHBoxLayout()
-        back=QPushButton("TORNA ALLA REGIA")
-        back.setStyleSheet(f"background:{GOLD};color:#10151B;font-weight:900;padding:10px 18px;")
-        back.clicked.connect(self.return_to_control)
-        controls.addStretch(); controls.addWidget(back); root.addLayout(controls)
         self.refresh_from_app()
-    def return_to_control(self):
-        self.hide()
-        self.app.showNormal()
-        self.app.raise_()
-        self.app.activateWindow()
     def refresh_from_app(self):
         for c,live in zip(self.cards,self.app.live_cards): c.update_game(self.app,live.game_id)
         self.footer.setText("CLASSIFICA     "+"   •   ".join(f"{name(x['id'])} {x['points']:.1f} pt" for x in self.app.standings()))
