@@ -15,6 +15,9 @@ jobs:
   build-windows:
     runs-on: windows-latest
     timeout-minutes: 45
+    env:
+      C5R_SIGNING_CERT_BASE64: ${{ secrets.C5R_SIGNING_CERT_BASE64 }}
+      C5R_SIGNING_CERT_PASSWORD: ${{ secrets.C5R_SIGNING_CERT_PASSWORD }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,28 +43,15 @@ jobs:
           pyinstaller --noconfirm --clean --onefile --windowed --name Coppa5Re --distpath dist --workpath build/windows --specpath build/windows windows_app/main.py
       - name: Sign executable (when a trusted certificate is configured)
         if: ${{ env.C5R_SIGNING_CERT_BASE64 != '' && env.C5R_SIGNING_CERT_PASSWORD != '' }}
-        env:
-          C5R_SIGNING_CERT_BASE64: ${{ secrets.C5R_SIGNING_CERT_BASE64 }}
-          C5R_SIGNING_CERT_PASSWORD: ${{ secrets.C5R_SIGNING_CERT_PASSWORD }}
         shell: pwsh
         run: |
           $pfxPath = Join-Path $env:RUNNER_TEMP "c5r-signing.pfx"
           try {
             $bytes = [Convert]::FromBase64String($env:C5R_SIGNING_CERT_BASE64)
             [IO.File]::WriteAllBytes($pfxPath, $bytes)
-            $sdkBin = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\\10\\bin"
+            $sdkBin = Join-Path "${env:ProgramFiles(x86)}" "Windows Kits\10\bin"
             $signTool = Get-ChildItem $sdkBin -Filter signtool.exe -Recurse -ErrorAction Stop |
-              Where-Object { $_.FullName -match '\\\\x64\\\\signtool.exe        run: |
-          if (!(Test-Path "dist/Coppa5Re.exe")) { throw "Coppa5Re.exe non trovato" }
-          Get-Item "dist/Coppa5Re.exe" | Format-List Name,Length
-      - name: Upload Windows EXE
-        uses: actions/upload-artifact@v4
-        with:
-          name: Coppa5Re-Windows-EXE
-          path: dist/Coppa5Re.exe
-          if-no-files-found: error
-          retention-days: 30
- } |
+              Where-Object { $_.FullName -match '\\x64\\signtool.exe$' } |
               Sort-Object FullName -Descending | Select-Object -First 1
             if (-not $signTool) { throw "Windows SDK signtool.exe non trovato" }
             & $signTool.FullName sign /f $pfxPath /p $env:C5R_SIGNING_CERT_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 "dist/Coppa5Re.exe"
