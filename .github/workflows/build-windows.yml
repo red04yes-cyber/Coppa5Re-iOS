@@ -28,6 +28,29 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r windows_app/requirements.txt
+      - name: Download and prepare bundled Stockfish 19
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $archive = Join-Path $env:RUNNER_TEMP "stockfish-windows.zip"
+          $extract = Join-Path $env:RUNNER_TEMP "stockfish-extract"
+          Invoke-WebRequest -Uri "https://github.com/official-stockfish/Stockfish/releases/download/sf_19/stockfish-windows-x86-64-universal.zip" -OutFile $archive
+          Expand-Archive -LiteralPath $archive -DestinationPath $extract -Force
+          $engine = Get-ChildItem $extract -Recurse -File | Where-Object { $_.Extension -eq ".exe" -and $_.Name -match "stockfish" } | Select-Object -First 1
+          if (-not $engine) { throw "Eseguibile Stockfish Windows non trovato nell'archivio ufficiale" }
+          $target = "windows_app/stockfish"
+          New-Item -ItemType Directory -Force -Path $target | Out-Null
+          Copy-Item $engine.FullName (Join-Path $target "stockfish.exe") -Force
+          $nets = Get-ChildItem $extract -Recurse -File -Filter "*.nnue"
+          if (-not $nets) { throw "Rete NNUE Stockfish non trovata nell'archivio" }
+          foreach ($net in $nets) { Copy-Item $net.FullName $target -Force }
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/official-stockfish/Stockfish/sf_19/Copying.txt" -OutFile (Join-Path $target "COPYING.txt")
+          @"
+          Stockfish 19 (sf_19), official Windows x86-64 universal release.
+          Source code and exact release: https://github.com/official-stockfish/Stockfish/tree/sf_19
+          License: GNU General Public License v3. The full license is in COPYING.txt.
+          "@ | Set-Content (Join-Path $target "SOURCE.txt") -Encoding UTF8
+          Get-ChildItem $target | Format-Table Name,Length
       - name: Check Python syntax
         run: python -m compileall -q windows_app/main.py
       - name: Smoke test Qt, chess and tournament draw
@@ -42,7 +65,7 @@ jobs:
           python -c "from PySide6.QtWidgets import QApplication; from windows_app.main import MainWindow; app=QApplication([]); w=MainWindow(); base=w.odds(n=1200); assert abs(sum(v[0] for v in base.values())-1)<0.01; assert abs(sum(v[1] for v in base.values())-4)<0.01; w.results['R1-M1']='1-0'; assert w.odds(n=1200)!=base; w.open_broadcast(); assert not w.broadcast.isFullScreen(); assert all(c.board.interactive for c in w.live_cards); assert all(not c.board.interactive for c in w.broadcast.cards); w.broadcast.close(); w.close(); print('odds and streaming OK')"
       - name: Build standalone EXE
         run: |
-          pyinstaller --noconfirm --clean --onefile --windowed --name Coppa5Re --distpath dist --workpath build/windows --specpath build/windows windows_app/main.py
+          pyinstaller --noconfirm --clean --onefile --windowed --name Coppa5Re --add-data "windows_app/stockfish;stockfish" --distpath dist --workpath build/windows --specpath build/windows windows_app/main.py
       - name: Verify executable
         run: |
           if (!(Test-Path "dist/Coppa5Re.exe")) { throw "Coppa5Re.exe non trovato" }
