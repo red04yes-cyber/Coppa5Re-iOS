@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="520" height="560" viewBox="0 0 520 560">
+<defs>
+  <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#F6D88B"/><stop offset=".48" stop-color="#D8A94F"/><stop offset="1" stop-color="#9B6C29"/></linearGradient>
+  <linearGradient id="dark" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#1B2735"/><stop offset="1" stop-color="#080D13"/></linearGradient>
+  <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%"><feGaussianBlur stdDeviation="5"/></filter>
+</defs>
+<path d="M260 12 L478 94 L457 310 Q420 433 260 505 Q100 433 63 310 L42 94 Z" fill="#000" opacity=".5" filter="url(#shadow)"/>
+<path d="M260 8 L478 90 L457 306 Q420 429 260 501 Q100 429 63 306 L42 90 Z" fill="url(#dark)" stroke="url(#gold)" stroke-width="8"/>
+<path d="M260 31 L454 103 L437 296 Q402 407 260 473 Q118 407 83 296 L66 103 Z" fill="none" stroke="#705022" stroke-width="2"/>
+<g fill="url(#gold)" stroke="#F4D68C" stroke-width="2" stroke-linejoin="round">
+  <path d="M166 178 L145 117 L188 146 L214 81 L260 127 L306 81 L332 146 L375 117 L354 178 L331 205 L189 205 Z"/>
+  <circle cx="145" cy="112" r="13"/><circle cx="214" cy="76" r="13"/><circle cx="260" cy="121" r="15"/><circle cx="306" cy="76" r="13"/><circle cx="375" cy="112" r="13"/>
+  <path d="M193 208 L327 208 L316 239 L302 253 L302 298 L218 298 L218 253 L204 239 Z"/>
+  <path d="M188 298 Q260 324 332 298 L345 324 Q260 359 175 324 Z"/>
+  <path d="M217 357 L303 357 L317 407 L203 407 Z"/>
+  <path d="M182 407 Q260 429 338 407 L360 437 Q260 474 160 437 Z"/>
+</g>
+<path d="M75 302 L445 302 L426 363 L94 363 Z" fill="#0C121A" stroke="url(#gold)" stroke-width="4"/>
+<text x="260" y="349" text-anchor="middle" font-family="Georgia,serif" font-size="62" font-weight="bold" letter-spacing="5" fill="url(#gold)">C5R</text>
+<path d="M55 384 L465 384 L442 431 L78 431 Z" fill="#101823" stroke="url(#gold)" stroke-width="4"/>
+<text x="260" y="415" text-anchor="middle" font-family="Georgia,serif" font-size="22" font-weight="bold" letter-spacing="2" fill="#E6C274">COPPA DEI 5 RE</text>
+<path d="M160 453 Q260 480 360 453" fill="none" stroke="url(#gold)" stroke-width="3"/>
+</svg>
