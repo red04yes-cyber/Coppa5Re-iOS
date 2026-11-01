@@ -744,9 +744,11 @@ class MainWindow(QMainWindow):
         self.log_operation(kind,gid,"",text)
         self.save(); self.statusBar().showMessage("Annotazione arbitrale salvata.",2500)
     def prompt_match_note(self,gid):
+        kind,ok=QInputDialog.getItem(self,"Tipo annotazione","Classifica l'annotazione:",["Nota arbitrale","Incidente"],0,False)
+        if not ok: return
         text,ok=QInputDialog.getMultiLineText(self,"Nota / incidente",
             f"Partita {gid} · arbitro: {self.referee or 'non indicato'}","")
-        if ok: self.add_match_note(gid,text,"Incidente" if "incidente" in text.lower() else "Nota")
+        if ok: self.add_match_note(gid,text,kind)
     def raw_stats(self):
         pts={p:0.0 for p in PLAYERS}; played={p:0 for p in PLAYERS}
         wins={p:0 for p in PLAYERS}; draws={p:0 for p in PLAYERS}; losses={p:0 for p in PLAYERS}
