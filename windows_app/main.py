@@ -343,6 +343,44 @@ class EngineAnalysisWorker(QThread):
                     pass
 
 
+class GameAnalysisWorker(QThread):
+    analysisReady = Signal(str, list)
+    analysisFailed = Signal(str, str)
+
+    def __init__(self,engine_path,game_id,moves,parent=None):
+        super().__init__(parent)
+        self.engine_path=engine_path; self.game_id=game_id; self.moves=list(moves)
+
+    def run(self):
+        engine=None
+        try:
+            import chess.engine
+            popen_args={}
+            if os.name=="nt":
+                startupinfo=subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow=subprocess.SW_HIDE
+                popen_args={"creationflags":subprocess.CREATE_NO_WINDOW,"startupinfo":startupinfo}
+            engine=chess.engine.SimpleEngine.popen_uci(self.engine_path,timeout=10,
+                cwd=str(Path(self.engine_path).parent),**popen_args)
+            try: engine.configure({"Threads":2,"Hash":96})
+            except Exception: pass
+            board=chess.Board(); positions=[]
+            for ply,uci in enumerate(self.moves,1):
+                move=chess.Move.from_uci(uci)
+                san=board.san(move); board.push(move)
+                info=engine.analyse(board,chess.engine.Limit(time=0.12))
+                score=info["score"].white().score(mate_score=10000)
+                positions.append({"ply":ply,"san":san,"score":int(score or 0),"fen":board.fen()})
+            self.analysisReady.emit(self.game_id,positions)
+        except Exception as exc:
+            self.analysisFailed.emit(self.game_id,str(exc))
+        finally:
+            if engine is not None:
+                try: engine.quit()
+                except Exception: pass
+
+
 class BoardCard(QFrame):
     def __init__(self,app,slot,initial):
         super().__init__(); self.app=app; self.slot=slot; self.game_id=initial
