@@ -1208,14 +1208,49 @@ class MainWindow(QMainWindow):
     def build_playoffs(self):
         page=QWidget(); l=QVBoxLayout(page)
         h=QLabel("TABELLONE PLAYOFF"); h.setObjectName("SectionTitle"); l.addWidget(h)
-        d=QLabel("Tabellone provvisorio: semifinali 1ª–4ª e 2ª–3ª, poi finale e finale 3°/4° posto. Ex aequo da risolvere con spareggio.")
+        d=QLabel("Semifinali 1ª–4ª e 2ª–3ª, finale e finale 3°/4° posto. I risultati sono indipendenti dal girone e si possono correggere dal tabellone.")
         d.setObjectName("Muted"); d.setWordWrap(True); l.addWidget(d)
         grid=QGridLayout(); self.sf1=self.bracket_card("SEMIFINALE 1","1ª classificata","4ª classificata")
         self.sf2=self.bracket_card("SEMIFINALE 2","2ª classificata","3ª classificata")
         self.final=self.bracket_card("FINALE","Vincente SF1","Vincente SF2")
         self.third=self.bracket_card("3° / 4° POSTO","Perdente SF1","Perdente SF2")
+        self.playoff_cards={"sf1":self.sf1,"sf2":self.sf2,"final":self.final,"third":self.third}
+        self.playoff_winners={}
+        for key,card in self.playoff_cards.items():
+            card.result_box=QComboBox()
+            for value,label in RESULT_OPTIONS: card.result_box.addItem(label,value)
+            card.result_box.currentIndexChanged.connect(lambda i,k=key,c=card:self.set_playoff_result(k,c.result_box.itemData(i)))
+            card.winner_box=QComboBox(); card.winner_box.addItem("Vincitore da definire",None)
+            card.winner_box.currentIndexChanged.connect(lambda i,k=key,c=card:self.set_playoff_winner(k,c.winner_box.itemData(i)))
+            card.layout().addWidget(card.result_box); card.layout().addWidget(card.winner_box)
         grid.addWidget(self.sf1,0,0); grid.addWidget(self.sf2,0,2); grid.addWidget(self.final,1,1); grid.addWidget(self.third,2,1)
         l.addLayout(grid); l.addStretch(); return page
+    def set_playoff_result(self,key,value):
+        old=self.playoff_results.get(key)
+        if old==value: return
+        if old is not None:
+            answer=QMessageBox.question(self,"Modifica risultato playoff",
+                f"Sostituire {old} con {value or 'In corso'}?",
+                QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,QMessageBox.StandardButton.No)
+            if answer!=QMessageBox.StandardButton.Yes:
+                self.refresh_playoffs(); return
+        if value is None: self.playoff_results.pop(key,None)
+        else: self.playoff_results[key]=value
+        self.log_operation("Risultato playoff",key,old or "In corso",value or "In corso")
+        self.save(); self.refresh_playoffs()
+    def set_playoff_winner(self,key,player):
+        if player is None:
+            self.playoff_winners.pop(key,None)
+        else:
+            self.playoff_winners[key]=player
+        self.save(); self.refresh_playoffs()
+    def playoff_pair_winner(self,key):
+        pair=getattr(self,"playoff_pairs",{}).get(key,(None,None))
+        result=self.playoff_results.get(key)
+        if result=="1-0": return pair[0]
+        if result=="0-1": return pair[1]
+        if result=="1/2-1/2": return self.playoff_winners.get(key)
+        return None
     def add_penalty(self):
         p=self.pen_player.currentData(); amount=float(self.pen_amount.value()); reason=self.pen_reason.text().strip() or "Penalità manuale"
         entry={"player":p,"points":-amount,"reason":reason,"time":datetime.now().strftime("%d/%m/%Y %H:%M")}
@@ -1290,11 +1325,45 @@ class MainWindow(QMainWindow):
         for x in self.penalties:
             self.pen_list.addItem(f"{name(x.get('player',''))}   {x.get('points',0):+.1f} pt   ·   {x.get('reason','')}   ·   {x.get('time','')}")
     def refresh_playoffs(self):
-        rows=self.standings(); names=[name(x["id"]) for x in rows]
-        self.sf1.labels[0].setText("SEMIFINALE 1 · "+("CLASSIFICA FINALE" if len(self.results)==10 else "PROIEZIONE"))
-        self.sf1.labels[1].setText("1°  "+names[0]); self.sf1.labels[2].setText("4°  "+names[3])
-        self.sf2.labels[0].setText("SEMIFINALE 2 · "+("CLASSIFICA FINALE" if len(self.results)==10 else "PROIEZIONE"))
-        self.sf2.labels[1].setText("2°  "+names[1]); self.sf2.labels[2].setText("3°  "+names[2])
+        if not hasattr(self,"playoff_cards"): return
+        rows=self.standings(); ids=[x["id"] for x in rows]
+        self.playoff_pairs={
+            "sf1":(ids[0],ids[3]),"sf2":(ids[1],ids[2]),
+            "final":(self.playoff_pair_winner("sf1"),self.playoff_pair_winner("sf2")),
+            "third":(self.playoff_pairs.get("sf1",(None,None))[1] if self.playoff_pair_winner("sf1") else None,
+                     self.playoff_pairs.get("sf2",(None,None))[1] if self.playoff_pair_winner("sf2") else None)}
+        # Rebuild losers directly from the semifinal pair and winner.
+        for key,semi in (("final","sf1"),("third","sf1")):
+            pair=self.playoff_pairs.get(semi,(None,None)); winner=self.playoff_pair_winner(semi)
+            if key=="final":
+                self.playoff_pairs["final"]=(winner,self.playoff_pair_winner("sf2"))
+            else:
+                loser=next((p for p in pair if p and p!=winner),None)
+                pair2=self.playoff_pairs.get("sf2",(None,None)); winner2=self.playoff_pair_winner("sf2")
+                loser2=next((p for p in pair2 if p and p!=winner2),None)
+                self.playoff_pairs["third"]=(loser,loser2)
+        labels={
+            "sf1":("SEMIFINALE 1",self.playoff_pairs["sf1"]),
+            "sf2":("SEMIFINALE 2",self.playoff_pairs["sf2"]),
+            "final":("FINALE",self.playoff_pairs["final"]),
+            "third":("3° / 4° POSTO",self.playoff_pairs["third"])}
+        for key,card in self.playoff_cards.items():
+            title,pair=labels[key]
+            card.labels[0].setText(title)
+            card.labels[1].setText(name(pair[0]) if pair[0] else "Da definire")
+            card.labels[2].setText(name(pair[1]) if pair[1] else "Da definire")
+            result=self.playoff_results.get(key)
+            card.result_box.blockSignals(True)
+            card.result_box.setCurrentIndex(max(0,card.result_box.findData(result)))
+            card.result_box.blockSignals(False)
+            card.winner_box.blockSignals(True); card.winner_box.clear()
+            card.winner_box.addItem("Vincitore da definire",None)
+            for p in pair:
+                if p: card.winner_box.addItem(name(p),p)
+            chosen=self.playoff_winners.get(key)
+            card.winner_box.setCurrentIndex(max(0,card.winner_box.findData(chosen)))
+            card.winner_box.setEnabled(result=="1/2-1/2")
+            card.winner_box.blockSignals(False)
     def open_broadcast(self):
         if self.broadcast is None: self.broadcast=BroadcastWindow(self)
         self.broadcast.refresh_from_app()
