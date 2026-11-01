@@ -622,7 +622,7 @@ class MainWindow(QMainWindow):
             b.pop(); self.moves[gid]=[x.uci() for x in b.move_stack]; self.save(); self.refresh_all()
     def reset_board(self,gid):
         if QMessageBox.question(self,"Reset","Cancellare tutte le mosse di questa partita?")==QMessageBox.StandardButton.Yes:
-            self.boards[gid]=chess.Board(); self.moves[gid]=[]; self.save(); self.refresh_all()
+            self.boards[gid]=chess.Board(); self.moves[gid]=[]; self.clocks.pop(gid,None); self.save(); self.refresh_all()
     def set_result(self,gid,value,confirm=True,detail="inserimento manuale"):
         old=self.results.get(gid)
         if old==value: return
@@ -664,7 +664,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Cronometro avviato.",2000)
     def set_time_control(self,value):
         if value==self.time_control: return
-        if self.results or any(self.moves.values()):
+        if self.results or any(self.moves.values()) or any(c.get("started") for c in self.clocks.values()):
             QMessageBox.information(self,"Tempo di gioco","Il controllo del tempo si può cambiare solo prima di iniziare il girone.")
             self.live_time.blockSignals(True)
             self.live_time.setCurrentText(self.time_control)
@@ -729,6 +729,7 @@ class MainWindow(QMainWindow):
     def tie_break_value(self,p,group=None):
         raw,played,wins,draws,losses=self.raw_stats()
         selected=set(group or PLAYERS.keys())
+        if self.tie_break=="Numero vittorie": return wins[p]
         value=0.0
         for gid,r,white,black in GAMES:
             result=self.results.get(gid)
@@ -739,7 +740,7 @@ class MainWindow(QMainWindow):
             if self.tie_break=="Scontro diretto": value+=score
             elif self.tie_break=="Sonneborn-Berger": value+=raw[opponent]*score
             elif self.tie_break=="Buchholz": value+=raw[opponent]
-            elif self.tie_break=="Numero vittorie": value+=wins[p]
+            
         return value
     def standings(self):
         pts,played,wins,draws,losses=self.raw_stats(); pen=self.penalty_points()
@@ -1319,6 +1320,7 @@ class MainWindow(QMainWindow):
         self.refresh_draw_page()
         self.refresh_standings(); self.refresh_odds(); self.refresh_penalties(); self.refresh_playoffs()
         self.refresh_dashboard(); self.refresh_archive(); self.refresh_h2h(); self.refresh_audit()
+        self.apply_calendar_filters()
         if self.broadcast and self.broadcast.isVisible(): self.broadcast.refresh_from_app()
     def refresh_standings(self):
         rows=self.standings(); self.st_table.setRowCount(5); previous=None; rank=0
@@ -1426,6 +1428,10 @@ QComboBox QAbstractItemView{{background:{PANEL};color:{TEXT};selection-backgroun
 QTableWidget{{background:{PANEL};alternate-background-color:#141E29;border:1px solid {LINE};border-radius:10px;gridline-color:{LINE};}}
 QTableWidget::item{{padding:12px 8px;border-bottom:1px solid {LINE};}}
 QHeaderView::section{{background:#1A2633;color:{GOLD};padding:11px 8px;border:none;font-size:10px;font-weight:900;}}
+QListWidget#Sidebar{{background:#0C131D;border:1px solid {LINE};border-radius:12px;padding:8px;font-weight:800;}}
+QListWidget#Sidebar::item{{color:{MUTED};padding:13px 10px;border-radius:8px;margin:3px 0;}}
+QListWidget#Sidebar::item:selected{{background:#1B2633;color:{GOLD};border-left:3px solid {GOLD};}}
+QListWidget#Sidebar::item:hover{{background:#151F2B;color:{TEXT};}}
 QListWidget{{background:{PANEL};border:1px solid {LINE};border-radius:10px;padding:8px;}}
 QProgressBar{{background:#0D141D;color:{TEXT};border:1px solid {LINE};border-radius:6px;text-align:center;font-size:10px;font-weight:800;}}
 QProgressBar::chunk{{background:#B68D48;border-radius:5px;}}
