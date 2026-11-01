@@ -20,7 +20,7 @@ Applicazione desktop Windows nativa (PySide6 / Qt), offline e con dati salvati l
 - Scorciatoie da tastiera e salvataggio automatico.
 
 ## Stockfish integrato
-La build Windows scarica il pacchetto ufficiale **Stockfish 19 x86-64 universal** durante la compilazione e incorpora l'eseguibile nel programma, insieme alla licenza GPL e al riferimento al codice sorgente. L'analisi gira in background e il processo viene avviato senza finestra console visibile. Non occorre installare né selezionare manualmente `stockfish.exe`.
+La build Windows scarica il pacchetto ufficiale **Stockfish 19 x86-64 universal** durante la compilazione e incorpora l'eseguibile nel programma, insieme alla licenza GPL e al riferimento al codice sorgente. L'analisi gira in background e il processo viene avviato senza finestra console visibile. Il pulsante STOCKFISH ON/OFF nella regia permette di disattivare o riattivare la valutazione. Non occorre installare né selezionare manualmente `stockfish.exe`.
 
 La evaluation bar mostra una valutazione dal punto di vista del Bianco. La funzione Analizza partita valuta ogni posizione registrata e salva l'analisi nell'archivio locale.
 
