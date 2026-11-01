@@ -1,0 +1,51 @@
+name: Build Coppa dei 5 Re for Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - "windows_app/**"
+      - ".github/workflows/build-windows.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: windows_app/requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r windows_app/requirements.txt
+      - name: Check Python syntax
+        run: python -m compileall -q windows_app/main.py
+      - name: Smoke test Qt and chess engine
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python -c "import chess; from PySide6.QtWidgets import QApplication; app=QApplication([]); b=chess.Board(); assert len(list(b.legal_moves)) == 20; print('Qt and chess engine OK')"
+      - name: Build standalone EXE
+        run: |
+          pyinstaller --noconfirm --clean --onefile --windowed --name Coppa5Re --distpath dist --workpath build/windows --specpath build/windows --collect-all chess --collect-all PySide6 windows_app/main.py
+      - name: Verify executable
+        run: |
+          if (!(Test-Path "dist/Coppa5Re.exe")) { throw "Coppa5Re.exe non trovato" }
+          Get-Item "dist/Coppa5Re.exe" | Format-List Name,Length
+      - name: Upload Windows EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: Coppa5Re-Windows-EXE
+          path: dist/Coppa5Re.exe
+          if-no-files-found: error
+          retention-days: 30
