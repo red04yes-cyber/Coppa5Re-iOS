@@ -2,6 +2,7 @@ from __future__ import annotations
 import json, os, random, sys
 from datetime import datetime
 from pathlib import Path
+from itertools import combinations
 import chess
 import chess.pgn
 from PySide6.QtCore import Qt, QSize, Signal
@@ -10,7 +11,8 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QComboBox,
     QDoubleSpinBox, QLineEdit, QVBoxLayout, QHBoxLayout, QGridLayout, QTabWidget,
     QTableWidget, QTableWidgetItem, QHeaderView, QScrollArea, QMessageBox,
-    QListWidget, QInputDialog, QFileDialog, QAbstractItemView, QSizePolicy
+    QListWidget, QInputDialog, QFileDialog, QAbstractItemView, QSizePolicy,
+    QDialog, QDialogButtonBox
 )
 
 APP_NAME = "Coppa dei 5 Re"
@@ -28,6 +30,7 @@ GAMES = [
     ("R5-M1", 5, "jacopo", "simone"), ("R5-M2", 5, "roberto", "matteo"),
 ]
 BYES = {1: "simone", 2: "matteo", 3: "jacopo", 4: "roberto", 5: "lotario"}
+DEFAULT_GAMES = list(GAMES)
 # Prior soggettivi 1-X-2, aggiornati con i punti e usati nelle simulazioni.
 PRIORS = {
     "R1-M1": (.10,.13,.77), "R1-M2": (.12,.18,.70), "R2-M1": (.43,.18,.39),
@@ -35,6 +38,132 @@ PRIORS = {
     "R4-M1": (.72,.15,.13), "R4-M2": (.56,.20,.24), "R5-M1": (.10,.12,.78),
     "R5-M2": (.60,.18,.22),
 }
+
+PAIR_PRIORS = {}
+for _gid, _round, _white, _black in DEFAULT_GAMES:
+    PAIR_PRIORS[frozenset((_white, _black))] = (_white, _black, PRIORS[_gid])
+
+def validate_schedule(schedule):
+    if len(schedule) != 10:
+        raise ValueError("Il girone deve contenere esattamente 10 partite.")
+    expected_ids = {f"R{r}-M{m}" for r in range(1, 6) for m in (1, 2)}
+    if {g[0] for g in schedule} != expected_ids:
+        raise ValueError("Ogni turno deve avere due partite: M1 e M2.")
+    pairings = set()
+    byes = []
+    for rnd in range(1, 6):
+        round_games = [g for g in schedule if g[1] == rnd]
+        if len(round_games) != 2:
+            raise ValueError(f"Il turno {rnd} deve avere due partite.")
+        seen = []
+        for _gid, _r, white, black in round_games:
+            if white not in PLAYERS or black not in PLAYERS or white == black:
+                raise ValueError(f"Accoppiamento non valido al turno {rnd}.")
+            seen.extend([white, black])
+            pair = frozenset((white, black))
+            if pair in pairings:
+                raise ValueError("Ci sono partite ripetute: ogni coppia deve incontrarsi una sola volta.")
+            pairings.add(pair)
+        bye_candidates = [p for p in ORDER if p not in seen]
+        if len(bye_candidates) != 1 or len(set(seen)) != 4:
+            raise ValueError(f"Al turno {rnd} ogni giocatore deve giocare al massimo una volta e uno solo deve riposare.")
+        byes.append(bye_candidates[0])
+    if len(pairings) != 10 or set(pairings) != {frozenset(pair) for pair in combinations(ORDER, 2)}:
+        raise ValueError("Il calendario deve contenere tutti i 10 scontri diretti, una volta ciascuno.")
+    if len(set(byes)) != 5:
+        raise ValueError("Ogni giocatore deve avere esattamente un turno di riposo.")
+    return True
+
+def make_random_schedule():
+    ring = ORDER[:]
+    random.shuffle(ring)
+    ring.append(None)
+    raw_rounds = []
+    for rnd in range(1, 6):
+        pairs = [(ring[i], ring[-1-i]) for i in range(3)]
+        matches = [(a, b) for a, b in pairs if a is not None and b is not None]
+        raw_rounds.append((rnd, matches))
+        ring = [ring[0], ring[-1]] + ring[1:-1]
+
+    best = None
+    best_score = float("inf")
+    for _ in range(3000):
+        candidate = []
+        white_count = {p: 0 for p in ORDER}
+        for rnd, matches in raw_rounds:
+            oriented = []
+            for a, b in matches:
+                white, black = (a, b) if random.random() < 0.5 else (b, a)
+                white_count[white] += 1
+                oriented.append((white, black))
+            candidate.append((rnd, oriented))
+        score = sum((white_count[p] - 2) ** 2 for p in ORDER)
+        if score < best_score:
+            best, best_score = candidate, score
+        if score == 0:
+            break
+
+    schedule = []
+    for rnd, matches in best:
+        for idx, (white, black) in enumerate(matches, 1):
+            schedule.append((f"R{rnd}-M{idx}", rnd, white, black))
+    validate_schedule(schedule)
+    return schedule
+
+class ScheduleEditorDialog(QDialog):
+    def __init__(self, current_schedule, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Modifica il girone")
+        self.setMinimumWidth(880)
+        self.schedule = None
+        self.controls = []
+        root = QVBoxLayout(self)
+        intro = QLabel("Modifica gli accoppiamenti turno per turno. Ogni giocatore deve comparire una sola volta per turno; ogni coppia si incontra una sola volta.")
+        intro.setWordWrap(True)
+        intro.setObjectName("Muted")
+        root.addWidget(intro)
+        grid = QGridLayout()
+        headers = ["TURNO", "TAVOLO 1 · BIANCO", "TAVOLO 1 · NERO",
+                   "TAVOLO 2 · BIANCO", "TAVOLO 2 · NERO"]
+        for col, title in enumerate(headers):
+            label = QLabel(title)
+            label.setObjectName("Eyebrow")
+            grid.addWidget(label, 0, col)
+        for rnd in range(1, 6):
+            row_games = [g for g in current_schedule if g[1] == rnd]
+            row_games.sort(key=lambda g: g[0])
+            values = [rnd, row_games[0][2], row_games[0][3], row_games[1][2], row_games[1][3]]
+            round_label = QLabel(f"ROUND {rnd}")
+            round_label.setObjectName("MatchTitle")
+            grid.addWidget(round_label, rnd, 0)
+            row_controls = []
+            for col, value in enumerate(values[1:], 1):
+                combo = QComboBox()
+                for pid in ORDER:
+                    combo.addItem(name(pid), pid)
+                combo.setCurrentIndex(combo.findData(value))
+                grid.addWidget(combo, rnd, col)
+                row_controls.append(combo)
+            self.controls.append(row_controls)
+        root.addLayout(grid)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.validate_and_accept)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+
+    def validate_and_accept(self):
+        proposed = []
+        for rnd, row in enumerate(self.controls, 1):
+            w1, b1, w2, b2 = [combo.currentData() for combo in row]
+            proposed.extend([(f"R{rnd}-M1", rnd, w1, b1), (f"R{rnd}-M2", rnd, w2, b2)])
+        try:
+            validate_schedule(proposed)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Girone non valido", str(exc))
+            return
+        self.schedule = proposed
+        self.accept()
+
 RESULT_OPTIONS = [(None,"In corso"),("1-0","1–0"),("1/2-1/2","½–½"),("0-1","0–1")]
 GOLD="#D8B36A"; BG="#090D12"; PANEL="#111923"; PANEL2="#151F2B"
 LINE="#283444"; TEXT="#EEF1F5"; MUTED="#8F9BAA"; GREEN="#65C69A"
@@ -122,8 +251,8 @@ class BoardCard(QFrame):
         self.setObjectName("Card"); lay=QVBoxLayout(self); lay.setContentsMargins(15,13,15,13); lay.setSpacing(8)
         top=QHBoxLayout(); tag=QLabel(f"TAVOLO 0{slot}"); tag.setObjectName("Eyebrow"); top.addWidget(tag); top.addStretch()
         self.selector=QComboBox()
-        for gid,r,w,b in GAMES: self.selector.addItem(f"R{r} · {name(w)} – {name(b)}",gid)
-        self.selector.setCurrentIndex(self.selector.findData(initial)); self.selector.currentIndexChanged.connect(self.select_game)
+        self.refresh_selector()
+        self.selector.currentIndexChanged.connect(self.select_game)
         self.selector.setMinimumWidth(220); top.addWidget(self.selector); lay.addLayout(top)
         self.match=QLabel(); self.match.setObjectName("MatchTitle"); lay.addWidget(self.match)
         self.board=BoardWidget(True); self.board.moveRequested.connect(self.move); lay.addWidget(self.board,1)
@@ -139,10 +268,22 @@ class BoardCard(QFrame):
         reset=QPushButton("Reset"); reset.clicked.connect(lambda:self.app.reset_board(self.game_id))
         controls.addWidget(self.undo); controls.addStretch(); controls.addWidget(pgn); controls.addWidget(reset); lay.addLayout(controls)
         self.refresh()
+    def refresh_selector(self):
+        current = self.game_id
+        self.selector.blockSignals(True)
+        self.selector.clear()
+        for gid, rnd, white, black in GAMES:
+            self.selector.addItem(f"R{rnd} · {name(white)} – {name(black)}", gid)
+        self.selector.setCurrentIndex(max(0, self.selector.findData(current)))
+        self.selector.blockSignals(False)
     def select_game(self,i):
-        self.game_id=self.selector.itemData(i); self.refresh()
+        value = self.selector.itemData(i)
+        if value:
+            self.game_id=value
+            self.refresh()
     def move(self,uci): self.app.record_move(self.game_id,uci)
     def refresh(self):
+        self.refresh_selector()
         gid,r,w,b=game(self.game_id); board=self.app.get_board(gid)
         self.match.setText(f"{name(w)}  <span style='color:{GOLD}'>vs</span>  {name(b)}")
         self.turn.setText("PARTITA CONCLUSA · SCACCHIERA BLOCCATA" if self.app.results.get(gid) else
@@ -197,11 +338,21 @@ class MainWindow(QMainWindow):
             try:
                 data=json.loads(path.read_text(encoding="utf-8"))
                 self.results=data.get("results",{}); self.penalties=data.get("penalties",[]); self.moves=data.get("moves",{})
+                saved_schedule=data.get("schedule")
+                if saved_schedule:
+                    parsed=[(g["id"],int(g["round"]),g["white"],g["black"]) for g in saved_schedule]
+                    if validate_schedule(parsed):
+                        GAMES[:] = parsed
+                        BYES.clear()
+                        for rnd in range(1,6):
+                            played=[p for g in GAMES if g[1]==rnd for p in (g[2],g[3])]
+                            BYES[rnd]=next(p for p in ORDER if p not in played)
             except Exception: self.results={}; self.penalties=[]; self.moves={}
     def save(self):
         path=storage_path(); tmp=path.with_suffix(".tmp")
+        stored_schedule=[{"id":gid,"round":rnd,"white":white,"black":black} for gid,rnd,white,black in GAMES]
         tmp.write_text(json.dumps({"results":self.results,"penalties":self.penalties,"moves":self.moves,
-                                  "saved_at":datetime.now().isoformat(timespec="seconds")},ensure_ascii=False,indent=2),encoding="utf-8")
+                                  "schedule":stored_schedule,"saved_at":datetime.now().isoformat(timespec="seconds")},ensure_ascii=False,indent=2),encoding="utf-8")
         tmp.replace(path)
     def get_board(self,gid):
         if gid not in self.boards:
@@ -263,7 +414,9 @@ class MainWindow(QMainWindow):
         for _ in range(n):
             score=current.copy()
             for gid,r,w,b in remaining:
-                pw,pd,pb=PRIORS[gid]
+                base_white, base_black, (pw,pd,pb)=PAIR_PRIORS[frozenset((w,b))]
+                if w != base_white:
+                    pw, pb = pb, pw
                 shift=max(-.12,min(.12,.09*(form[w]-form[b])))
                 pw=max(.025,pw+shift); pb=max(.025,pb-shift); total=pw+pd+pb
                 pw,pd= pw/total,pd/total
@@ -292,8 +445,9 @@ class MainWindow(QMainWindow):
         stream=QPushButton("◉  VISTA STREAMING"); stream.setObjectName("PrimaryButton"); stream.clicked.connect(self.open_broadcast); header.addWidget(stream)
         outer.addLayout(header)
         self.tabs=QTabWidget()
-        self.tabs.addTab(self.build_live(),"LIVE ARENA"); self.tabs.addTab(self.build_calendar(),"CALENDARIO")
-        self.tabs.addTab(self.build_standings(),"CLASSIFICA"); self.tabs.addTab(self.build_odds(),"QUOTE")
+        self.tabs.addTab(self.build_live(),"LIVE ARENA"); self.tabs.addTab(self.build_draw_page(),"ESTRAZIONE")
+        self.tabs.addTab(self.build_calendar(),"CALENDARIO"); self.tabs.addTab(self.build_standings(),"CLASSIFICA")
+        self.tabs.addTab(self.build_odds(),"QUOTE")
         self.tabs.addTab(self.build_penalties(),"PENALITÀ"); self.tabs.addTab(self.build_playoffs(),"PLAYOFF")
         outer.addWidget(self.tabs,1)
         foot=QLabel("COPPA DEI 5 RE  /  DAL 15 NOVEMBRE 2026  /  DATI LOCALI SU QUESTO PC"); foot.setObjectName("Footnote")
@@ -304,23 +458,98 @@ class MainWindow(QMainWindow):
         self.live_cards=[BoardCard(self,1,"R1-M1"),BoardCard(self,2,"R1-M2")]
         for c in self.live_cards: l.addWidget(c,1)
         return page
+    def build_draw_page(self):
+        page=QWidget(); layout=QVBoxLayout(page); layout.setSpacing(12)
+        title=QLabel("ESTRAZIONE DEL GIRONE"); title.setObjectName("SectionTitle"); layout.addWidget(title)
+        desc=QLabel("Il sorteggio crea un round-robin completo: 5 turni, 2 partite per turno e un riposo a turno. Ogni coppia si incontra una sola volta e ogni giocatore riposa una volta.")
+        desc.setObjectName("Muted"); desc.setWordWrap(True); layout.addWidget(desc)
+        controls=QHBoxLayout()
+        draw=QPushButton("♜  ESTRAZIONE RANDOM"); draw.setObjectName("PrimaryButton"); draw.clicked.connect(self.random_draw)
+        edit=QPushButton("MODIFICA GIRONE"); edit.clicked.connect(self.open_schedule_editor)
+        reset=QPushButton("RIPRISTINA CALENDARIO"); reset.clicked.connect(self.reset_schedule)
+        controls.addWidget(draw); controls.addWidget(edit); controls.addStretch(); controls.addWidget(reset)
+        layout.addLayout(controls)
+        self.draw_table=QTableWidget(5,4); self.draw_table.setHorizontalHeaderLabels(["TURNO","TAVOLO 1","TAVOLO 2","RIPOSA"])
+        self.draw_table.verticalHeader().setVisible(False); self.draw_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.draw_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.draw_table.horizontalHeader().setSectionResizeMode(0,QHeaderView.ResizeMode.ResizeToContents)
+        for col in (1,2,3): self.draw_table.horizontalHeader().setSectionResizeMode(col,QHeaderView.ResizeMode.Stretch)
+        self.draw_table.setMinimumHeight(320); layout.addWidget(self.draw_table)
+        note=QLabel("Nota: applicare un nuovo sorteggio o cambiare gli accoppiamenti azzera gli eventuali risultati e le mosse già registrate, dopo una richiesta di conferma. Le penalità restano associate ai giocatori.")
+        note.setObjectName("Muted"); note.setWordWrap(True); layout.addWidget(note)
+        self.refresh_draw_page()
+        return page
+
+    def refresh_draw_page(self):
+        if not hasattr(self,"draw_table"): return
+        self.draw_table.setRowCount(5)
+        for rnd in range(1,6):
+            matches=sorted([g for g in GAMES if g[1]==rnd],key=lambda g:g[0])
+            values=[f"ROUND {rnd}",
+                    f"{name(matches[0][2])}  vs  {name(matches[0][3])}",
+                    f"{name(matches[1][2])}  vs  {name(matches[1][3])}",
+                    name(BYES[rnd])]
+            for col,value in enumerate(values):
+                item=QTableWidgetItem(value); item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                if col==0 or col==3: item.setForeground(QColor(GOLD))
+                self.draw_table.setItem(rnd-1,col,item)
+
+    def apply_schedule(self, proposed):
+        proposed=[tuple(g) for g in proposed]
+        try:
+            validate_schedule(proposed)
+        except ValueError as exc:
+            QMessageBox.warning(self,"Calendario non valido",str(exc)); return False
+        if proposed==GAMES:
+            self.statusBar().showMessage("Il girone non è cambiato.",2500); return False
+        if self.results or any(self.moves.values()):
+            answer=QMessageBox.question(self,"Sostituire il girone?",
+                "Ci sono già risultati o mosse registrate. Cambiare il calendario cancellerà risultati e mosse per evitare di attribuirli alle partite sbagliate. Continuare?",
+                QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if answer!=QMessageBox.StandardButton.Yes: return False
+            self.results.clear(); self.moves.clear(); self.boards.clear()
+        GAMES[:]=proposed
+        BYES.clear()
+        for rnd in range(1,6):
+            played=[p for g in GAMES if g[1]==rnd for p in (g[2],g[3])]
+            BYES[rnd]=next(p for p in ORDER if p not in played)
+        self.save(); self.refresh_all()
+        self.statusBar().showMessage("Girone aggiornato e salvato sul PC.",3500)
+        return True
+
+    def random_draw(self):
+        proposed=make_random_schedule()
+        if self.apply_schedule(proposed):
+            self.statusBar().showMessage("Estrazione completata: nuovi accoppiamenti, colori e turni di riposo sorteggiati.",4500)
+
+    def open_schedule_editor(self):
+        dialog=ScheduleEditorDialog(GAMES,self)
+        if dialog.exec()==QDialog.DialogCode.Accepted and dialog.schedule:
+            self.apply_schedule(dialog.schedule)
+
+    def reset_schedule(self):
+        self.apply_schedule(DEFAULT_GAMES)
+
     def build_calendar(self):
         page=QWidget(); l=QVBoxLayout(page)
         h=QLabel("PROGRAMMA E RISULTATI"); h.setObjectName("SectionTitle"); l.addWidget(h)
         d=QLabel("Calendario round-robin già caricato. Ogni risultato aggiorna immediatamente classifica e simulazioni quote.")
         d.setObjectName("Muted"); l.addWidget(d)
         scroll=QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.Shape.NoFrame)
-        content=QWidget(); v=QVBoxLayout(content); self.calendar_combos={}
+        content=QWidget(); v=QVBoxLayout(content); self.calendar_combos={}; self.calendar_pairings={}; self.calendar_bye_labels={}
         for gid,r,w,b in GAMES:
             card=QFrame(); card.setObjectName("Card"); row=QHBoxLayout(card)
             tag=QLabel(f"ROUND {r}"); tag.setObjectName("Eyebrow"); tag.setFixedWidth(85)
             matchup=QLabel(f"{name(w)}  <span style='color:{GOLD}'>vs</span>  {name(b)}"); matchup.setObjectName("MatchTitle")
+            self.calendar_pairings[gid]=matchup
             combo=QComboBox()
             for val,label in RESULT_OPTIONS: combo.addItem(label,val)
             combo.currentIndexChanged.connect(lambda i,gid=gid,cb=combo:self.set_result(gid,cb.itemData(i)))
             self.calendar_combos[gid]=combo; row.addWidget(tag); row.addWidget(matchup,1); row.addWidget(combo); v.addWidget(card)
         for r,p in BYES.items():
-            bye=QLabel(f"ROUND {r}  ·  Riposa: {name(p)}  ·  BYE"); bye.setObjectName("Muted"); v.addWidget(bye)
+            bye=QLabel(f"ROUND {r}  ·  Riposa: {name(p)}  ·  BYE"); bye.setObjectName("Muted")
+            self.calendar_bye_labels[r]=bye; v.addWidget(bye)
         v.addStretch(); scroll.setWidget(content); l.addWidget(scroll,1); return page
     def build_standings(self):
         page=QWidget(); l=QVBoxLayout(page)
@@ -395,7 +624,14 @@ class MainWindow(QMainWindow):
         if not hasattr(self,"live_cards"): return
         for c in self.live_cards: c.refresh()
         for gid,cb in self.calendar_combos.items():
+            g=game(gid)
+            if hasattr(self,"calendar_pairings"):
+                self.calendar_pairings[gid].setText(f"{name(g[2])}  <span style='color:{GOLD}'>vs</span>  {name(g[3])}")
             cb.blockSignals(True); cb.setCurrentIndex(max(0,cb.findData(self.results.get(gid)))); cb.blockSignals(False)
+        if hasattr(self,"calendar_bye_labels"):
+            for rnd,label in self.calendar_bye_labels.items():
+                label.setText(f"ROUND {rnd}  ·  Riposa: {name(BYES[rnd])}  ·  BYE")
+        self.refresh_draw_page()
         self.refresh_standings(); self.refresh_odds(); self.refresh_penalties(); self.refresh_playoffs()
         if self.broadcast and self.broadcast.isVisible(): self.broadcast.refresh_from_app()
     def refresh_standings(self):
