@@ -1356,8 +1356,9 @@ class MainWindow(QMainWindow):
         else:
             self.playoff_winners[key]=player
         self.save(); self.refresh_playoffs()
-    def playoff_pair_winner(self,key):
-        pair=getattr(self,"playoff_pairs",{}).get(key,(None,None))
+    def playoff_pair_winner(self,key,pair=None):
+        if pair is None:
+            pair=getattr(self,"playoff_pairs",{}).get(key,(None,None))
         result=self.playoff_results.get(key)
         if result=="1-0": return pair[0]
         if result=="0-1": return pair[1]
@@ -1440,26 +1441,17 @@ class MainWindow(QMainWindow):
     def refresh_playoffs(self):
         if not hasattr(self,"playoff_cards"): return
         rows=self.standings(); ids=[x["id"] for x in rows]
-        self.playoff_pairs={
-            "sf1":(ids[0],ids[3]),"sf2":(ids[1],ids[2]),
-            "final":(self.playoff_pair_winner("sf1"),self.playoff_pair_winner("sf2")),
-            "third":(self.playoff_pairs.get("sf1",(None,None))[1] if self.playoff_pair_winner("sf1") else None,
-                     self.playoff_pairs.get("sf2",(None,None))[1] if self.playoff_pair_winner("sf2") else None)}
-        # Rebuild losers directly from the semifinal pair and winner.
-        for key,semi in (("final","sf1"),("third","sf1")):
-            pair=self.playoff_pairs.get(semi,(None,None)); winner=self.playoff_pair_winner(semi)
-            if key=="final":
-                self.playoff_pairs["final"]=(winner,self.playoff_pair_winner("sf2"))
-            else:
-                loser=next((p for p in pair if p and p!=winner),None)
-                pair2=self.playoff_pairs.get("sf2",(None,None)); winner2=self.playoff_pair_winner("sf2")
-                loser2=next((p for p in pair2 if p and p!=winner2),None)
-                self.playoff_pairs["third"]=(loser,loser2)
+        pair1=(ids[0],ids[3]); pair2=(ids[1],ids[2])
+        self.playoff_pairs={"sf1":pair1,"sf2":pair2}
+        winner1=self.playoff_pair_winner("sf1",pair1)
+        winner2=self.playoff_pair_winner("sf2",pair2)
+        loser1=next((p for p in pair1 if p and p!=winner1),None)
+        loser2=next((p for p in pair2 if p and p!=winner2),None)
+        final_pair=(winner1,winner2); third_pair=(loser1,loser2)
+        self.playoff_pairs.update({"final":final_pair,"third":third_pair})
         labels={
-            "sf1":("SEMIFINALE 1",self.playoff_pairs["sf1"]),
-            "sf2":("SEMIFINALE 2",self.playoff_pairs["sf2"]),
-            "final":("FINALE",self.playoff_pairs["final"]),
-            "third":("3° / 4° POSTO",self.playoff_pairs["third"])}
+            "sf1":("SEMIFINALE 1",pair1),"sf2":("SEMIFINALE 2",pair2),
+            "final":("FINALE",final_pair),"third":("3° / 4° POSTO",third_pair)}
         for key,card in self.playoff_cards.items():
             title,pair=labels[key]
             card.labels[0].setText(title)
@@ -1471,11 +1463,13 @@ class MainWindow(QMainWindow):
             card.result_box.blockSignals(False)
             card.winner_box.blockSignals(True); card.winner_box.clear()
             card.winner_box.addItem("Vincitore da definire",None)
-            for p in pair:
-                if p: card.winner_box.addItem(name(p),p)
+            for player in pair:
+                if player: card.winner_box.addItem(name(player),player)
             chosen=self.playoff_winners.get(key)
+            if chosen not in pair:
+                self.playoff_winners.pop(key,None); chosen=None
             card.winner_box.setCurrentIndex(max(0,card.winner_box.findData(chosen)))
-            card.winner_box.setEnabled(result=="1/2-1/2")
+            card.winner_box.setEnabled(result=="1/2-1/2" and pair[0] is not None and pair[1] is not None)
             card.winner_box.blockSignals(False)
     def open_broadcast(self):
         if self.broadcast is None: self.broadcast=BroadcastWindow(self)
