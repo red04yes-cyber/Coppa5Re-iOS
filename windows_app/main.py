@@ -268,7 +268,7 @@ class EngineAnalysisWorker(QThread):
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 startupinfo.wShowWindow=subprocess.SW_HIDE
                 popen_args={"creationflags":subprocess.CREATE_NO_WINDOW,"startupinfo":startupinfo}
-            engine = chess.engine.SimpleEngine.popen_uci(self.engine_path, timeout=8, **popen_args)
+            engine = chess.engine.SimpleEngine.popen_uci(self.engine_path, timeout=8, cwd=str(Path(self.engine_path).parent), **popen_args)
             try:
                 engine.configure({"Threads": 2, "Hash": 96})
             except Exception:
