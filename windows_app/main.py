@@ -532,7 +532,7 @@ class BoardCard(QFrame):
         for move in board.move_stack[:self.history_index]: visible.push(move)
         self.match.setText(f"{name(w)}  <span style='color:{GOLD}'>vs</span>  {name(b)}")
         clock_state=self.app.clock_data(gid)
-        self.state_label.setText("CONCLUSA" if self.app.results.get(gid) else ("IN CORSO" if clock_state.get("started") else "LIVE"))
+        self.state_label.setText("CONCLUSA" if self.app.results.get(gid) else ("IN CORSO" if clock_state.get("started") or board.move_stack else "LIVE"))
         self.turn.setText("PARTITA CONCLUSA · SCACCHIERA BLOCCATA" if self.app.results.get(gid) else
                           f"AL MUOVERE: {'BIANCO' if board.turn else 'NERO'} · {board.fullmove_number}ª mossa")
         self.board.set_position(visible,bool(self.app.results.get(gid)) or self.history_index<len(board.move_stack))
@@ -561,7 +561,7 @@ class SpectatorCard(QFrame):
     def update_game(self,app,gid):
         _,r,w,b=game(gid); self.match.setText(f"{name(w)}  <span style='color:{GOLD}'>vs</span>  {name(b)}")
         result=app.results.get(gid); clock=app.clock_data(gid)
-        self.status.setText("CONCLUSA" if result else ("IN CORSO" if clock.get("started") else "LIVE"))
+        self.status.setText("CONCLUSA" if result else ("IN CORSO" if clock.get("started") or app.get_board(gid).move_stack else "LIVE"))
         self.clock.setText(app.clock_text(gid))
         self.board.set_position(app.get_board(gid),True)
 
@@ -1026,7 +1026,7 @@ class MainWindow(QMainWindow):
 
     def refresh_dashboard(self):
         if not hasattr(self,"dashboard_summary"): return
-        done=len(self.results); running=sum(1 for gid,_,_,_ in GAMES if self.clock_data(gid).get("started"))
+        done=len(self.results); running=sum(1 for gid,_,_,_ in GAMES if self.clock_data(gid).get("started") or self.moves.get(gid))
         self.dashboard_summary.setText(f"PARTITE CONCLUSE  {done}/10     ·     IN CORSO  {running}     ·     CONTROLLO {self.time_control}")
         leader=self.standings()[0]
         self.dashboard_detail.setText(f"LEADER ATTUALE  ·  {name(leader['id'])}  ·  {leader['points']:.1f} punti     |     ARBITRO  ·  {self.referee or 'non impostato'}")
