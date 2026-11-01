@@ -1005,12 +1005,12 @@ class MainWindow(QMainWindow):
             self.game_terminations[gid]={"termination":termination or ("adjudication" if value=="VOID" else "normal"),"detail":detail}
         self.log_operation("Risultato",gid,old or "In corso",value or "In corso",detail)
         self.save(); self.save_recovery(); self.refresh_all()
-        if value not in (None,"VOID") and self.moves.get(gid) and not self.move_reviews.get(gid):
-            if self.analysis_running_gid is None:
-                service=self.get_engine_service()
-                if service is not None:
+        if value not in (None,"VOID") and self.moves.get(gid):
+            service=self.get_engine_service()
+            if service is not None:
+                if self.analysis_running_gid is None:
                     self.analysis_running_gid=gid
-                    service.request_game(gid,self.moves[gid])
+                service.request_game(gid,self.moves[gid])
         self.statusBar().showMessage("Risultato salvato · classifica, quote e Game Review aggiornati.",3000)
     def time_control_for_game(self,gid):
         return "30+10" if gid in ("sf1","sf2","final","third") or str(gid).startswith("PO-") else "15+3"
@@ -1039,15 +1039,9 @@ class MainWindow(QMainWindow):
         self.save(); self.refresh_all()
         self.statusBar().showMessage("Cronometro avviato.",2000)
     def set_time_control(self,value):
-        if value==self.time_control: return
-        if self.results or any(self.moves.values()) or any(c.get("started") for c in self.clocks.values()):
-            QMessageBox.information(self,"Tempo di gioco","Il controllo del tempo si può cambiare solo prima di iniziare il girone.")
-            self.live_time.blockSignals(True)
-            self.live_time.setCurrentText(self.time_control)
-            self.live_time.blockSignals(False)
-            return
-        self.time_control=value; self.clocks={}
-        self.save(); self.refresh_all()
+        # I controlli sono vincolati all'Art. 5: 15+3 in qualificazione, 30+10 nei playoff.
+        self.time_control="15+3"
+        self.statusBar().showMessage("Cadenze fissate dal regolamento: qualificazione 15+3, playoff 30+10.",3500)
     def tick_clocks(self):
         changed=False; timed_out=[]
         for gid,_,white,black in GAMES:
@@ -1891,9 +1885,15 @@ class MainWindow(QMainWindow):
                 self.st_table.setItem(i,c,item)
         concluded=sum(1 for value in self.results.values() if value!="VOID")
         voided=sum(1 for value in self.results.values() if value=="VOID")
-        unresolved_ties=len({row["points"] for row in rows})<len(rows) and any(
-            sum(1 for row in rows if row["points"]==points and self.tie_break_value(row["id"],[x["id"] for x in rows if x["points"]==points])==self.tie_break_value(next(x["id"] for x in rows if x["points"]==points),[x["id"] for x in rows if x["points"]==points]))>1
-            for points in {row["points"] for row in rows})
+        unresolved_ties=False
+        for points in {row["points"] for row in rows}:
+            point_group=[row for row in rows if row["points"]==points]
+            if len(point_group)>1:
+                ids=[row["id"] for row in point_group]
+                keys=[self.tie_break_value(player_id,ids) for player_id in ids]
+                if len(set(keys))<len(keys):
+                    unresolved_ties=True
+                    break
         self.st_summary.setText(f"PARTITE CONCLUSE  {concluded}/10  ·  ANNULLATE {voided}  ·  PENALITÀ {len(self.penalties)}" +
             ("  ·  SPAREGGIO ART. 8 DA DISPUTARE" if unresolved_ties else ""))
     def refresh_odds(self):
