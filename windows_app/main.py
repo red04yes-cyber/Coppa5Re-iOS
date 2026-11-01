@@ -1369,18 +1369,81 @@ class MainWindow(QMainWindow):
             for col,value in enumerate(vals):
                 self.audit_table.setItem(row,col,QTableWidgetItem(str(value)))
 
+    def accuracy_for_player(self,gid,player_id):
+        reviews=self.move_reviews.get(gid,[])
+        losses=[float(item.get("expected_points_loss",0)) for item in reviews if item.get("player")==player_id]
+        if not losses:
+            return None
+        return max(0.0,min(100.0,100.0*(1.0-sum(losses)/len(losses))))
+
+    def game_precision_summary(self,gid):
+        _,_,white,black=game(gid)
+        white_accuracy=self.accuracy_for_player(gid,white)
+        black_accuracy=self.accuracy_for_player(gid,black)
+        reviews=self.move_reviews.get(gid,[])
+        counts={}
+        for item in reviews:
+            label=item.get("label","")
+            counts[label]=counts.get(label,0)+1
+        def fmt(value):
+            return "non disponibile" if value is None else f"{value:.1f}%"
+        return f"{name(white)}: {fmt(white_accuracy)} · {name(black)}: {fmt(black_accuracy)}",counts
+
+    def build_pgn_game(self,gid):
+        board=self.get_board(gid)
+        _,round_no,white,black=game(gid)
+        node=chess.pgn.Game.from_board(board)
+        result=self.results.get(gid,"*")
+        if result=="VOID": result="*"
+        node.headers["Event"]=APP_NAME
+        node.headers["Site"]="Coppa dei 5 Re"
+        node.headers["Round"]=str(round_no)
+        node.headers["White"]=name(white)
+        node.headers["Black"]=name(black)
+        node.headers["Result"]=result or "*"
+        node.headers["TimeControl"]="900+3"
+        termination=self.game_terminations.get(gid,{})
+        if isinstance(termination,dict):
+            node.headers["Termination"]=termination.get("termination","normal")
+            if termination.get("detail"):
+                node.headers["C5R_TerminationDetails"]=str(termination["detail"])
+        elif termination:
+            node.headers["Termination"]=str(termination)
+        summary,_=self.game_precision_summary(gid)
+        if self.move_reviews.get(gid):
+            node.headers["C5R_Accuracy"]=summary
+            node.headers["C5R_Review"]="Local Stockfish expected-points estimate; not Chess.com CAPS2"
+        reviews={int(item.get("ply",0)):item for item in self.move_reviews.get(gid,[])}
+        nag_map={
+            "BRILLANTE":getattr(chess.pgn,"NAG_BRILLIANT_MOVE",3),
+            "OTTIMA":getattr(chess.pgn,"NAG_GOOD_MOVE",1),
+            "IMPRECISIONE":getattr(chess.pgn,"NAG_INACCURACY",6),
+            "ERRORE":getattr(chess.pgn,"NAG_MISTAKE",2),
+            "GRAVE ERRORE":getattr(chess.pgn,"NAG_BLUNDER",4),
+        }
+        for ply,move_node in enumerate(node.mainline(),1):
+            review=reviews.get(ply)
+            if not review:
+                continue
+            label=review.get("label","")
+            loss=float(review.get("expected_points_loss",0))*100
+            note=f"C5R Game Review: {label}; expected-points loss {loss:.1f}%; eval before {int(review.get('before_cp',0))/100:+.2f}, after {int(review.get('after_cp',0))/100:+.2f}"
+            move_node.comment=(move_node.comment+" | "+note).strip(" |")
+            nag=nag_map.get(label)
+            if nag is not None:
+                move_node.nags.add(nag)
+        return node
+
     def export_all_pgn(self):
         path,_=QFileDialog.getSaveFileName(self,"Esporta tutte le partite","Coppa5Re-Torneo.pgn","PGN (*.pgn)")
-        if not path: return
+        if not path:
+            return
         chunks=[]
-        for gid,rnd,white,black in GAMES:
-            node=chess.pgn.Game.from_board(self.get_board(gid))
-            node.headers["Event"]=APP_NAME; node.headers["Round"]=str(rnd)
-            node.headers["White"]=name(white); node.headers["Black"]=name(black)
-            node.headers["Result"]=self.results.get(gid,"*"); node.headers["Site"]="Coppa dei 5 Re"
-            chunks.append(node.accept(chess.pgn.StringExporter(headers=True,variations=False,comments=False)))
-        Path(path).write_text("\\n\\n".join(chunks)+"\\n",encoding="utf-8")
-        self.statusBar().showMessage("Archivio PGN esportato.",3000)
+        for gid,_,_,_ in GAMES:
+            node=self.build_pgn_game(gid)
+            chunks.append(node.accept(chess.pgn.StringExporter(headers=True,variations=False,comments=True)))
+        Path(path).write_text("\n\n".join(chunks)+"\n",encoding="utf-8")
+        self.statusBar().showMessage("Archivio PGN esportato con risultati, terminazioni e annotazioni C5R disponibili.",3500)
 
     def analyze_selected_archive_game(self):
         row = self.archive_table.currentRow()
@@ -1414,7 +1477,10 @@ class MainWindow(QMainWindow):
         if gid:
             self.analysis_running_gid = None
             self.eval_history[gid] = positions
+            if positions:
+                self.move_reviews[gid] = positions
             self.save()
+            self.refresh_archive()
             self.statusBar().showMessage(f"Analisi Stockfish completata: {gid}.", 3500)
             self.show_game_analysis(gid, positions)
 
@@ -1426,17 +1492,22 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Stockfish non si è avviato: {error}", 6000)
 
     def show_game_analysis(self,gid,positions):
-        dialog=QDialog(self); dialog.setWindowTitle(f"Analisi Stockfish · {gid}"); dialog.resize(620,620)
+        dialog=QDialog(self); dialog.setWindowTitle(f"Game Review C5R · {gid}"); dialog.resize(760,680)
         layout=QVBoxLayout(dialog)
-        table=QTableWidget(len(positions),3)
-        table.setHorizontalHeaderLabels(["PLY","MOSSA","VALUTAZIONE · BIANCO"])
+        summary,_=self.game_precision_summary(gid)
+        explanation=QLabel("PRECISIONE C5R · "+summary+"\nClassificazione locale Stockfish basata sulla variazione dei punti attesi. Non replica l'algoritmo proprietario Chess.com CAPS2.")
+        explanation.setObjectName("Muted"); explanation.setWordWrap(True); layout.addWidget(explanation)
+        table=QTableWidget(len(positions),5)
+        table.setHorizontalHeaderLabels(["PLY","MOSSA","ETICHETTA","VALUTAZIONE","PERDITA EP"])
         table.verticalHeader().setVisible(False); table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        table.horizontalHeader().setSectionResizeMode(1,QHeaderView.ResizeMode.Stretch)
+        table.horizontalHeader().setSectionResizeMode(2,QHeaderView.ResizeMode.Stretch)
         for row,item in enumerate(positions):
             score=int(item.get("score",0))
-            label="Matto bianco" if score>=10000 else ("Matto nero" if score<=-10000 else f"{score/100:+.2f}")
-            for col,value in enumerate((str(item.get("ply",row+1)),item.get("san",""),label)):
-                table.setItem(row,col,QTableWidgetItem(value))
+            evaluation="Matto bianco" if score>=10000 else ("Matto nero" if score<=-10000 else f"{score/100:+.2f}")
+            values=(str(item.get("ply",row+1)),item.get("san",""),item.get("label","—"),evaluation,
+                f"{float(item.get('expected_points_loss',0))*100:.1f}%")
+            for col,value in enumerate(values):
+                table.setItem(row,col,QTableWidgetItem(str(value)))
         layout.addWidget(table)
         close=QPushButton("CHIUDI"); close.clicked.connect(dialog.accept)
         layout.addWidget(close,0,Qt.AlignmentFlag.AlignRight)
@@ -1760,12 +1831,12 @@ class MainWindow(QMainWindow):
             self.log_operation("Penalità annullata",item.get("player"),item,"0")
             self.save(); self.refresh_all()
     def export_pgn(self,gid):
-        b=self.get_board(gid); _,r,w,bl=game(gid); node=chess.pgn.Game.from_board(b)
-        node.headers["Event"]=APP_NAME; node.headers["Round"]=str(r); node.headers["White"]=name(w); node.headers["Black"]=name(bl)
-        node.headers["Result"]=self.results.get(gid,"*")
-        content=node.accept(chess.pgn.StringExporter(headers=True,variations=False,comments=False))
+        node=self.build_pgn_game(gid)
+        content=node.accept(chess.pgn.StringExporter(headers=True,variations=False,comments=True))
         path,_=QFileDialog.getSaveFileName(self,"Esporta PGN",gid+".pgn","Partite PGN (*.pgn)")
-        if path: Path(path).write_text(content,encoding="utf-8"); self.statusBar().showMessage("PGN esportato.",2500)
+        if path:
+            Path(path).write_text(content,encoding="utf-8")
+            self.statusBar().showMessage("PGN esportato con le annotazioni C5R disponibili.",3000)
     def refresh_all(self):
         if not hasattr(self,"live_cards"): return
         for c in self.live_cards: c.refresh()
