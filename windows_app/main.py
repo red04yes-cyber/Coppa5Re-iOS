@@ -419,15 +419,24 @@ class BroadcastWindow(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__(); self.setWindowTitle("Coppa dei 5 Re · Control Room")
-        self.resize(1500,950); self.setMinimumSize(1160,780)
-        self.results={}; self.penalties=[]; self.moves={}; self.boards={}; self.broadcast=None; self.engine_path=None; self._odds_cache_key=None; self._odds_cache=None
+        self.resize(1500,950); self.setMinimumSize(880,620)
+        self.results={}; self.penalties=[]; self.moves={}; self.boards={}; self.broadcast=None; self.engine_path=None
+        self._odds_cache_key=None; self._odds_cache=None
+        self.time_control="15+3"; self.clocks={}; self.audit_log=[]; self.match_notes={}; self.referee=""
+        self.tie_break="scontro diretto"; self.playoff_results={}; self.eval_history={}; self.clock_ticks=0; self.board_theme=0
         self.load_state(); self.build_ui(); self.refresh_all()
+        self.clock_timer=QTimer(self); self.clock_timer.timeout.connect(self.tick_clocks); self.clock_timer.start(1000)
+        self.install_shortcuts()
     def load_state(self):
         path=storage_path()
         if path.exists():
             try:
                 data=json.loads(path.read_text(encoding="utf-8"))
                 self.results=data.get("results",{}); self.penalties=data.get("penalties",[]); self.moves=data.get("moves",{}); self.engine_path=data.get("engine_path")
+                self.time_control=data.get("time_control","15+3"); self.clocks=data.get("clocks",{})
+                self.audit_log=data.get("audit_log",[]); self.match_notes=data.get("match_notes",{})
+                self.referee=data.get("referee",""); self.tie_break=data.get("tie_break","scontro diretto")
+                self.playoff_results=data.get("playoff_results",{}); self.eval_history=data.get("eval_history",{})
                 saved_schedule=data.get("schedule")
                 if saved_schedule:
                     parsed=[(g["id"],int(g["round"]),g["white"],g["black"]) for g in saved_schedule]
@@ -442,7 +451,10 @@ class MainWindow(QMainWindow):
         path=storage_path(); tmp=path.with_suffix(".tmp")
         stored_schedule=[{"id":gid,"round":rnd,"white":white,"black":black} for gid,rnd,white,black in GAMES]
         tmp.write_text(json.dumps({"results":self.results,"penalties":self.penalties,"moves":self.moves,
-                                  "schedule":stored_schedule,"engine_path":self.engine_path,"saved_at":datetime.now().isoformat(timespec="seconds")},ensure_ascii=False,indent=2),encoding="utf-8")
+                                  "schedule":stored_schedule,"engine_path":self.engine_path,"time_control":self.time_control,
+                                  "clocks":self.clocks,"audit_log":self.audit_log,"match_notes":self.match_notes,
+                                  "referee":self.referee,"tie_break":self.tie_break,"playoff_results":self.playoff_results,
+                                  "eval_history":self.eval_history,"saved_at":datetime.now().isoformat(timespec="seconds")},ensure_ascii=False,indent=2),encoding="utf-8")
         tmp.replace(path)
     def find_engine(self):
         candidates=[]
