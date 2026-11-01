@@ -429,18 +429,22 @@ class BoardCard(QFrame):
         for value,label in RESULT_OPTIONS: self.result.addItem(label,value)
         self.result.currentIndexChanged.connect(lambda i:self.app.set_result(self.game_id,self.result.itemData(i)))
         bottom.addWidget(self.result); lay.addLayout(bottom)
-        controls=QHBoxLayout()
-        self.undo=QPushButton("↶  Annulla mossa"); self.undo.clicked.connect(lambda:self.app.undo(self.game_id))
-        pgn=QPushButton("Esporta PGN"); pgn.clicked.connect(lambda:self.app.export_pgn(self.game_id))
+        controls=QVBoxLayout()
+        control_top=QHBoxLayout(); control_bottom=QHBoxLayout()
+        self.undo=QPushButton("↶  Annulla"); self.undo.clicked.connect(lambda:self.app.undo(self.game_id))
+        pgn=QPushButton("PGN"); pgn.clicked.connect(lambda:self.app.export_pgn(self.game_id))
         reset=QPushButton("Reset"); reset.clicked.connect(lambda:self.app.reset_board(self.game_id))
-        engine=QPushButton("STOCKFISH INTEGRATO"); engine.setEnabled(bool(self.app.find_engine()))
+        engine=QPushButton("STOCKFISH"); engine.setEnabled(bool(self.app.find_engine()))
         self.clock_btn=QPushButton("AVVIA OROLOGIO"); self.clock_btn.clicked.connect(lambda:self.app.start_clock(self.game_id))
         self.rotate_btn=QPushButton("RUOTA"); self.rotate_btn.clicked.connect(self.board.toggle_orientation)
-        self.theme_btn=QPushButton("TEMA SCACCHIERA"); self.theme_btn.clicked.connect(self.board.cycle_theme)
-        notes=QPushButton("NOTA ARBITRO"); notes.clicked.connect(lambda:self.app.prompt_match_note(self.game_id))
-        controls.addWidget(self.undo); controls.addWidget(self.clock_btn); controls.addStretch()
-        controls.addWidget(self.rotate_btn); controls.addWidget(self.theme_btn); controls.addWidget(notes)
-        controls.addWidget(engine); controls.addWidget(pgn); controls.addWidget(reset); lay.addLayout(controls)
+        self.theme_btn=QPushButton("TEMA"); self.theme_btn.clicked.connect(self.board.cycle_theme)
+        notes=QPushButton("NOTA"); notes.clicked.connect(lambda:self.app.prompt_match_note(self.game_id))
+        view_notes=QPushButton("VEDI NOTE"); view_notes.clicked.connect(lambda:self.app.show_match_notes(self.game_id))
+        control_top.addWidget(self.undo); control_top.addWidget(self.clock_btn); control_top.addStretch()
+        control_top.addWidget(self.rotate_btn); control_top.addWidget(self.theme_btn)
+        control_bottom.addWidget(notes); control_bottom.addWidget(view_notes); control_bottom.addWidget(engine)
+        control_bottom.addStretch(); control_bottom.addWidget(pgn); control_bottom.addWidget(reset)
+        controls.addLayout(control_top); controls.addLayout(control_bottom); lay.addLayout(controls)
         self.refresh()
     def refresh_selector(self):
         current = self.game_id
@@ -582,7 +586,7 @@ class BroadcastWindow(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__(); self.setWindowTitle("Coppa dei 5 Re · Control Room")
-        self.resize(1500,950); self.setMinimumSize(880,620)
+        self.resize(1500,950); self.setMinimumSize(980,680)
         self.results={}; self.penalties=[]; self.moves={}; self.boards={}; self.broadcast=None; self.engine_path=None
         self._odds_cache_key=None; self._odds_cache=None
         self.time_control="15+3"; self.clocks={}; self.audit_log=[]; self.match_notes={}; self.referee=""
@@ -772,6 +776,19 @@ class MainWindow(QMainWindow):
             "referee":self.referee,"kind":kind,"text":text})
         self.log_operation(kind,gid,"",text)
         self.save(); self.statusBar().showMessage("Annotazione arbitrale salvata.",2500)
+    def show_match_notes(self,gid):
+        notes=self.match_notes.get(gid,[])
+        if not notes:
+            QMessageBox.information(self,"Note partita",f"Nessuna nota o incidente registrato per {gid}."); return
+        dialog=QDialog(self); dialog.setWindowTitle(f"Note arbitro · {gid}"); dialog.resize(620,420)
+        layout=QVBoxLayout(dialog); content=QListWidget()
+        for item in notes:
+            content.addItem(f"{item.get('time','')} · {item.get('kind','Nota')} · {item.get('referee','')}
+{item.get('text','')}")
+        layout.addWidget(content)
+        close=QPushButton("CHIUDI"); close.clicked.connect(dialog.accept)
+        layout.addWidget(close,0,Qt.AlignmentFlag.AlignRight); dialog.exec()
+
     def prompt_match_note(self,gid):
         kind,ok=QInputDialog.getItem(self,"Tipo annotazione","Classifica l'annotazione:",["Nota arbitrale","Incidente"],0,False)
         if not ok: return
