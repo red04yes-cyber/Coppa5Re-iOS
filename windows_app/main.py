@@ -803,7 +803,8 @@ class MainWindow(QMainWindow):
         active=any(
             (self.moves.get(gid) and not self.results.get(gid)) or self.clock_data(gid).get("started")
             for gid,_,_,_ in GAMES
-        )
+        ) or any(self.clock_data(key).get("started") and not self.playoff_results.get(key)
+            for key in ("sf1","sf2","final","third"))
         if not active:
             self.recovery_path.unlink(missing_ok=True)
             return
@@ -1079,8 +1080,9 @@ class MainWindow(QMainWindow):
         if self.playoff_results.get(key): return
         clock=self.clock_data(key)
         clock["started"]=True
+        clock.setdefault("side_to_move","white")
         self.log_operation("Orologio playoff avviato",key,"fermo","30+10")
-        self.save(); self.refresh_playoffs()
+        self.save(); self.save_recovery(); self.refresh_playoffs()
     def switch_playoff_clock(self,key):
         if self.playoff_results.get(key): return
         clock=self.clock_data(key)
@@ -1088,7 +1090,8 @@ class MainWindow(QMainWindow):
         side=clock.get("side_to_move","white")
         clock[side]=int(clock[side])+10
         clock["side_to_move"]="black" if side=="white" else "white"
-        self.save(); self.refresh_playoffs()
+        self.log_operation("Mossa playoff",key,side,clock["side_to_move"],"+10 secondi")
+        self.save(); self.save_recovery(); self.refresh_playoffs()
     def playoff_clock_text(self,key):
         clock=self.clock_data(key)
         def fmt(seconds):
@@ -1490,6 +1493,27 @@ class MainWindow(QMainWindow):
                 move_node.nags.add(nag)
         return node
 
+    def build_playoff_pgn(self,key):
+        pair=getattr(self,"playoff_pairs",{}).get(key,(None,None))
+        white,black=pair if pair else (None,None)
+        node=chess.pgn.Game()
+        node.headers["Event"]=APP_NAME
+        node.headers["Site"]="Coppa dei 5 Re"
+        node.headers["Round"]={"sf1":"Semifinale 1","sf2":"Semifinale 2","final":"Finale","third":"Finale 3°–4° posto"}.get(key,key)
+        node.headers["White"]=name(white) if white else "Da definire"
+        node.headers["Black"]=name(black) if black else "Da definire"
+        node.headers["Result"]=self.playoff_results.get(key,"*")
+        node.headers["TimeControl"]="1800+10"
+        term=self.game_terminations.get(key,{})
+        if isinstance(term,dict):
+            node.headers["Termination"]=term.get("termination","normal")
+            if term.get("detail"): node.headers["C5R_TerminationDetails"]=str(term["detail"])
+        winner=self.playoff_winners.get(key)
+        if winner:
+            node.headers["C5R_ArmageddonWinner"]=name(winner)
+            node.headers["C5R_Armageddon"]="Winner recorded after Armageddon"
+        return node
+
     def export_all_pgn(self):
         path,_=QFileDialog.getSaveFileName(self,"Esporta tutte le partite","Coppa5Re-Torneo.pgn","PGN (*.pgn)")
         if not path:
@@ -1498,6 +1522,11 @@ class MainWindow(QMainWindow):
         for gid,_,_,_ in GAMES:
             node=self.build_pgn_game(gid)
             chunks.append(node.accept(chess.pgn.StringExporter(headers=True,variations=False,comments=True)))
+        for key in ("sf1","sf2","third","final"):
+            pair=getattr(self,"playoff_pairs",{}).get(key,(None,None))
+            if self.playoff_results.get(key) or all(pair):
+                node=self.build_playoff_pgn(key)
+                chunks.append(node.accept(chess.pgn.StringExporter(headers=True,variations=False,comments=True)))
         Path(path).write_text("\n\n".join(chunks)+"\n",encoding="utf-8")
         self.statusBar().showMessage("Archivio PGN esportato con risultati, terminazioni e annotazioni C5R disponibili.",3500)
 
@@ -1869,7 +1898,7 @@ class MainWindow(QMainWindow):
             if value!="1/2-1/2":
                 self.playoff_winners.pop(key,None)
         self.log_operation("Risultato playoff",key,old or "In corso",value or "In corso",detail)
-        self.save(); self.refresh_playoffs()
+        self.save(); self.save_recovery(); self.refresh_playoffs()
     def set_playoff_winner(self,key,player):
         old=self.playoff_winners.get(key)
         if player is None:
