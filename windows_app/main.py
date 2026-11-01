@@ -423,7 +423,7 @@ class BoardCard(QFrame):
         self.eval_bar=QProgressBar(); self.eval_bar.setRange(0,1000); self.eval_bar.setValue(500)
         self.eval_bar.setTextVisible(True); self.eval_bar.setFormat("VALUTAZIONE · motore non configurato")
         self.eval_bar.setFixedHeight(19); lay.addWidget(self.eval_bar)
-        self.engine_worker=None
+        self.engine_worker=None; self.last_eval_signature=None
         bottom=QHBoxLayout(); self.turn=QLabel(); self.turn.setObjectName("Muted"); bottom.addWidget(self.turn,1)
         self.result=QComboBox()
         for value,label in RESULT_OPTIONS: self.result.addItem(label,value)
@@ -473,10 +473,14 @@ class BoardCard(QFrame):
         self.clock_btn.setEnabled(not self.app.results.get(self.game_id) and not state.get("started"))
         self.clock_btn.setText("OROLOGIO IN CORSO" if state.get("started") else "AVVIA OROLOGIO")
     def update_evaluation(self, gid, board):
+        signature=board.fen()
+        if signature==self.last_eval_signature:
+            return
+        self.last_eval_signature=signature
         path=self.app.engine_path or self.app.find_engine()
         if not path:
             self.eval_bar.setValue(500)
-            self.eval_bar.setFormat("VALUTAZIONE · configura Stockfish per attivarla")
+            self.eval_bar.setFormat("VALUTAZIONE · Stockfish non disponibile")
             return
         if self.engine_worker is not None and self.engine_worker.isRunning():
             self.pending_engine_position=(gid,board.copy(stack=True))
@@ -492,6 +496,7 @@ class BoardCard(QFrame):
         pending=getattr(self,"pending_engine_position",None)
         if pending:
             self.pending_engine_position=None
+            self.last_eval_signature=None
             self.update_evaluation(pending[0],pending[1])
     def show_evaluation(self, gid, score):
         if gid != self.game_id:
