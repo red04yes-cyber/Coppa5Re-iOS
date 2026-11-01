@@ -70,6 +70,10 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: |
           python -c "from PySide6.QtWidgets import QApplication; from windows_app.main import MainWindow; app=QApplication([]); w=MainWindow(); base=w.odds(n=1200); assert abs(sum(v[0] for v in base.values())-1)<0.01; assert abs(sum(v[1] for v in base.values())-4)<0.01; w.results['R1-M1']='1-0'; assert w.odds(n=1200)!=base; w.open_broadcast(); assert not w.broadcast.isFullScreen(); assert all(c.board.interactive for c in w.live_cards); assert all(not c.board.interactive for c in w.broadcast.cards); w.broadcast.close(); w.close(); print('odds and streaming OK')"
+      - name: Test C5R tournament rules, PGN and recovery
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python windows_app/tournament_regression_smoke.py
       - name: Build standalone EXE
         shell: pwsh
         run: |
