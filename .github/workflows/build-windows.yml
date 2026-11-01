@@ -37,7 +37,7 @@ jobs:
           python -c "import chess; from PySide6.QtWidgets import QApplication; app=QApplication([]); b=chess.Board(); assert len(list(b.legal_moves)) == 20; print('Qt and chess engine OK')"
       - name: Build standalone EXE
         run: |
-          pyinstaller --noconfirm --clean --onefile --windowed --name Coppa5Re --distpath dist --workpath build/windows --specpath build/windows --collect-all chess --collect-all PySide6 windows_app/main.py
+          pyinstaller --noconfirm --clean --onefile --windowed --name Coppa5Re --distpath dist --workpath build/windows --specpath build/windows windows_app/main.py
       - name: Verify executable
         run: |
           if (!(Test-Path "dist/Coppa5Re.exe")) { throw "Coppa5Re.exe non trovato" }
