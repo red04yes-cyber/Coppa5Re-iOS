@@ -58,7 +58,7 @@ try:
         "expected_points_loss": 0.004, "before_cp": 0, "after_cp": 0, "best_uci": "e2e4"
     }]}
     reviewed = window.build_pgn_game("R1-M1")
-    first_move = next(reviewed.mainline())
+    first_move = next(iter(reviewed.mainline()))
     assert "OTTIMA" in first_move.comment
     assert chess.pgn.NAG_GOOD_MOVE in first_move.nags
     assert window.accuracy_for_player("R1-M1", "jacopo") > 99.0
