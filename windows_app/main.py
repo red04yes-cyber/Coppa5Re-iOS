@@ -505,7 +505,7 @@ class BoardCard(QFrame):
             self.last_eval_signature=None
             self.update_evaluation(pending[0],pending[1])
     def show_evaluation(self, gid, score):
-        if gid != self.game_id:
+        if not self.app.engine_enabled or gid != self.game_id:
             return
         white_pct=1.0/(1.0+math.exp(-max(-4000,min(4000,score))/400.0))
         self.eval_bar.setValue(int(white_pct*1000))
@@ -629,6 +629,7 @@ class MainWindow(QMainWindow):
         if not self.find_engine():
             QMessageBox.warning(self,"Stockfish non disponibile","Il motore non è presente nella build corrente."); return
         self.engine_enabled=not self.engine_enabled
+        for card in getattr(self,"live_cards",[]): card.last_eval_signature=None
         self.log_operation("Stockfish","",not self.engine_enabled,self.engine_enabled)
         self.save(); self.refresh_all()
     def find_engine(self):
