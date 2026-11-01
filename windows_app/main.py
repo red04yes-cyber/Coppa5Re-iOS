@@ -127,6 +127,7 @@ class BoardCard(QFrame):
         self.selector.setMinimumWidth(220); top.addWidget(self.selector); lay.addLayout(top)
         self.match=QLabel(); self.match.setObjectName("MatchTitle"); lay.addWidget(self.match)
         self.board=BoardWidget(True); self.board.moveRequested.connect(self.move); lay.addWidget(self.board,1)
+        self.history=QLabel("MOSSE  ·  Nessuna mossa"); self.history.setObjectName("Muted"); self.history.setWordWrap(True); self.history.setMaximumHeight(48); lay.addWidget(self.history)
         bottom=QHBoxLayout(); self.turn=QLabel(); self.turn.setObjectName("Muted"); bottom.addWidget(self.turn,1)
         self.result=QComboBox()
         for value,label in RESULT_OPTIONS: self.result.addItem(label,value)
@@ -147,6 +148,11 @@ class BoardCard(QFrame):
         self.turn.setText("PARTITA CONCLUSA · SCACCHIERA BLOCCATA" if self.app.results.get(gid) else
                           f"AL MUOVERE: {'BIANCO' if board.turn else 'NERO'} · {board.fullmove_number}ª mossa")
         self.board.set_position(board,bool(self.app.results.get(gid)))
+        replay=chess.Board(); san=[]
+        for mv in board.move_stack:
+            prefix=f"{replay.fullmove_number}. " if replay.turn==chess.WHITE else f"{replay.fullmove_number}... "
+            san.append(prefix+replay.san(mv)); replay.push(mv)
+        self.history.setText("MOSSE  ·  "+("  ".join(san[-12:]) if san else "Nessuna mossa"))
         self.result.blockSignals(True); self.result.setCurrentIndex(max(0,self.result.findData(self.app.results.get(gid)))); self.result.blockSignals(False)
         self.undo.setEnabled(bool(board.move_stack) and not self.app.results.get(gid))
 
