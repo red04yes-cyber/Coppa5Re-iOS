@@ -76,10 +76,16 @@ jobs:
         run: |
           if (!(Test-Path "dist/Coppa5Re.exe")) { throw "Coppa5Re.exe non trovato" }
           Get-Item "dist/Coppa5Re.exe" | Format-List Name,Length
+      - name: Add C5R logo and Stockfish notices to distribution
+        shell: pwsh
+        run: |
+          Copy-Item "windows_app/stockfish/COPYING.txt" "dist/Stockfish-COPYING.txt" -Force
+          Copy-Item "windows_app/stockfish/SOURCE.txt" "dist/Stockfish-SOURCE.txt" -Force
+          Copy-Item "windows_app/assets/c5r-logo.svg" "dist/C5R-logo.svg" -Force
       - name: Upload Windows EXE
         uses: actions/upload-artifact@v4
         with:
           name: Coppa5Re-Windows-EXE
-          path: dist/Coppa5Re.exe
+          path: dist/*
           if-no-files-found: error
           retention-days: 30
