@@ -124,7 +124,7 @@ class ScheduleEditorDialog(QDialog):
         root.addWidget(intro)
         grid = QGridLayout()
         headers = ["TURNO", "TAVOLO 1 · BIANCO", "TAVOLO 1 · NERO",
-                   "TAVOLO 2 · BIANCO", "TAVOLO 2 · NERO"]
+                   "TAVOLO 2 · BIANCO", "TAVOLO 2 · NERO", "RIPOSA"]
         for col, title in enumerate(headers):
             label = QLabel(title)
             label.setObjectName("Eyebrow")
@@ -132,7 +132,8 @@ class ScheduleEditorDialog(QDialog):
         for rnd in range(1, 6):
             row_games = [g for g in current_schedule if g[1] == rnd]
             row_games.sort(key=lambda g: g[0])
-            values = [rnd, row_games[0][2], row_games[0][3], row_games[1][2], row_games[1][3]]
+            current_bye = next(p for p in ORDER if p not in [row_games[0][2], row_games[0][3], row_games[1][2], row_games[1][3]])
+            values = [rnd, row_games[0][2], row_games[0][3], row_games[1][2], row_games[1][3], current_bye]
             round_label = QLabel(f"ROUND {rnd}")
             round_label.setObjectName("MatchTitle")
             grid.addWidget(round_label, rnd, 0)
@@ -154,7 +155,10 @@ class ScheduleEditorDialog(QDialog):
     def validate_and_accept(self):
         proposed = []
         for rnd, row in enumerate(self.controls, 1):
-            w1, b1, w2, b2 = [combo.currentData() for combo in row]
+            w1, b1, w2, b2, bye = [combo.currentData() for combo in row]
+            if len({w1, b1, w2, b2, bye}) != 5:
+                QMessageBox.warning(self, "Turno non valido", f"Nel turno {rnd} ogni giocatore deve comparire una sola volta, compreso chi riposa.")
+                return
             proposed.extend([(f"R{rnd}-M1", rnd, w1, b1), (f"R{rnd}-M2", rnd, w2, b2)])
         try:
             validate_schedule(proposed)
