@@ -895,7 +895,9 @@ class MainWindow(QMainWindow):
         row=QHBoxLayout(); allpgn=QPushButton("ESPORTA TUTTO IL TORNEO IN PGN")
         allpgn.setObjectName("PrimaryButton"); allpgn.clicked.connect(self.export_all_pgn); row.addWidget(allpgn)
         one=QPushButton("ESPORTA PARTITA SELEZIONATA")
-        one.clicked.connect(self.export_selected_archive_game); row.addWidget(one); row.addStretch()
+        one.clicked.connect(self.export_selected_archive_game); row.addWidget(one)
+        analyze=QPushButton("ANALIZZA POSIZIONI CON STOCKFISH")
+        analyze.clicked.connect(self.analyze_selected_archive_game); row.addWidget(analyze); row.addStretch()
         layout.addLayout(row); return page
 
     def build_h2h(self):
@@ -1016,6 +1018,56 @@ class MainWindow(QMainWindow):
             chunks.append(node.accept(chess.pgn.StringExporter(headers=True,variations=False,comments=False)))
         Path(path).write_text("\\n\\n".join(chunks)+"\\n",encoding="utf-8")
         self.statusBar().showMessage("Archivio PGN esportato.",3000)
+
+    def analyze_selected_archive_game(self):
+        row=self.archive_table.currentRow()
+        if row<0:
+            QMessageBox.information(self,"Analisi partita","Seleziona una partita conclusa nell'archivio."); return
+        finished=[g for g in GAMES if self.results.get(g[0])]
+        if row>=len(finished): return
+        gid=finished[row][0]
+        saved=self.eval_history.get(gid)
+        if saved:
+            self.show_game_analysis(gid,saved); return
+        path=self.find_engine()
+        if not path:
+            QMessageBox.warning(self,"Stockfish non disponibile","Il motore Stockfish integrato non è stato trovato."); return
+        moves=self.moves.get(gid,[])
+        if not moves:
+            QMessageBox.information(self,"Analisi partita","Questa partita non contiene mosse registrate."); return
+        running=getattr(self,"analysis_worker",None)
+        if running is not None and running.isRunning():
+            QMessageBox.information(self,"Analisi in corso","Attendi la fine dell'analisi già avviata."); return
+        self.statusBar().showMessage(f"Stockfish sta analizzando {gid}: {len(moves)} posizioni…")
+        worker=GameAnalysisWorker(path,gid,moves,self)
+        worker.analysisReady.connect(self.on_game_analysis_ready)
+        worker.analysisFailed.connect(self.on_game_analysis_failed)
+        self.analysis_worker=worker; worker.start()
+
+    def on_game_analysis_ready(self,gid,positions):
+        self.eval_history[gid]=positions
+        self.save(); self.statusBar().showMessage(f"Analisi Stockfish completata: {gid}.",3500)
+        self.show_game_analysis(gid,positions)
+
+    def on_game_analysis_failed(self,gid,error):
+        QMessageBox.warning(self,"Analisi non riuscita",f"Stockfish non è riuscito ad analizzare {gid}: {error}")
+
+    def show_game_analysis(self,gid,positions):
+        dialog=QDialog(self); dialog.setWindowTitle(f"Analisi Stockfish · {gid}"); dialog.resize(620,620)
+        layout=QVBoxLayout(dialog)
+        table=QTableWidget(len(positions),3)
+        table.setHorizontalHeaderLabels(["PLY","MOSSA","VALUTAZIONE · BIANCO"])
+        table.verticalHeader().setVisible(False); table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.horizontalHeader().setSectionResizeMode(1,QHeaderView.ResizeMode.Stretch)
+        for row,item in enumerate(positions):
+            score=int(item.get("score",0))
+            label="Matto bianco" if score>=10000 else ("Matto nero" if score<=-10000 else f"{score/100:+.2f}")
+            for col,value in enumerate((str(item.get("ply",row+1)),item.get("san",""),label)):
+                table.setItem(row,col,QTableWidgetItem(value))
+        layout.addWidget(table)
+        close=QPushButton("CHIUDI"); close.clicked.connect(dialog.accept)
+        layout.addWidget(close,0,Qt.AlignmentFlag.AlignRight)
+        dialog.exec()
 
     def export_selected_archive_game(self):
         row=self.archive_table.currentRow()
