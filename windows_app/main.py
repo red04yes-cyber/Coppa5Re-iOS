@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, os, random, sys, shutil, hashlib, math, csv, time
+import json, os, random, sys, shutil, hashlib, math, csv, time, subprocess
 from datetime import datetime
 from pathlib import Path
 from itertools import combinations
@@ -262,7 +262,13 @@ class EngineAnalysisWorker(QThread):
         engine = None
         try:
             import chess.engine
-            engine = chess.engine.SimpleEngine.popen_uci(self.engine_path, timeout=8)
+            popen_args={}
+            if os.name=="nt":
+                startupinfo=subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow=subprocess.SW_HIDE
+                popen_args={"creationflags":subprocess.CREATE_NO_WINDOW,"startupinfo":startupinfo}
+            engine = chess.engine.SimpleEngine.popen_uci(self.engine_path, timeout=8, **popen_args)
             try:
                 engine.configure({"Threads": 2, "Hash": 96})
             except Exception:
@@ -306,7 +312,7 @@ class BoardCard(QFrame):
         self.undo=QPushButton("↶  Annulla mossa"); self.undo.clicked.connect(lambda:self.app.undo(self.game_id))
         pgn=QPushButton("Esporta PGN"); pgn.clicked.connect(lambda:self.app.export_pgn(self.game_id))
         reset=QPushButton("Reset"); reset.clicked.connect(lambda:self.app.reset_board(self.game_id))
-        engine=QPushButton("Configura Stockfish"); engine.clicked.connect(self.app.choose_engine)
+        engine=QPushButton("STOCKFISH INTEGRATO"); engine.setEnabled(bool(self.app.find_engine()))
         controls.addWidget(self.undo); controls.addStretch(); controls.addWidget(engine); controls.addWidget(pgn); controls.addWidget(reset); lay.addLayout(controls)
         self.refresh()
     def refresh_selector(self):
@@ -461,6 +467,7 @@ class MainWindow(QMainWindow):
         if self.engine_path:
             candidates.append(Path(self.engine_path))
         candidates.extend([
+            Path(getattr(sys,"_MEIPASS",Path(__file__).resolve().parent)) / "stockfish" / "stockfish.exe",
             Path(sys.executable).resolve().parent / "stockfish.exe",
             Path(__file__).resolve().parent / "stockfish.exe",
             storage_path().parent / "stockfish.exe",
