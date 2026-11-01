@@ -76,6 +76,13 @@ jobs:
         run: |
           if (!(Test-Path "dist/Coppa5Re.exe")) { throw "Coppa5Re.exe non trovato" }
           Get-Item "dist/Coppa5Re.exe" | Format-List Name,Length
+      - name: Smoke test compiled one-file EXE resources
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          & "dist/Coppa5Re.exe" --bundle-smoke
+          if ($LASTEXITCODE -ne 0) { throw "EXE non trova Stockfish o il logo nel bundle (exit code $LASTEXITCODE)" }
       - name: Add C5R logo and Stockfish notices to distribution
         shell: pwsh
         run: |
