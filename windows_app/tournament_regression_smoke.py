@@ -49,6 +49,34 @@ try:
     assert resign_pgn.headers["Result"] == "0-1"
     assert resign_pgn.headers["Termination"] == "abandoned"
 
+    # Article 5: the 15+3 clock awards +3 to the player who just moved.
+    window.engine_enabled = False
+    window.results = {}
+    window.moves = {}
+    window.boards.clear()
+    window.clocks.clear()
+    window.start_clock("R1-M1")
+    initial_white = window.clock_data("R1-M1")["white"]
+    window.record_move("R1-M1", "e2e4")
+    assert window.clock_data("R1-M1")["white"] == initial_white + 3
+
+    # Checkmate and stalemate are detected automatically after the terminal move.
+    window.moves = {}
+    window.boards.clear()
+    window.clocks.clear()
+    window.results = {}
+    for uci in ("f2f3", "e7e5", "g2g4", "d8h4"):
+        window.record_move("R1-M1", uci)
+    assert window.results["R1-M1"] == "0-1"
+    assert window.game_terminations["R1-M1"]["detail"] == "checkmate"
+    window.results = {}
+    window.moves = {}
+    window.boards.clear()
+    window.boards["R1-M1"] = chess.Board("7k/5K2/8/6Q1/8/8/8/8 w - - 0 1")
+    window.record_move("R1-M1", "g5g6")
+    assert window.results["R1-M1"] == "1/2-1/2"
+    assert window.game_terminations["R1-M1"]["detail"] == "stalemate"
+
     # Move annotations and the local C5R precision calculation are preserved in PGN.
     window.results = {"R1-M1": "1/2-1/2"}
     window.moves = {"R1-M1": ["e2e4"]}
