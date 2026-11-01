@@ -1611,8 +1611,9 @@ class MainWindow(QMainWindow):
             writer=csv.writer(file,delimiter=";")
             writer.writerow(["Posizione","Giocatore","Partite","Vittorie","Patte","Sconfitte","Penalità","Punti","Spareggio"])
             for position,row in enumerate(self.standings(),1):
+                tied_group=[item["id"] for item in self.standings() if item["points"]==row["points"]]
                 writer.writerow([position,name(row["id"]),row["played"],row["wins"],row["draws"],row["losses"],
-                    row["penalty"],row["points"],self.tie_break_value(row["id"])])
+                    row["penalty"],row["points"],self.tie_break_value(row["id"],tied_group)])
         self.statusBar().showMessage("Classifica CSV esportata.",2500)
 
     def export_standings_pdf(self):
@@ -1625,7 +1626,7 @@ class MainWindow(QMainWindow):
             painter.drawText(180,220,"COPPA DEI 5 RE")
             painter.setPen(QColor("#222222")); painter.setFont(QFont("Segoe UI",11))
             painter.drawText(180,300,"CLASSIFICA GENERALE")
-            painter.drawText(180,360,f"Tempo: {self.time_control}    Spareggio: {self.tie_break}")
+            painter.drawText(180,360,"Cadenza: qualificazione 15+3 · playoff 30+10    Spareggio: Art. 8")
             y=470
             painter.setFont(QFont("Segoe UI",9,QFont.Weight.Bold))
             painter.drawText(180,y,"POS   GIOCATORE   G   V   X   P   PEN.   PT"); y+=65
@@ -2017,8 +2018,8 @@ class MainWindow(QMainWindow):
             point_group=[row for row in rows if row["points"]==points]
             if len(point_group)>1:
                 ids=[row["id"] for row in point_group]
-                keys=[self.tie_break_value(player_id,ids) for player_id in ids]
-                if len(set(keys))<len(keys):
+                values=[self.tie_break_value(player_id,ids) for player_id in ids]
+                if len(set(values))<len(values):
                     unresolved_ties=True
                     break
         self.st_summary.setText(f"PARTITE CONCLUSE  {concluded}/10  ·  ANNULLATE {voided}  ·  PENALITÀ {len(self.penalties)}" +
