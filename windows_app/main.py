@@ -831,6 +831,8 @@ QTableWidget{{background:{PANEL};alternate-background-color:#141E29;border:1px s
 QTableWidget::item{{padding:12px 8px;border-bottom:1px solid {LINE};}}
 QHeaderView::section{{background:#1A2633;color:{GOLD};padding:11px 8px;border:none;font-size:10px;font-weight:900;}}
 QListWidget{{background:{PANEL};border:1px solid {LINE};border-radius:10px;padding:8px;}}
+QProgressBar{{background:#0D141D;color:{TEXT};border:1px solid {LINE};border-radius:6px;text-align:center;font-size:10px;font-weight:800;}}
+QProgressBar::chunk{{background:#B68D48;border-radius:5px;}}
 QListWidget::item{{padding:12px;border-bottom:1px solid {LINE};}}
 QListWidget::item:selected{{background:#253546;color:{GOLD};}}
 QStatusBar{{background:#0D131B;color:{MUTED};border-top:1px solid {LINE};}}
