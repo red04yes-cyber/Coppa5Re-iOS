@@ -491,13 +491,28 @@ class MainWindow(QMainWindow):
             self.boards[gid]=b
         return self.boards[gid]
     def record_move(self,gid,uci):
-        if self.results.get(gid): self.statusBar().showMessage("Partita conclusa: rimuovi il risultato prima di continuare.",3500); return
+        if self.results.get(gid):
+            self.statusBar().showMessage("Partita conclusa: rimuovi il risultato prima di continuare.",3500); return
         b=self.get_board(gid)
         try:
-            m=chess.Move.from_uci(uci)
-            if m not in b.legal_moves: self.statusBar().showMessage("Mossa illegale: non registrata.",3000); return
-            b.push(m); self.moves[gid]=[x.uci() for x in b.move_stack]; self.save(); self.refresh_all()
-        except Exception as exc: self.statusBar().showMessage(f"Mossa non registrata: {exc}",4000)
+            move=chess.Move.from_uci(uci)
+            if move not in b.legal_moves:
+                self.statusBar().showMessage("Mossa illegale: non registrata.",3000); return
+            mover="white" if b.turn else "black"
+            clock=self.clock_data(gid)
+            b.push(move)
+            if clock.get("started"): clock[mover]+=self.increment_seconds()
+            self.moves[gid]=[x.uci() for x in b.move_stack]
+            self.log_operation("Mossa",gid,"",uci)
+            outcome=b.outcome(claim_draw=True)
+            if outcome is not None:
+                clock["started"]=False
+                self.set_result(gid,b.result(claim_draw=True),confirm=False,
+                    detail=outcome.termination.name.replace("_"," ").lower())
+                self.statusBar().showMessage("Partita terminata automaticamente: "+outcome.termination.name.replace("_"," ").lower(),5000)
+            self.save(); self.refresh_all()
+        except Exception as exc:
+            self.statusBar().showMessage(f"Mossa non registrata: {exc}",4000)
     def undo(self,gid):
         b=self.get_board(gid)
         if b.move_stack and not self.results.get(gid):
@@ -505,10 +520,23 @@ class MainWindow(QMainWindow):
     def reset_board(self,gid):
         if QMessageBox.question(self,"Reset","Cancellare tutte le mosse di questa partita?")==QMessageBox.StandardButton.Yes:
             self.boards[gid]=chess.Board(); self.moves[gid]=[]; self.save(); self.refresh_all()
-    def set_result(self,gid,value):
+    def set_result(self,gid,value,confirm=True,detail="inserimento manuale"):
+        old=self.results.get(gid)
+        if old==value: return
+        if old is not None and confirm:
+            answer=QMessageBox.question(self,"Conferma modifica risultato",
+                f"La partita {gid} ha già risultato {old}. Vuoi sostituirlo con {value or 'In corso'}?",
+                QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if answer!=QMessageBox.StandardButton.Yes:
+                self.refresh_all(); return
         if value is None: self.results.pop(gid,None)
-        else: self.results[gid]=value
-        self.save(); self.refresh_all(); self.statusBar().showMessage("Risultato salvato · classifica e quote aggiornate.",3000)
+        else:
+            self.results[gid]=value
+            self.clock_data(gid)["started"]=False
+        self.log_operation("Risultato",gid,old or "In corso",value or "In corso",detail)
+        self.save(); self.refresh_all()
+        self.statusBar().showMessage("Risultato salvato · classifica e quote aggiornate.",3000)
     def clock_data(self,gid):
         if gid not in self.clocks:
             base,_=self.time_control.split("+"); seconds=int(base)*60
