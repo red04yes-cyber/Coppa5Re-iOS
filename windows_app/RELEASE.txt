@@ -1,1 +1,22 @@
 Coppa5Re Windows executable. One-file build, reduced dependency collection.
+
+DIGITAL SIGNING (optional, recommended for distribution)
+The GitHub Actions workflow signs dist/Coppa5Re.exe only when BOTH repository Actions
+secrets below are configured:
+- C5R_SIGNING_CERT_BASE64: Base64-encoded PFX/PKCS#12 code-signing certificate.
+- C5R_SIGNING_CERT_PASSWORD: password protecting that PFX.
+
+Use a code-signing certificate issued by a trusted public certificate authority.
+Do not use a self-signed certificate for Smart App Control compatibility. Keep the
+PFX and its password out of the repository, source code, and workflow files.
+
+To create the Base64 value in PowerShell on the machine holding the PFX:
+  [Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\\path\\certificate.pfx")) | Set-Clipboard
+
+Add the two values under GitHub repository Settings > Secrets and variables > Actions.
+Then run the "Build Coppa dei 5 Re for Windows" workflow again.
+
+Without both secrets, the workflow deliberately creates an unsigned EXE.
+A valid Authenticode signature is an important prerequisite, but Smart App Control
+also applies Microsoft's reputation/security checks; signing alone cannot guarantee
+that every newly signed build will be allowed immediately.
