@@ -781,7 +781,9 @@ class MainWindow(QMainWindow):
             return
         try:
             snapshot=json.loads(path.read_text(encoding="utf-8"))
-            if not snapshot.get("moves") and not any(c.get("started") for c in snapshot.get("clocks",{}).values()):
+            has_moves=any(bool(items) for items in snapshot.get("moves",{}).values())
+            has_running_clock=any(c.get("started") for c in snapshot.get("clocks",{}).values())
+            if not has_moves and not has_running_clock:
                 path.unlink(missing_ok=True)
                 return
             answer=QMessageBox.question(
