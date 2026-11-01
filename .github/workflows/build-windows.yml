@@ -86,7 +86,10 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: |
           & "dist/Coppa5Re.exe" --bundle-smoke
-          if ($LASTEXITCODE -ne 0) { throw "EXE non trova Stockfish o il logo nel bundle (exit code $LASTEXITCODE)" }
+          $code = $LASTEXITCODE
+          $report = Join-Path $env:TEMP "c5r-bundle-smoke.txt"
+          if (Test-Path $report) { Get-Content $report }
+          if ($code -ne 0) { throw "Smoke test EXE monofile fallito (exit code $code)" }
       - name: Add C5R logo and Stockfish notices to distribution
         shell: pwsh
         run: |
