@@ -543,7 +543,7 @@ class BoardCard(QFrame):
         self.next_move_btn.setEnabled(self.history_index<len(board.move_stack))
         self.refresh_clock()
         replay=chess.Board(); san=[]
-        for mv in board.move_stack:
+        for mv in board.move_stack[:self.history_index]:
             prefix=f"{replay.fullmove_number}. " if replay.turn==chess.WHITE else f"{replay.fullmove_number}... "
             san.append(prefix+replay.san(mv)); replay.push(mv)
         self.history.setText("MOSSE  ·  "+("  ".join(san[-12:]) if san else "Nessuna mossa"))
