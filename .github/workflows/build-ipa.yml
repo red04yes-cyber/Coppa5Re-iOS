@@ -1,0 +1,36 @@
+name: Build Coppa5Re unsigned IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: xcodegen generate
+      - name: Build unsigned iOS app
+        run: |
+          xcodebuild -project Coppa5Re.xcodeproj -scheme Coppa5Re -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/Coppa5Re.app Payload/
+          /usr/bin/zip -r Coppa5Re-unsigned.ipa Payload
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Coppa5Re-unsigned-IPA
+          path: Coppa5Re-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
