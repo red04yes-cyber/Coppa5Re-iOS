@@ -1,18 +1,18 @@
 from __future__ import annotations
-import json, os, random, sys
+import json, os, random, sys, shutil, hashlib, math
 from datetime import datetime
 from pathlib import Path
 from itertools import combinations
 import chess
 import chess.pgn
-from PySide6.QtCore import Qt, QSize, Signal
+from PySide6.QtCore import Qt, QSize, Signal, QThread
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QComboBox,
     QDoubleSpinBox, QLineEdit, QVBoxLayout, QHBoxLayout, QGridLayout, QTabWidget,
     QTableWidget, QTableWidgetItem, QHeaderView, QScrollArea, QMessageBox,
     QListWidget, QInputDialog, QFileDialog, QAbstractItemView, QSizePolicy,
-    QDialog, QDialogButtonBox
+    QDialog, QDialogButtonBox, QProgressBar
 )
 
 APP_NAME = "Coppa dei 5 Re"
@@ -249,6 +249,38 @@ class BoardWidget(QWidget):
             self.selected=None; self.targets=set()
         self.update()
 
+class EngineAnalysisWorker(QThread):
+    analysisReady = Signal(str, int)
+
+    def __init__(self, engine_path, game_id, board, parent=None):
+        super().__init__(parent)
+        self.engine_path = engine_path
+        self.game_id = game_id
+        self.position = board.copy(stack=True)
+
+    def run(self):
+        engine = None
+        try:
+            import chess.engine
+            engine = chess.engine.SimpleEngine.popen_uci(self.engine_path, timeout=8)
+            try:
+                engine.configure({"Threads": 2, "Hash": 96})
+            except Exception:
+                pass
+            info = engine.analyse(self.position, chess.engine.Limit(depth=12))
+            score = info["score"].white().score(mate_score=10000)
+            if score is not None:
+                self.analysisReady.emit(self.game_id, int(score))
+        except Exception:
+            pass
+        finally:
+            if engine is not None:
+                try:
+                    engine.quit()
+                except Exception:
+                    pass
+
+
 class BoardCard(QFrame):
     def __init__(self,app,slot,initial):
         super().__init__(); self.app=app; self.slot=slot; self.game_id=initial
@@ -261,6 +293,10 @@ class BoardCard(QFrame):
         self.match=QLabel(); self.match.setObjectName("MatchTitle"); lay.addWidget(self.match)
         self.board=BoardWidget(True); self.board.moveRequested.connect(self.move); lay.addWidget(self.board,1)
         self.history=QLabel("MOSSE  ·  Nessuna mossa"); self.history.setObjectName("Muted"); self.history.setWordWrap(True); self.history.setMaximumHeight(48); lay.addWidget(self.history)
+        self.eval_bar=QProgressBar(); self.eval_bar.setRange(0,1000); self.eval_bar.setValue(500)
+        self.eval_bar.setTextVisible(True); self.eval_bar.setFormat("VALUTAZIONE · motore non configurato")
+        self.eval_bar.setFixedHeight(19); lay.addWidget(self.eval_bar)
+        self.engine_worker=None
         bottom=QHBoxLayout(); self.turn=QLabel(); self.turn.setObjectName("Muted"); bottom.addWidget(self.turn,1)
         self.result=QComboBox()
         for value,label in RESULT_OPTIONS: self.result.addItem(label,value)
@@ -270,7 +306,8 @@ class BoardCard(QFrame):
         self.undo=QPushButton("↶  Annulla mossa"); self.undo.clicked.connect(lambda:self.app.undo(self.game_id))
         pgn=QPushButton("Esporta PGN"); pgn.clicked.connect(lambda:self.app.export_pgn(self.game_id))
         reset=QPushButton("Reset"); reset.clicked.connect(lambda:self.app.reset_board(self.game_id))
-        controls.addWidget(self.undo); controls.addStretch(); controls.addWidget(pgn); controls.addWidget(reset); lay.addLayout(controls)
+        engine=QPushButton("Configura Stockfish"); engine.clicked.connect(self.app.choose_engine)
+        controls.addWidget(self.undo); controls.addStretch(); controls.addWidget(engine); controls.addWidget(pgn); controls.addWidget(reset); lay.addLayout(controls)
         self.refresh()
     def refresh_selector(self):
         current = self.game_id
@@ -286,6 +323,35 @@ class BoardCard(QFrame):
             self.game_id=value
             self.refresh()
     def move(self,uci): self.app.record_move(self.game_id,uci)
+    def update_evaluation(self, gid, board):
+        path=self.app.engine_path or self.app.find_engine()
+        if not path:
+            self.eval_bar.setValue(500)
+            self.eval_bar.setFormat("VALUTAZIONE · configura Stockfish per attivarla")
+            return
+        if self.engine_worker is not None and self.engine_worker.isRunning():
+            return
+        self.eval_bar.setFormat("ANALISI STOCKFISH · profondità 12…")
+        worker=EngineAnalysisWorker(path,gid,board,self)
+        worker.analysisReady.connect(self.show_evaluation)
+        self.engine_worker=worker
+        worker.start()
+    def show_evaluation(self, gid, score):
+        if gid != self.game_id:
+            return
+        white_pct=1.0/(1.0+math.exp(-max(-4000,min(4000,score))/400.0))
+        self.eval_bar.setValue(int(white_pct*1000))
+        if score >= 10000:
+            label="BIANCO · MATTO"
+        elif score <= -10000:
+            label="NERO · MATTO"
+        elif score > 0:
+            label=f"BIANCO +{score/100:.2f} · {white_pct*100:.0f}%"
+        elif score < 0:
+            label=f"NERO +{abs(score)/100:.2f} · {white_pct*100:.0f}%"
+        else:
+            label="PARI · 50%"
+        self.eval_bar.setFormat(label)
     def refresh(self):
         self.refresh_selector()
         gid,r,w,b=game(self.game_id); board=self.app.get_board(gid)
@@ -293,6 +359,7 @@ class BoardCard(QFrame):
         self.turn.setText("PARTITA CONCLUSA · SCACCHIERA BLOCCATA" if self.app.results.get(gid) else
                           f"AL MUOVERE: {'BIANCO' if board.turn else 'NERO'} · {board.fullmove_number}ª mossa")
         self.board.set_position(board,bool(self.app.results.get(gid)))
+        self.update_evaluation(gid, board)
         replay=chess.Board(); san=[]
         for mv in board.move_stack:
             prefix=f"{replay.fullmove_number}. " if replay.turn==chess.WHITE else f"{replay.fullmove_number}... "
@@ -322,7 +389,18 @@ class BroadcastWindow(QWidget):
         row=QHBoxLayout(); self.cards=[SpectatorCard("TAVOLO 01"),SpectatorCard("TAVOLO 02")]
         for c in self.cards: row.addWidget(c,1)
         root.addLayout(row,1); self.footer=QLabel(); self.footer.setStyleSheet(f"color:{GOLD};font-size:15px;font-weight:800;padding:10px;")
-        root.addWidget(self.footer); self.refresh_from_app()
+        root.addWidget(self.footer)
+        controls=QHBoxLayout()
+        back=QPushButton("TORNA ALLA REGIA")
+        back.setStyleSheet(f"background:{GOLD};color:#10151B;font-weight:900;padding:10px 18px;")
+        back.clicked.connect(self.return_to_control)
+        controls.addStretch(); controls.addWidget(back); root.addLayout(controls)
+        self.refresh_from_app()
+    def return_to_control(self):
+        self.hide()
+        self.app.showNormal()
+        self.app.raise_()
+        self.app.activateWindow()
     def refresh_from_app(self):
         for c,live in zip(self.cards,self.app.live_cards): c.update_game(self.app,live.game_id)
         self.footer.setText("CLASSIFICA     "+"   •   ".join(f"{name(x['id'])} {x['points']:.1f} pt" for x in self.app.standings()))
@@ -334,14 +412,14 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__(); self.setWindowTitle("Coppa dei 5 Re · Control Room")
         self.resize(1500,950); self.setMinimumSize(1160,780)
-        self.results={}; self.penalties=[]; self.moves={}; self.boards={}; self.broadcast=None
+        self.results={}; self.penalties=[]; self.moves={}; self.boards={}; self.broadcast=None; self.engine_path=None
         self.load_state(); self.build_ui(); self.refresh_all()
     def load_state(self):
         path=storage_path()
         if path.exists():
             try:
                 data=json.loads(path.read_text(encoding="utf-8"))
-                self.results=data.get("results",{}); self.penalties=data.get("penalties",[]); self.moves=data.get("moves",{})
+                self.results=data.get("results",{}); self.penalties=data.get("penalties",[]); self.moves=data.get("moves",{}); self.engine_path=data.get("engine_path")
                 saved_schedule=data.get("schedule")
                 if saved_schedule:
                     parsed=[(g["id"],int(g["round"]),g["white"],g["black"]) for g in saved_schedule]
@@ -356,8 +434,32 @@ class MainWindow(QMainWindow):
         path=storage_path(); tmp=path.with_suffix(".tmp")
         stored_schedule=[{"id":gid,"round":rnd,"white":white,"black":black} for gid,rnd,white,black in GAMES]
         tmp.write_text(json.dumps({"results":self.results,"penalties":self.penalties,"moves":self.moves,
-                                  "schedule":stored_schedule,"saved_at":datetime.now().isoformat(timespec="seconds")},ensure_ascii=False,indent=2),encoding="utf-8")
+                                  "schedule":stored_schedule,"engine_path":self.engine_path,"saved_at":datetime.now().isoformat(timespec="seconds")},ensure_ascii=False,indent=2),encoding="utf-8")
         tmp.replace(path)
+    def find_engine(self):
+        candidates=[]
+        if self.engine_path:
+            candidates.append(Path(self.engine_path))
+        candidates.extend([
+            Path(sys.executable).resolve().parent / "stockfish.exe",
+            Path(__file__).resolve().parent / "stockfish.exe",
+            storage_path().parent / "stockfish.exe",
+        ])
+        found=shutil.which("stockfish")
+        if found:
+            candidates.insert(0,Path(found))
+        for candidate in candidates:
+            if candidate.is_file():
+                self.engine_path=str(candidate)
+                return self.engine_path
+        return None
+    def choose_engine(self):
+        path,_=QFileDialog.getOpenFileName(self,"Seleziona motore Stockfish","","Programmi (*.exe);;Tutti i file (*)")
+        if path:
+            self.engine_path=path
+            self.save()
+            self.refresh_all()
+            self.statusBar().showMessage("Stockfish configurato: valutazione attiva sulle scacchiere.",4000)
     def get_board(self,gid):
         if gid not in self.boards:
             b=chess.Board()
@@ -408,20 +510,23 @@ class MainWindow(QMainWindow):
         rows=[{"id":p,"played":played[p],"wins":wins[p],"draws":draws[p],"losses":losses[p],
                "penalty":pen[p],"points":pts[p]+pen[p]} for p in PLAYERS]
         return sorted(rows,key=lambda x:(-x["points"],ORDER.index(x["id"])))
-    def odds(self,n=7000):
+    def odds(self,n=15000):
         raw,played,_,_,_=self.raw_stats(); pen=self.penalty_points()
         current={p:raw[p]+pen[p] for p in PLAYERS}
-        form={p:(raw[p]/played[p] if played[p] else .5) for p in PLAYERS}
+        form={p:(raw[p]+1.0)/(played[p]+2.0) for p in PLAYERS}
         remaining=[g for g in GAMES if not self.results.get(g[0])]
         win={p:0.0 for p in PLAYERS}; top={p:0.0 for p in PLAYERS}
-        rng=random.Random(20261101+len(self.results)*101+len(self.penalties)*17+int(sum(current.values())*10))
+        seed_payload=json.dumps({"results":self.results,"penalties":self.penalties,
+                                 "schedule":GAMES},sort_keys=True,ensure_ascii=False,default=str)
+        seed=int.from_bytes(hashlib.sha256(seed_payload.encode("utf-8")).digest()[:8],"big")
+        rng=random.Random(seed)
         for _ in range(n):
             score=current.copy()
             for gid,r,w,b in remaining:
                 base_white, base_black, (pw,pd,pb)=PAIR_PRIORS[frozenset((w,b))]
                 if w != base_white:
                     pw, pb = pb, pw
-                shift=max(-.12,min(.12,.09*(form[w]-form[b])))
+                shift=max(-.18,min(.18,.20*(form[w]-form[b])))
                 pw=max(.025,pw+shift); pb=max(.025,pb-shift); total=pw+pd+pb
                 pw,pd= pw/total,pd/total
                 draw=rng.random()
@@ -658,7 +763,7 @@ class MainWindow(QMainWindow):
                 item=QTableWidgetItem(val); item.setTextAlignment(Qt.AlignmentFlag.AlignCenter if c else Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignLeft)
                 if p=="simone": item.setForeground(QColor(GOLD))
                 self.odds_table.setItem(i,c,item)
-        self.odds_footer.setText(f"7.000 scenari simulati · {len(self.results)} risultati registrati · quota equa = 1 / probabilità stimata.")
+        self.odds_footer.setText(f"15.000 scenari simulati · aggiornamento deterministico a ogni risultato, penalità o calendario · quota equa = 1 / probabilità stimata.")
     def refresh_penalties(self):
         self.pen_list.clear()
         if not self.penalties: self.pen_list.addItem("Nessuna penalità registrata.")
@@ -672,7 +777,12 @@ class MainWindow(QMainWindow):
         self.sf2.labels[1].setText("2°  "+names[1]); self.sf2.labels[2].setText("3°  "+names[2])
     def open_broadcast(self):
         if self.broadcast is None: self.broadcast=BroadcastWindow(self)
-        self.broadcast.refresh_from_app(); self.broadcast.showFullScreen(); self.broadcast.raise_(); self.broadcast.activateWindow()
+        self.broadcast.refresh_from_app()
+        self.broadcast.showNormal()
+        self.broadcast.resize(1180,760)
+        self.broadcast.show()
+        self.broadcast.raise_()
+        self.broadcast.activateWindow()
     def closeEvent(self,event):
         self.save()
         if self.broadcast: self.broadcast.close()
