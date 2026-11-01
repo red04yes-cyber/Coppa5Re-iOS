@@ -330,12 +330,20 @@ class BoardCard(QFrame):
             self.eval_bar.setFormat("VALUTAZIONE · configura Stockfish per attivarla")
             return
         if self.engine_worker is not None and self.engine_worker.isRunning():
+            self.pending_engine_position=(gid,board.copy(stack=True))
             return
+        self.pending_engine_position=None
         self.eval_bar.setFormat("ANALISI STOCKFISH · profondità 12…")
         worker=EngineAnalysisWorker(path,gid,board,self)
         worker.analysisReady.connect(self.show_evaluation)
+        worker.finished.connect(self.run_pending_evaluation)
         self.engine_worker=worker
         worker.start()
+    def run_pending_evaluation(self):
+        pending=getattr(self,"pending_engine_position",None)
+        if pending:
+            self.pending_engine_position=None
+            self.update_evaluation(pending[0],pending[1])
     def show_evaluation(self, gid, score):
         if gid != self.game_id:
             return
