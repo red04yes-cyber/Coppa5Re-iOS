@@ -1477,8 +1477,9 @@ class MainWindow(QMainWindow):
     def refresh_standings(self):
         rows=self.standings(); self.st_table.setRowCount(5); previous=None; rank=0
         for i,x in enumerate(rows):
-            if previous is None or x["points"]!=previous: rank=i+1
-            previous=x["points"]; vals=[f"{rank}°",name(x["id"]),str(x["played"]),str(x["wins"]),str(x["draws"]),str(x["losses"]),
+            current_key=(x["points"],self.tie_break_value(x["id"]))
+            if previous is None or current_key!=previous: rank=i+1
+            previous=current_key; vals=[f"{rank}°",name(x["id"]),str(x["played"]),str(x["wins"]),str(x["draws"]),str(x["losses"]),
                    f"{x['penalty']:+.1f}" if x["penalty"] else "—",f"{x['points']:.1f}"]
             for c,val in enumerate(vals):
                 item=QTableWidgetItem(("🥇 " if rank==1 else "🥈 " if rank==2 else "🥉 " if rank==3 else "")+val if c==0 else val); item.setTextAlignment(Qt.AlignmentFlag.AlignCenter if c!=1 else Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignLeft)
