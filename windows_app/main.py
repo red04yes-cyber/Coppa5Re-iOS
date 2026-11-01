@@ -783,8 +783,7 @@ class MainWindow(QMainWindow):
         dialog=QDialog(self); dialog.setWindowTitle(f"Note arbitro · {gid}"); dialog.resize(620,420)
         layout=QVBoxLayout(dialog); content=QListWidget()
         for item in notes:
-            content.addItem(f"{item.get('time','')} · {item.get('kind','Nota')} · {item.get('referee','')}
-{item.get('text','')}")
+            content.addItem(f"{item.get('time','')} · {item.get('kind','Nota')} · {item.get('referee','')}\n{item.get('text','')}")
         layout.addWidget(content)
         close=QPushButton("CHIUDI"); close.clicked.connect(dialog.accept)
         layout.addWidget(close,0,Qt.AlignmentFlag.AlignRight); dialog.exec()
