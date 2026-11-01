@@ -1037,7 +1037,7 @@ class MainWindow(QMainWindow):
         if self.results.get(gid): return
         self.clock_data(gid)["started"]=True
         self.log_operation("Orologio avviato",gid,"fermo",self.time_control_for_game(gid))
-        self.save(); self.refresh_all()
+        self.save(); self.save_recovery(); self.refresh_all()
         self.statusBar().showMessage("Cronometro avviato.",2000)
     def set_time_control(self,value):
         # I controlli sono vincolati all'Art. 5: 15+3 in qualificazione, 30+10 nei playoff.
@@ -1385,19 +1385,39 @@ class MainWindow(QMainWindow):
         leader=self.standings()[0]
         self.dashboard_detail.setText(f"LEADER ATTUALE  ·  {name(leader['id'])}  ·  {leader['points']:.1f} punti     |     ARBITRO  ·  {self.referee or 'non impostato'}")
 
+    def archive_entries(self):
+        entries=[("qualification",g[0],g[1],g[2],g[3]) for g in GAMES if self.results.get(g[0])]
+        if hasattr(self,"playoff_pairs"):
+            labels={"sf1":"Semifinale 1","sf2":"Semifinale 2","third":"Finale 3°–4°","final":"Finale"}
+            for key in ("sf1","sf2","third","final"):
+                pair=self.playoff_pairs.get(key,(None,None))
+                if self.playoff_results.get(key) and all(pair):
+                    entries.append(("playoff",key,labels[key],pair[0],pair[1]))
+        return entries
+
     def refresh_archive(self):
         if not hasattr(self,"archive_table"): return
-        finished=[g for g in GAMES if self.results.get(g[0])]
-        self.archive_table.setRowCount(len(finished))
-        for row,(gid,rnd,white,black) in enumerate(finished):
-            precision,_=self.game_precision_summary(gid)
-            term=self.game_terminations.get(gid,{})
-            detail=term.get("detail","") if isinstance(term,dict) else str(term or "")
-            status="RITIRO / ANNULLATA" if self.results[gid]=="VOID" else (detail or f"{len(self.moves.get(gid,[]))} mosse · {len(self.match_notes.get(gid,[]))} note")
-            values=[f"ROUND {rnd}",gid,name(white),name(black),self.results[gid],
-                    f"{precision} · {status}" if self.move_reviews.get(gid) else status]
+        entries=self.archive_entries()
+        self.archive_table.setRowCount(len(entries))
+        for row,(kind,gid,round_label,white,black) in enumerate(entries):
+            if kind=="qualification":
+                precision,_=self.game_precision_summary(gid)
+                term=self.game_terminations.get(gid,{})
+                detail=term.get("detail","") if isinstance(term,dict) else str(term or "")
+                status="RITIRO / ANNULLATA" if self.results[gid]=="VOID" else (detail or f"{len(self.moves.get(gid,[]))} mosse · {len(self.match_notes.get(gid,[]))} note")
+                result=self.results[gid]
+                precision_status=f"{precision} · {status}" if self.move_reviews.get(gid) else status
+                values=[f"ROUND {round_label}",gid,name(white),name(black),result,precision_status]
+            else:
+                term=self.game_terminations.get(gid,{})
+                detail=term.get("detail","") if isinstance(term,dict) else str(term or "")
+                result=self.playoff_results[gid]
+                winner=self.playoff_winners.get(gid)
+                extra=f" · Armageddon: {name(winner)}" if winner else ""
+                values=[round_label,gid,name(white),name(black),result,(detail or "Risultato playoff")+extra]
             for col,value in enumerate(values):
-                item=QTableWidgetItem(value); item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                item=QTableWidgetItem(str(value)); item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                item.setData(Qt.ItemDataRole.UserRole,(kind,gid))
                 self.archive_table.setItem(row,col,item)
 
     def refresh_h2h(self):
@@ -1535,10 +1555,13 @@ class MainWindow(QMainWindow):
         if row < 0:
             QMessageBox.information(self, "Analisi partita", "Seleziona una partita conclusa nell'archivio.")
             return
-        finished = [g for g in GAMES if self.results.get(g[0])]
-        if row >= len(finished):
+        entries=self.archive_entries()
+        if row>=len(entries):
             return
-        gid = finished[row][0]
+        kind,gid,_,_,_=entries[row]
+        if kind=="playoff":
+            QMessageBox.information(self,"Analisi playoff","Il tabellone salva risultati, terminazioni e vincitore Armageddon. Le mosse delle partite playoff non sono ancora registrate su una scacchiera nell'app.")
+            return
         saved = self.eval_history.get(gid)
         if saved:
             self.show_game_analysis(gid, saved)
@@ -1601,8 +1624,18 @@ class MainWindow(QMainWindow):
     def export_selected_archive_game(self):
         row=self.archive_table.currentRow()
         if row<0: return
-        finished=[g for g in GAMES if self.results.get(g[0])]
-        if row<len(finished): self.export_pgn(finished[row][0])
+        entries=self.archive_entries()
+        if row>=len(entries): return
+        kind,gid,_,_,_=entries[row]
+        if kind=="qualification":
+            self.export_pgn(gid)
+        else:
+            node=self.build_playoff_pgn(gid)
+            content=node.accept(chess.pgn.StringExporter(headers=True,variations=False,comments=True))
+            path,_=QFileDialog.getSaveFileName(self,"Esporta PGN playoff",f"{gid}.pgn","Partite PGN (*.pgn)")
+            if path:
+                Path(path).write_text(content,encoding="utf-8")
+                self.statusBar().showMessage("PGN playoff esportato.",2500)
 
     def export_standings_csv(self):
         path,_=QFileDialog.getSaveFileName(self,"Esporta classifica","Classifica-C5R.csv","CSV (*.csv)")
