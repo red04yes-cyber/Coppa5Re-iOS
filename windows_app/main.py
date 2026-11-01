@@ -169,7 +169,7 @@ class ScheduleEditorDialog(QDialog):
         self.schedule = proposed
         self.accept()
 
-RESULT_OPTIONS = [(None,"In corso"),("1-0","1–0"),("1/2-1/2","½–½"),("0-1","0–1")]
+RESULT_OPTIONS = [(None,"In corso"),("1-0","1–0"),("1/2-1/2","½–½"),("0-1","0–1"),("VOID","Annullata / esclusa")]
 GOLD="#D8B36A"; BG="#090D12"; PANEL="#111923"; PANEL2="#151F2B"
 LINE="#283444"; TEXT="#EEF1F5"; MUTED="#8F9BAA"; GREEN="#65C69A"
 
@@ -763,7 +763,7 @@ class MainWindow(QMainWindow):
             mover="white" if b.turn else "black"
             clock=self.clock_data(gid)
             b.push(move)
-            if clock.get("started"): clock[mover]+=self.increment_seconds()
+            if clock.get("started"): clock[mover]+=self.increment_seconds(gid)
             self.moves[gid]=[x.uci() for x in b.move_stack]
             self.log_operation("Mossa",gid,"",uci)
             outcome=b.outcome(claim_draw=True)
@@ -803,18 +803,21 @@ class MainWindow(QMainWindow):
         self.log_operation("Risultato",gid,old or "In corso",value or "In corso",detail)
         self.save(); self.refresh_all()
         self.statusBar().showMessage("Risultato salvato · classifica e quote aggiornate.",3000)
+    def time_control_for_game(self,gid):
+        return "30+10" if gid in ("sf1","sf2","final","third") or str(gid).startswith("PO-") else "15+3"
     def clock_data(self,gid):
+        control=self.time_control_for_game(gid)
         if gid not in self.clocks:
-            base,_=self.time_control.split("+"); seconds=int(base)*60
+            base,_=control.split("+"); seconds=int(base)*60
             self.clocks[gid]={"white":seconds,"black":seconds,"started":False}
         else:
-            base,_=self.time_control.split("+"); seconds=int(base)*60
+            base,_=control.split("+"); seconds=int(base)*60
             self.clocks[gid].setdefault("white",seconds)
             self.clocks[gid].setdefault("black",seconds)
             self.clocks[gid].setdefault("started",False)
         return self.clocks[gid]
-    def increment_seconds(self):
-        return int(self.time_control.split("+")[1])
+    def increment_seconds(self,gid=None):
+        return int(self.time_control_for_game(gid).split("+")[1])
     def clock_text(self,gid):
         c=self.clock_data(gid)
         def fmt(v):
@@ -893,7 +896,7 @@ class MainWindow(QMainWindow):
         wins={p:0 for p in PLAYERS}; draws={p:0 for p in PLAYERS}; losses={p:0 for p in PLAYERS}
         for gid,r,w,b in GAMES:
             result=self.results.get(gid)
-            if not result: continue
+            if not result or result=="VOID": continue
             played[w]+=1; played[b]+=1
             if result=="1-0": pts[w]+=1; wins[w]+=1; losses[b]+=1
             elif result=="0-1": pts[b]+=1; wins[b]+=1; losses[w]+=1
@@ -905,21 +908,37 @@ class MainWindow(QMainWindow):
             if item.get("player") in out: out[item["player"]]+=float(item.get("points",0))
         return out
     def tie_break_value(self,p,group=None):
-        raw,played,wins,draws,losses=self.raw_stats()
-        selected=set(group or PLAYERS.keys())
-        if self.tie_break=="Numero vittorie": return wins[p]
-        value=0.0
-        for gid,r,white,black in GAMES:
+        """Art. 8: H2H only for two tied players, then Sonneborn-Berger, then wins."""
+        raw,_,wins,_,_=self.raw_stats()
+        penalties=self.penalty_points()
+        group_ids=list(group or PLAYERS.keys())
+        direct=0.0
+        if len(group_ids)==2:
+            opponent=next((x for x in group_ids if x!=p),None)
+            for gid,_,white,black in GAMES:
+                if {white,black}!={p,opponent}:
+                    continue
+                result=self.results.get(gid)
+                if result in (None,"VOID"):
+                    break
+                if (result=="1-0" and p==white) or (result=="0-1" and p==black):
+                    direct=1.0
+                elif result=="1/2-1/2":
+                    direct=0.5
+                else:
+                    direct=0.0
+                break
+        sonneborn=0.0
+        for gid,_,white,black in GAMES:
             result=self.results.get(gid)
-            if not result or p not in (white,black): continue
+            if result in (None,"VOID") or p not in (white,black):
+                continue
             opponent=black if p==white else white
-            if self.tie_break=="Scontro diretto" and opponent not in selected: continue
+            opponent_points=raw[opponent]+penalties[opponent]
             score=1.0 if (result=="1-0" and p==white) or (result=="0-1" and p==black) else (0.5 if result=="1/2-1/2" else 0.0)
-            if self.tie_break=="Scontro diretto": value+=score
-            elif self.tie_break=="Sonneborn-Berger": value+=raw[opponent]*score
-            elif self.tie_break=="Buchholz": value+=raw[opponent]
-            
-        return value
+            sonneborn += opponent_points*score
+        return (direct,sonneborn,wins[p])
+
     def standings(self):
         pts,played,wins,draws,losses=self.raw_stats(); pen=self.penalty_points()
         rows=[{"id":p,"played":played[p],"wins":wins[p],"draws":draws[p],"losses":losses[p],
@@ -930,7 +949,7 @@ class MainWindow(QMainWindow):
         for points in sorted(grouped,reverse=True):
             group=grouped[points]
             group_ids=[row["id"] for row in group]
-            group.sort(key=lambda row:(-self.tie_break_value(row["id"],group_ids),ORDER.index(row["id"])))
+            group.sort(key=lambda row:(tuple(-v for v in self.tie_break_value(row["id"],group_ids)),ORDER.index(row["id"])))
             ordered.extend(group)
         return ordered
     def odds(self,n=15000):
@@ -981,10 +1000,7 @@ class MainWindow(QMainWindow):
         sub=QLabel("CONTROL ROOM  ·  TOURNAMENT EDITION"); sub.setObjectName("Eyebrow")
         texts.addWidget(title); texts.addWidget(sub); header.addLayout(texts); header.addStretch()
         saved=QLabel("●  OFFLINE  ·  SALVATAGGIO AUTOMATICO"); saved.setObjectName("SavedBadge"); header.addWidget(saved)
-        time_label=QLabel("TEMPO"); time_label.setObjectName("Eyebrow"); header.addWidget(time_label)
-        self.live_time=QComboBox(); self.live_time.addItems(["15+3","30+10"])
-        self.live_time.setCurrentText(self.time_control); self.live_time.currentTextChanged.connect(self.set_time_control)
-        header.addWidget(self.live_time)
+        time_label=QLabel("QUALIFICAZIONE · 15+3   |   PLAYOFF · 30+10"); time_label.setObjectName("Eyebrow"); header.addWidget(time_label)
         stream=QPushButton("◉  VISTA STREAMING"); stream.setObjectName("PrimaryButton"); stream.clicked.connect(self.open_broadcast); header.addWidget(stream)
         outer.addLayout(header)
         workspace=QHBoxLayout(); workspace.setSpacing(12)
@@ -1078,10 +1094,9 @@ class MainWindow(QMainWindow):
         self.referee_input=QLineEdit(self.referee); self.referee_input.setPlaceholderText("Nome arbitro / direttore di gara")
         grid.addWidget(self.referee_input,0,1)
         grid.addWidget(QLabel("CRITERIO DI SPAREGGIO"),1,0)
-        self.tie_break_combo=QComboBox()
-        self.tie_break_combo.addItems(["Nessuno","Scontro diretto","Sonneborn-Berger","Buchholz","Numero vittorie"])
-        self.tie_break_combo.setCurrentText(self.tie_break if self.tie_break in ["Nessuno","Scontro diretto","Sonneborn-Berger","Buchholz","Numero vittorie"] else "Nessuno")
-        grid.addWidget(self.tie_break_combo,1,1)
+        tie_rules=QLabel("Art. 8 · Punti → Scontro diretto (solo due pari) → Sonneborn–Berger → Numero di vittorie → Armageddon / mini-girone")
+        tie_rules.setWordWrap(True); tie_rules.setObjectName("Muted")
+        grid.addWidget(tie_rules,1,1)
         save=QPushButton("SALVA IMPOSTAZIONI"); save.setObjectName("PrimaryButton"); save.clicked.connect(self.save_settings)
         grid.addWidget(save,2,1); layout.addWidget(card)
         desc=QLabel("Il criterio selezionato viene applicato soltanto in caso di pari punti. Con “Nessuno” gli ex aequo restano tali.")
@@ -1090,7 +1105,7 @@ class MainWindow(QMainWindow):
 
     def save_settings(self):
         self.referee=self.referee_input.text().strip()
-        self.tie_break=self.tie_break_combo.currentText()
+        self.tie_break="Regolamento Art. 8"
         self.log_operation("Impostazioni torneo","","",f"arbitro={self.referee}; spareggio={self.tie_break}")
         self.save(); self.refresh_all()
         self.statusBar().showMessage("Impostazioni torneo salvate.",2500)
@@ -1571,7 +1586,7 @@ class MainWindow(QMainWindow):
     def refresh_standings(self):
         rows=self.standings(); self.st_table.setRowCount(5); previous=None; rank=0
         for i,x in enumerate(rows):
-            current_key=(x["points"],self.tie_break_value(x["id"]))
+            current_key=(x["points"],self.tie_break_value(x["id"],[r["id"] for r in rows if r["points"]==x["points"]]))
             if previous is None or current_key!=previous: rank=i+1
             previous=current_key; vals=[f"{rank}°",name(x["id"]),str(x["played"]),str(x["wins"]),str(x["draws"]),str(x["losses"]),
                    f"{x['penalty']:+.1f}" if x["penalty"] else "—",f"{x['points']:.1f}"]
