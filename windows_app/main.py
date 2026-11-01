@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox, QLineEdit, QVBoxLayout, QHBoxLayout, QGridLayout, QTabWidget,
     QTableWidget, QTableWidgetItem, QHeaderView, QScrollArea, QMessageBox,
     QListWidget, QInputDialog, QFileDialog, QAbstractItemView, QSizePolicy,
-    QDialog, QDialogButtonBox, QProgressBar
+    QDialog, QDialogButtonBox, QProgressBar, QStackedWidget
 )
 
 APP_NAME = "Coppa dei 5 Re"
@@ -792,15 +792,21 @@ class MainWindow(QMainWindow):
         header.addWidget(self.live_time)
         stream=QPushButton("◉  VISTA STREAMING"); stream.setObjectName("PrimaryButton"); stream.clicked.connect(self.open_broadcast); header.addWidget(stream)
         outer.addLayout(header)
-        self.tabs=QTabWidget()
-        self.tabs.addTab(self.build_dashboard(),"DASHBOARD")
-        self.tabs.addTab(self.build_live(),"LIVE ARENA"); self.tabs.addTab(self.build_draw_page(),"ESTRAZIONE")
-        self.tabs.addTab(self.build_calendar(),"CALENDARIO"); self.tabs.addTab(self.build_standings(),"CLASSIFICA")
-        self.tabs.addTab(self.build_odds(),"QUOTE")
-        self.tabs.addTab(self.build_penalties(),"PENALITÀ"); self.tabs.addTab(self.build_playoffs(),"PLAYOFF")
-        self.tabs.addTab(self.build_archive(),"ARCHIVIO"); self.tabs.addTab(self.build_h2h(),"TESTA A TESTA")
-        self.tabs.addTab(self.build_audit(),"REGISTRO"); self.tabs.addTab(self.build_settings(),"IMPOSTAZIONI")
-        outer.addWidget(self.tabs,1)
+        workspace=QHBoxLayout(); workspace.setSpacing(12)
+        self.nav=QListWidget(); self.nav.setObjectName("Sidebar"); self.nav.setFixedWidth(190)
+        nav_items=["◈  DASHBOARD","♟  LIVE ARENA","♜  ESTRAZIONE","▦  CALENDARIO","☷  CLASSIFICA",
+                   "◉  QUOTE","⚑  PENALITÀ","♛  PLAYOFF","▤  ARCHIVIO","⇄  TESTA A TESTA",
+                   "☷  REGISTRO","⚙  IMPOSTAZIONI"]
+        self.nav.addItems(nav_items)
+        self.tabs=QStackedWidget()
+        pages=[self.build_dashboard(),self.build_live(),self.build_draw_page(),self.build_calendar(),
+               self.build_standings(),self.build_odds(),self.build_penalties(),self.build_playoffs(),
+               self.build_archive(),self.build_h2h(),self.build_audit(),self.build_settings()]
+        for page in pages: self.tabs.addWidget(page)
+        self.nav.currentRowChanged.connect(self.tabs.setCurrentIndex)
+        self.nav.setCurrentRow(0)
+        workspace.addWidget(self.nav); workspace.addWidget(self.tabs,1)
+        outer.addLayout(workspace,1)
         foot=QLabel("COPPA DEI 5 RE  /  DAL 15 NOVEMBRE 2026  /  DATI LOCALI SU QUESTO PC"); foot.setObjectName("Footnote")
         outer.addWidget(foot); self.setCentralWidget(root)
         self.statusBar().showMessage("Pronto · seleziona un pezzo e poi la casa di destinazione.")
