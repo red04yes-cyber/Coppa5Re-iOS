@@ -420,7 +420,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__(); self.setWindowTitle("Coppa dei 5 Re · Control Room")
         self.resize(1500,950); self.setMinimumSize(1160,780)
-        self.results={}; self.penalties=[]; self.moves={}; self.boards={}; self.broadcast=None; self.engine_path=None
+        self.results={}; self.penalties=[]; self.moves={}; self.boards={}; self.broadcast=None; self.engine_path=None; self._odds_cache_key=None; self._odds_cache=None
         self.load_state(); self.build_ui(); self.refresh_all()
     def load_state(self):
         path=storage_path()
@@ -526,7 +526,11 @@ class MainWindow(QMainWindow):
         win={p:0.0 for p in PLAYERS}; top={p:0.0 for p in PLAYERS}
         seed_payload=json.dumps({"results":self.results,"penalties":self.penalties,
                                  "schedule":GAMES},sort_keys=True,ensure_ascii=False,default=str)
-        seed=int.from_bytes(hashlib.sha256(seed_payload.encode("utf-8")).digest()[:8],"big")
+        digest=hashlib.sha256(seed_payload.encode("utf-8")).digest()
+        cache_key=(n,digest)
+        if cache_key==self._odds_cache_key and self._odds_cache is not None:
+            return self._odds_cache.copy()
+        seed=int.from_bytes(digest[:8],"big")
         rng=random.Random(seed)
         for _ in range(n):
             score=current.copy()
@@ -550,7 +554,10 @@ class MainWindow(QMainWindow):
                 share=min(1.0,slots/len(group))
                 for p in group: top[p]+=share
                 slots-=min(slots,len(group))
-        return {p:(win[p]/n,top[p]/n) for p in PLAYERS}
+        output={p:(win[p]/n,top[p]/n) for p in PLAYERS}
+        self._odds_cache_key=cache_key
+        self._odds_cache=output
+        return output.copy()
     def build_ui(self):
         root=QWidget(); outer=QVBoxLayout(root); outer.setContentsMargins(22,18,22,16); outer.setSpacing(14)
         header=QHBoxLayout(); crown=QLabel("♛"); crown.setStyleSheet(f"color:{GOLD};font-size:36px;font-weight:900;")
