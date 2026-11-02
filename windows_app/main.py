@@ -624,11 +624,15 @@ class MainWindow(QMainWindow):
         self._odds_cache_key=None; self._odds_cache=None
         self.time_control="15+3"; self.clocks={}; self.audit_log=[]; self.match_notes={}; self.referee=""
         self.tie_break="Regolamento Art. 8"; self.playoff_results={}; self.eval_history={}; self.clock_ticks=0; self.board_theme=0
-        self.game_terminations={}; self.move_reviews={}; self.withdrawn_players={}; self.recovery_path=storage_path().with_name("recovery.json")
+        self.game_terminations={}; self.move_reviews={}; self.withdrawn_players={}
+        self.move_annotations={}; self.round_closures={}
+        self.recovery_path=storage_path().with_name("recovery.json")
         self.offer_recovery()
         self.load_state(); self.build_ui(); self.refresh_all()
         self.clock_timer=QTimer(self); self.clock_timer.timeout.connect(self.tick_clocks); self.clock_timer.start(1000)
+        self.notification_timer=QTimer(self); self.notification_timer.timeout.connect(self.refresh_notification_badge); self.notification_timer.start(30000)
         self.install_shortcuts()
+        self.refresh_notification_badge()
     def load_state(self):
         path=storage_path()
         if path.exists():
@@ -641,6 +645,8 @@ class MainWindow(QMainWindow):
                 self.playoff_results=data.get("playoff_results",{}); self.playoff_winners=data.get("playoff_winners",{}); self.eval_history=data.get("eval_history",{})
                 self.game_terminations=data.get("game_terminations",{}); self.move_reviews=data.get("move_reviews",{})
                 self.withdrawn_players=data.get("withdrawn_players",{})
+                self.move_annotations=data.get("move_annotations",{})
+                self.round_closures=data.get("round_closures",{})
                 saved_schedule=data.get("schedule")
                 if saved_schedule:
                     parsed=[(g["id"],int(g["round"]),g["white"],g["black"]) for g in saved_schedule]
@@ -661,8 +667,10 @@ class MainWindow(QMainWindow):
                                   "eval_history":self.eval_history,"playoff_winners":getattr(self,"playoff_winners",{}),
                                   "game_terminations":self.game_terminations,"move_reviews":self.move_reviews,
                                   "withdrawn_players":self.withdrawn_players,
+                                  "move_annotations":self.move_annotations,"round_closures":self.round_closures,
                                   "saved_at":datetime.now().isoformat(timespec="seconds")},ensure_ascii=False,indent=2),encoding="utf-8")
         tmp.replace(path)
+        self._maybe_create_auto_snapshot()
     def offer_recovery(self):
         path=getattr(self,"recovery_path",storage_path().with_name("recovery.json"))
         if not path.exists():
@@ -894,6 +902,11 @@ class MainWindow(QMainWindow):
             self.results[gid]=value
             self.clock_data(gid)["started"]=False
             self.game_terminations[gid]={"termination":termination or ("adjudication" if value=="VOID" else "normal"),"detail":detail}
+        round_key = str(game(gid)[1])
+        if round_key in self.round_closures:
+            previous_closure = self.round_closures.pop(round_key)
+            self.log_operation("Turno riaperto", f"Round {round_key}", previous_closure, "Riaperto",
+                               "Un risultato del turno è stato modificato.")
         self.log_operation("Risultato",gid,old or "In corso",value or "In corso",detail)
         self.save(); self.save_recovery(); self.refresh_all()
         if value not in (None,"VOID") and self.moves.get(gid):
@@ -1149,6 +1162,13 @@ class MainWindow(QMainWindow):
         timing = QLabel("QUALIFICAZIONE 15+3   ·   PLAYOFF 30+10")
         timing.setObjectName("Muted")
         header.addWidget(timing)
+        self.notification_button = QPushButton("AVVISI · 0")
+        self.notification_button.setToolTip("Apri il centro notifiche")
+        self.notification_button.clicked.connect(self.open_notifications)
+        header.addWidget(self.notification_button)
+        palette = QPushButton("⌕  CERCA  ·  CTRL K")
+        palette.clicked.connect(self.open_command_palette)
+        header.addWidget(palette)
         stream = QPushButton("◉  VISTA STREAMING")
         stream.setObjectName("PrimaryButton")
         stream.clicked.connect(self.open_broadcast)
@@ -1171,13 +1191,23 @@ class MainWindow(QMainWindow):
         ]
         for key, text, icon_name in nav_items:
             self.nav.add_item(key, text, icon_name)
+        pro_items = [
+            ("players", "Giocatori", "user"),
+            ("compare", "Confronto", "versus"),
+            ("openings", "Aperture", "chart"),
+            ("health", "Health Check", "info"),
+        ]
+        self.nav.add_group("ANALISI E STRUMENTI")
+        for key, text, icon_name in pro_items:
+            self.nav.add_item(key, text, icon_name)
         self.nav.add_group("ARCHIVIO E CONTROLLO")
-        for key, text, icon_name in [
+        archive_items = [
             ("archive", "Archivio", "archive"),
             ("h2h", "Testa a testa", "versus"),
             ("audit", "Registro operazioni", "log"),
             ("settings", "Impostazioni", "settings"),
-        ]:
+        ]
+        for key, text, icon_name in archive_items:
             self.nav.add_item(key, text, icon_name)
         self.nav.finish()
 
@@ -1185,12 +1215,11 @@ class MainWindow(QMainWindow):
         pages = [
             self.build_dashboard(), self.build_live(), self.build_draw_page(),
             self.build_calendar(), self.build_standings(), self.build_odds(),
-            self.build_penalties(), self.build_playoffs(), self.build_archive(),
-            self.build_h2h(), self.build_audit(), self.build_settings(),
+            self.build_penalties(), self.build_playoffs(),
+            self.build_players(), self.build_compare(), self.build_openings(), self.build_health(),
+            self.build_archive(), self.build_h2h(), self.build_audit(), self.build_settings(),
         ]
-        self._page_keys = [item[0] for item in nav_items] + [
-            "archive", "h2h", "audit", "settings"
-        ]
+        self._page_keys = [item[0] for item in nav_items + pro_items + archive_items]
         for page in pages:
             scroll = QScrollArea()
             scroll.setWidgetResizable(True)
@@ -1564,7 +1593,8 @@ class MainWindow(QMainWindow):
 
     def install_shortcuts(self):
         shortcuts=[("Ctrl+S",self.save),("Ctrl+E",self.export_all_pgn),
-                   ("Ctrl+Shift+B",self.export_backup),("Ctrl+1",lambda:self.tabs.setCurrentIndex(1)),
+                   ("Ctrl+Shift+B",self.export_backup),("Ctrl+K",self.open_command_palette),
+                   ("Ctrl+1",lambda:self.tabs.setCurrentIndex(1)),
                    ("Ctrl+2",lambda:self.tabs.setCurrentIndex(2)),("Ctrl+3",lambda:self.tabs.setCurrentIndex(3)),
                    ("Ctrl+Z",lambda:self.undo(self.live_cards[0].game_id)),
                    ("Alt+Left",lambda:self.live_cards[0].previous_move()),
@@ -2241,6 +2271,8 @@ class MainWindow(QMainWindow):
             played=[p for g in GAMES if g[1]==rnd for p in (g[2],g[3])]
             BYES[rnd]=next(p for p in ORDER if p not in played)
         self.save(); self.refresh_all()
+        self.round_closures.clear()
+        self.log_operation("Calendario aggiornato", "", "Calendario precedente", "Nuovo calendario")
         self.statusBar().showMessage("Girone aggiornato e salvato sul PC.",3500)
         return True
 
@@ -2282,6 +2314,13 @@ class MainWindow(QMainWindow):
         for control in (self.calendar_search, self.filter_round, self.filter_player, self.filter_status):
             filters.addWidget(control, 2 if control is self.calendar_search else 1)
         filters_card.body.addLayout(filters)
+        wizard_row = QHBoxLayout()
+        wizard_row.addStretch(1)
+        round_wizard = QPushButton("ASSISTENTE OPERATIVO ROUND")
+        round_wizard.setObjectName("PrimaryButton")
+        round_wizard.clicked.connect(self.open_round_wizard)
+        wizard_row.addWidget(round_wizard)
+        filters_card.body.addLayout(wizard_row)
         for control in (self.calendar_search, self.filter_round, self.filter_player, self.filter_status):
             signal = control.textChanged if control is self.calendar_search else control.currentIndexChanged
             signal.connect(self.apply_calendar_filters)
