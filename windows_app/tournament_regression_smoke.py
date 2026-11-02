@@ -16,6 +16,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication, QMessageBox, QInputDialog, QFileDialog
 from PySide6.QtGui import QPixmap, QColor, QDesktopServices
 from PySide6.QtCore import Qt
+from PySide6.QtTest import QTest
 import chess
 
 from windows_app.main import MainWindow, PLAYERS, GAMES, storage_path
@@ -32,6 +33,7 @@ try:
     window.moves = {}
     window.boards.clear()
     window.set_result("R1-M1", "1-0", confirm=False, detail="Verifica visualizzazione")
+    QTest.qWait(350)  # Let the animated StatTile counter reach its final displayed value.
     assert window.calendar_combos["R1-M1"].currentData() == "1-0"
     assert window.calendar_status_labels["R1-M1"].text() == "CONCLUSA"
     assert "1/10" in window.st_summary.text()
