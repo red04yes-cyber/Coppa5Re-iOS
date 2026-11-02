@@ -161,7 +161,7 @@ class TournamentAnalyticsPage(QWidget):
             )
         def pct(row, key):
             return "—" if row[key + "_pct"] is None else f"{row[key + '_pct']:.1f}%"
-        self.player_detail.set(
+        self.player_detail.setText(
             f"BIANCO: {pct(w, 'win')} vittorie · {pct(w, 'draw')} patte · {pct(w, 'loss')} sconfitte "
             f"({w['played']} partite).\n"
             f"NERO: {pct(b, 'win')} vittorie · {pct(b, 'draw')} patte · {pct(b, 'loss')} sconfitte "
@@ -177,6 +177,7 @@ class TournamentAnalyticsPage(QWidget):
         openings = ", ".join(f"{label} ({count})" for label, count in summary["openings"][:6]) or "Non ancora disponibili"
         endings = ", ".join(f"{label} ({count})" for label, count in summary["endings"]) or "Non disponibili"
         avg_time = "N/D" if summary["average_move_seconds"] is None else f"{summary['average_move_seconds']:.1f} secondi"
+        avg_game = "N/D" if summary["average_game_duration_seconds"] is None else f"{summary['average_game_duration_seconds']/60:.1f} minuti"
         self.tournament_summary_label.setText(
             f"Partite concluse: {summary['completed']}/{len(self.schedule)}.\n"
             f"Aperture più giocate: {openings}.\n"
@@ -184,7 +185,8 @@ class TournamentAnalyticsPage(QWidget):
             f"Precisione: {summary['reviewed_moves']} mosse analizzate · "
             f"{summary['errors']['IMPRECISIONE']} imprecisioni · {summary['errors']['ERRORE']} errori · "
             f"{summary['errors']['GRAVE ERRORE']} gravi errori.\n"
-            f"Tempo medio per mossa: {avg_time} ({summary['timed_moves']} mosse cronometrate)."
+            f"Tempo medio per mossa: {avg_time} ({summary['timed_moves']} mosse cronometrate).\n"
+            f"Tempo medio di riflessione complessivo per partita: {avg_game} ({summary['games_with_timing']} partite con tempi disponibili)."
         )
         self.error_table.setRowCount(len(self.player_order))
         for row_index, pid in enumerate(self.player_order):
@@ -204,6 +206,14 @@ class TournamentAnalyticsPage(QWidget):
     def refresh_simulation(self):
         hypothetical = dict(self.app.results)
         for gid, combo in self.simulation_controls.items():
+            official_result = self.app.results.get(gid)
+            if official_result is not None:
+                combo.blockSignals(True)
+                combo.setCurrentIndex(0)
+                combo.blockSignals(False)
+                combo.setEnabled(False)
+                continue
+            combo.setEnabled(True)
             value = combo.currentData()
             if value:
                 hypothetical[gid] = value

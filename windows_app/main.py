@@ -16,6 +16,8 @@ try:
         EvalBar, Avatar, PlayerStrip, FormStrip, MatchLine, label as ui_label, pill as ui_pill, set_pill, button as ui_button
     )
     from .c5r_board import BoardWidget
+    from .c5r_analytics_page import TournamentAnalyticsPage
+    from .c5r_analytics import tournament_summary, player_time_statistics, player_performance
 except ImportError:
     import c5r_theme as T
     from c5r_widgets import (
@@ -24,6 +26,8 @@ except ImportError:
         EvalBar, Avatar, PlayerStrip, FormStrip, MatchLine, label as ui_label, pill as ui_pill, set_pill, button as ui_button
     )
     from c5r_board import BoardWidget
+    from c5r_analytics_page import TournamentAnalyticsPage
+    from c5r_analytics import tournament_summary, player_time_statistics, player_performance
 from PySide6.QtCore import Qt, QSize, Signal, QThread, QTimer, QRect, QUrl, QDateTime, QByteArray, QBuffer, QIODevice, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPdfWriter, QKeySequence, QShortcut, QDesktopServices, QPixmap, QIntValidator, QPainterPath
 from PySide6.QtSvg import QSvgRenderer
@@ -698,7 +702,7 @@ class MainWindow(QMainWindow):
         self._odds_cache_key=None; self._odds_cache=None
         self.time_control="15+3"; self.clocks={}; self.audit_log=[]; self.match_notes={}; self.referee=""
         self.tie_break="Regolamento Art. 8"; self.playoff_results={}; self.eval_history={}; self.clock_ticks=0; self.board_theme=0
-        self.game_terminations={}; self.move_reviews={}; self.withdrawn_players={}
+        self.game_terminations={}; self.move_reviews={}; self.withdrawn_players={}; self.move_times={}
         self.move_annotations={}; self.round_closures={}; self.incident_reports=[]; self.player_bios={}; self.notification_drafts=[]
         self.match_http_server=None; self.match_http_thread=None; self.match_http_host=""; self.match_http_port=0
         self.public_base_url=os.environ.get("C5R_PUBLIC_BASE_URL","").strip().rstrip("/")
@@ -736,7 +740,7 @@ class MainWindow(QMainWindow):
             self.audit_log=data.get("audit_log",[]); self.match_notes=data.get("match_notes",{})
             self.referee=data.get("referee",""); self.tie_break=data.get("tie_break","Nessuno")
             self.playoff_results=data.get("playoff_results",{}); self.playoff_winners=data.get("playoff_winners",{}); self.eval_history=data.get("eval_history",{})
-            self.game_terminations=data.get("game_terminations",{}); self.move_reviews=data.get("move_reviews",{})
+            self.game_terminations=data.get("game_terminations",{}); self.move_reviews=data.get("move_reviews",{}); self.move_times=data.get("move_times",{})
             self.withdrawn_players=data.get("withdrawn_players",{})
             self.move_annotations=data.get("move_annotations",{})
             self.round_closures=data.get("round_closures",{}); self.incident_reports=data.get("incident_reports",[]); self.player_bios=data.get("player_bios",{}); self.notification_drafts=data.get("notification_drafts",[])
@@ -761,6 +765,7 @@ class MainWindow(QMainWindow):
             for gid,clock in self.clocks.items():
                 if clock.get("started"):
                     clock["last_wall"]=now
+                    clock["turn_started_at"]=now
                     self._clock_runtime[gid]=time.monotonic()
             if fallback is not None:
                 QMessageBox.warning(self,"Archivio recuperato",
@@ -780,7 +785,7 @@ class MainWindow(QMainWindow):
             "clocks":self.clocks,"audit_log":self.audit_log,"match_notes":self.match_notes,
             "referee":self.referee,"tie_break":self.tie_break,"playoff_results":self.playoff_results,
             "eval_history":self.eval_history,"playoff_winners":getattr(self,"playoff_winners",{}),
-            "game_terminations":self.game_terminations,"move_reviews":self.move_reviews,
+            "game_terminations":self.game_terminations,"move_reviews":self.move_reviews,"move_times":self.move_times,
             "withdrawn_players":self.withdrawn_players,
             "move_annotations":self.move_annotations,"round_closures":self.round_closures,
             "ui_preferences":self.ui_preferences,"ui_profiles":self.ui_profiles,"incident_reports":self.incident_reports,"player_bios":self.player_bios,"notification_drafts":self.notification_drafts,
@@ -965,11 +970,19 @@ class MainWindow(QMainWindow):
             mover="white" if mover_color else "black"
             clock=self.clock_data(gid)
             if clock.get("started"):
+                turn_started=float(clock.get("turn_started_at",clock.get("last_wall",time.time())))
+                thinking_seconds=max(0.0,time.time()-turn_started)
                 side,remaining,_=self._advance_clock(gid)
                 if remaining<=0:
                     self.tick_clocks(); return
+                self.move_times.setdefault(gid,[]).append({
+                    "ply":len(b.move_stack)+1,"player":player_id,
+                    "seconds":round(thinking_seconds,2),"recorded_at":datetime.now().isoformat(timespec="seconds")
+                })
             b.push(move)
-            if clock.get("started"): clock[mover]+=self.increment_seconds(gid)
+            if clock.get("started"):
+                clock[mover]+=self.increment_seconds(gid)
+                clock["turn_started_at"]=time.time()
             self.moves[gid]=[x.uci() for x in b.move_stack]
             self.log_operation("Mossa",gid,"",uci)
             service=self.get_engine_service()
@@ -988,11 +1001,16 @@ class MainWindow(QMainWindow):
         b=self.get_board(gid)
         if b.move_stack and not self.results.get(gid):
             removed=b.pop(); self.moves[gid]=[x.uci() for x in b.move_stack]
+            if self.move_times.get(gid):
+                self.move_times[gid]=[item for item in self.move_times[gid] if int(item.get("ply",0))<=len(b.move_stack)]
+            clock=self.clock_data(gid)
+            if clock.get("started"):
+                clock["turn_started_at"]=time.time()
             self.log_operation("Mossa annullata",gid,removed.uci(),"")
             self.save(); self.refresh_all()
     def reset_board(self,gid):
         if QMessageBox.question(self,"Reset","Cancellare tutte le mosse di questa partita?")==QMessageBox.StandardButton.Yes:
-            self.boards[gid]=chess.Board(); self.moves[gid]=[]; self.clocks.pop(gid,None)
+            self.boards[gid]=chess.Board(); self.moves[gid]=[]; self.move_times.pop(gid,None); self.clocks.pop(gid,None)
             self.log_operation("Scacchiera resettata",gid,"","posizione iniziale")
             self.save(); self.refresh_all()
     def on_move_review_failed(self,gid,error):
@@ -1163,7 +1181,7 @@ class MainWindow(QMainWindow):
         clock["started"]=True
         clock["started_at"]=clock.get("started_at") or time.time()
         clock["overlong_alerted"]=bool(clock.get("overlong_alerted",False))
-        clock["last_wall"]=time.time(); self._clock_runtime[gid]=time.monotonic()
+        clock["last_wall"]=time.time(); clock["turn_started_at"]=time.time(); self._clock_runtime[gid]=time.monotonic()
         self.log_operation("Orologio avviato",gid,"fermo",self.time_control_for_game(gid))
         self.save(); self.save_recovery(); self.refresh_all()
         self.statusBar().showMessage("Cronometro avviato.",2000)
@@ -1454,6 +1472,7 @@ class MainWindow(QMainWindow):
             self.nav.add_item(key, text, icon_name)
         pro_items = [
             ("players", "Giocatori", "user"),
+            ("analytics", "Analisi torneo", "chart"),
             ("compare", "Confronto", "versus"),
             ("openings", "Aperture", "chart"),
             ("health", "Health Check", "info"),
@@ -1482,7 +1501,7 @@ class MainWindow(QMainWindow):
             self.build_dashboard(), self.build_live(), self.build_draw_page(),
             self.build_calendar(), self.build_standings(), self.build_odds(),
             self.build_penalties(), self.build_playoffs(),
-            self.build_players(), self.build_compare(), self.build_openings(), self.build_health(), self.build_communications(),
+            self.build_players(), TournamentAnalyticsPage(self, PLAYERS, ORDER, GAMES, name, T.player_tint), self.build_compare(), self.build_openings(), self.build_health(), self.build_communications(),
             self.build_history(), self.build_archive(), self.build_h2h(), self.build_incidents(),
             self.build_audit(), self.build_settings(),
         ]
@@ -5860,6 +5879,89 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
             painter.end()
         self.statusBar().showMessage("Classifica PDF esportata.",2500)
 
+    def export_player_report_pdf(self, player_id):
+        if player_id not in PLAYERS:
+            QMessageBox.warning(self, "Scheda giocatore", "Giocatore non riconosciuto.")
+            return
+        data = self.player_profile_data(player_id)
+        profile_info = self.player_profile_info(player_id)
+        colors = data["colors"]
+        errors = {
+            key: sum(1 for reviews in self.move_reviews.values() for item in reviews
+                     if item.get("player") == player_id and str(item.get("label", "")).upper() == key)
+            for key in ("IMPRECISIONE", "ERRORE", "GRAVE ERRORE")
+        }
+        timing = player_time_statistics(self.move_times, player_id)
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Esporta scheda personale PDF",
+            f"Scheda-{re.sub(r'[^A-Za-z0-9_-]+', '-', name(player_id))}.pdf", "PDF (*.pdf)"
+        )
+        if not path:
+            return
+        writer = QPdfWriter(path)
+        writer.setTitle(f"Scheda personale · {name(player_id)}")
+        writer.setCreator("Coppa dei 5 Re · Control Room")
+        writer.setResolution(150)
+        painter = QPainter(writer)
+        try:
+            margin, width, y = 170, writer.width() - 340, 170
+            page_height = writer.height()
+            def write(text, size=10, bold=False, gap=14):
+                nonlocal y
+                font = QFont("Segoe UI", size, QFont.Weight.Bold if bold else QFont.Weight.Normal)
+                painter.setFont(font); painter.setPen(QColor("#202A35"))
+                rect = painter.fontMetrics().boundingRect(0, 0, width, 1800, Qt.TextFlag.TextWordWrap, str(text))
+                height = max(size + 10, rect.height())
+                if y + height + gap > page_height - margin:
+                    writer.newPage(); y = margin
+                painter.drawText(QRect(margin, y, width, height + 4), Qt.TextFlag.TextWordWrap, str(text))
+                y += height + gap
+            painter.setPen(QColor("#9A6A18")); painter.setFont(QFont("Segoe UI", 20, QFont.Weight.Bold))
+            painter.drawText(QRect(margin, y, width, 48), Qt.AlignmentFlag.AlignLeft, "COPPA DEI 5 RE"); y += 62
+            write(f"SCHEDA PERSONALE · {name(player_id)}", 15, True, 8)
+            write(f"Generata il {datetime.now().strftime('%d/%m/%Y alle %H:%M')}")
+            position = next(i for i, row in enumerate(self.standings(), 1) if row["id"] == player_id)
+            write(f"Classifica attuale: {position}° posto · {data['points']:.1f} punti netti")
+            write(f"Partite: {data['played']} · Vittorie: {data['wins']} · Patte: {data['draws']} · Sconfitte: {data['losses']} · Penalità: {data['penalty']:+.1f}")
+            ratings = profile_info.get("ratings", {})
+            rating_text = " · ".join(f"{label}: {ratings.get(key) if ratings.get(key) is not None else 'N/D'}"
+                                     for label, key in (("Bullet", "bullet"), ("Blitz", "blitz"), ("Rapid", "rapid")))
+            write(f"Rating Chess.com · {rating_text}")
+            write("RENDIMENTO PER COLORE", 12, True, 6)
+            for color, label in (("white", "Bianco"), ("black", "Nero")):
+                row = colors[color]; total = row["wins"] + row["draws"] + row["losses"]
+                if total:
+                    write(f"{label}: {row['wins']} vittorie ({row['wins']/total*100:.1f}%), "
+                          f"{row['draws']} patte ({row['draws']/total*100:.1f}%), "
+                          f"{row['losses']} sconfitte ({row['losses']/total*100:.1f}%) · {total} partite")
+                else: write(f"{label}: nessuna partita conclusa.")
+            write("GAME REVIEW STOCKFISH", 12, True, 6)
+            accuracy_label = "N/D" if data["accuracy"] is None else f"{data['accuracy']:.1f}%"
+            write(f"Precisione media disponibile: {accuracy_label} · Mosse valutate: {data['reviewed_moves']}")
+            write(f"Imprecisioni: {errors['IMPRECISIONE']} · Errori: {errors['ERRORE']} · Gravi errori: {errors['GRAVE ERRORE']}")
+            write("TEMPI DI RIFLESSIONE", 12, True, 6)
+            if timing["average_seconds"] is None:
+                write("Dati non disponibili: la raccolta dei tempi per mossa è iniziata con questa versione.")
+            else:
+                write(f"Mosse cronometrate: {timing['moves']} · Media: {timing['average_seconds']:.1f} s · "
+                      f"Mediana: {timing['median_seconds']:.1f} s · Totale: {timing['total_seconds']/60:.1f} min")
+            write("ANDAMENTO TURNO PER TURNO", 12, True, 6)
+            performance = player_performance(GAMES, self.results, player_id)
+            write(" · ".join(f"{round_label}: {points:.1f} pt" for round_label, points in performance) or "Nessun risultato valido.")
+            write("APERTURE PIÙ GIOCATE", 12, True, 6)
+            openings = sorted(data["openings"].items(), key=lambda item: (-item[1], item[0]))
+            write(" · ".join(f"{opening}: {count}" for opening, count in openings[:8]) or "Nessuna apertura registrata.")
+            write("STORICO PARTITE", 12, True, 6)
+            for item in data["history"]:
+                accuracy = "N/D" if item["accuracy"] is None else f"{item['accuracy']:.1f}%"
+                write(f"Round {item['round']} · {item['gid']} · {item['color'].upper()} · "
+                      f"vs {name(item['opponent'])} · {item['outcome']} · {item['opening']} · precisione {accuracy}", 9, gap=8)
+            painter.setPen(QColor("#7A8490")); painter.setFont(QFont("Segoe UI", 8))
+            painter.drawText(QRect(margin, page_height - margin + 35, width, 24),
+                             "Documento statistico generato dai dati locali della Coppa dei 5 Re.")
+        finally: painter.end()
+        self.statusBar().showMessage(f"Scheda personale PDF esportata per {name(player_id)}.", 3500)
+
     def export_tournament_report_pdf(self,destination=None,announce=True):
         path=destination
         if path is None:
@@ -5944,6 +6046,31 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
                     f"{row['points']:.1f} punti netti",
                     9
                 )
+            section("Analisi statistica del torneo")
+            summary = tournament_summary(
+                GAMES, self.results, self.moves, self.move_reviews, self.move_times,
+                {gid: self.opening_name(gid) for gid, *_ in GAMES}, self.game_terminations
+            )
+            openings = ", ".join(f"{opening} ({count})" for opening, count in summary["openings"][:8]) or "Non disponibili"
+            endings = ", ".join(f"{ending} ({count})" for ending, count in summary["endings"]) or "Non disponibili"
+            avg_move = "N/D" if summary["average_move_seconds"] is None else f"{summary['average_move_seconds']:.1f} secondi"
+            avg_game = "N/D" if summary["average_game_duration_seconds"] is None else f"{summary['average_game_duration_seconds']/60:.1f} minuti"
+            write_line(f"Aperture più giocate: {openings}")
+            write_line(f"Tipi di conclusione: {endings}")
+            write_line(
+                f"Game Review: {summary['reviewed_moves']} mosse valutate · "
+                f"{summary['errors']['IMPRECISIONE']} imprecisioni · {summary['errors']['ERRORE']} errori · "
+                f"{summary['errors']['GRAVE ERRORE']} gravi errori"
+            )
+            write_line(f"Tempo medio per mossa: {avg_move} · tempo di riflessione complessivo medio per partita: {avg_game} "
+                       f"({summary['games_with_timing']} partite con tempi disponibili)")
+            for player_id in ORDER:
+                color_stats = self.player_profile_data(player_id)["colors"]
+                def color_line(key):
+                    row = color_stats[key]
+                    played_color = row["wins"] + row["draws"] + row["losses"]
+                    return f"{row['wins']}/{row['draws']}/{row['losses']} in {played_color} partite"
+                write_line(f"{name(player_id)} · Bianco {color_line('white')} · Nero {color_line('black')}", 8)
             section("Calendario e risultati")
             for gid,rnd,white,black in GAMES:
                 result=self.results.get(gid,"Da disputare")
@@ -6804,6 +6931,10 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
         self.refresh_standings(); self.refresh_odds(); self.refresh_penalties(); self.refresh_playoffs()
         self.refresh_dashboard(); self.refresh_archive(); self.refresh_h2h(); self.refresh_audit()
         self.refresh_player_profile(); self.refresh_compare(); self.refresh_openings(); self.refresh_snapshot_status(); self.refresh_history(); self.refresh_incidents()
+        if hasattr(self, "tabs") and hasattr(self, "_page_keys"):
+            analytics_index=self._page_keys.index("analytics")
+            analytics_page=self.tabs.widget(analytics_index).widget()
+            if hasattr(analytics_page,"refresh"): analytics_page.refresh()
         self.refresh_communications()
         self.apply_calendar_filters(); self.refresh_notification_badge()
         if self.broadcast and self.broadcast.isVisible(): self.broadcast.refresh_from_app()
