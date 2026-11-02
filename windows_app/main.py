@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, os, random, sys, shutil, hashlib, math, csv, time, subprocess, queue, threading, re, uuid, base64, socket, io, html, urllib.parse
+import json, os, random, sys, shutil, hashlib, math, csv, time, subprocess, queue, threading, re, uuid, base64, socket, io, html, urllib.parse, secrets, hmac, zipfile, tempfile, urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlencode, quote, urlparse, unquote
@@ -672,6 +672,13 @@ class MainWindow(QMainWindow):
         self.game_terminations={}; self.move_reviews={}; self.withdrawn_players={}
         self.move_annotations={}; self.round_closures={}; self.incident_reports=[]; self.player_bios={}; self.notification_drafts=[]
         self.match_http_server=None; self.match_http_thread=None; self.match_http_host=""; self.match_http_port=0
+        self.public_base_url=os.environ.get("C5R_PUBLIC_BASE_URL","").strip().rstrip("/")
+        self.spectator_token=secrets.token_urlsafe(32)
+        self.operational_alerts=[]
+        self.long_match_minutes=120
+        self._public_probe_thread=None
+        self._last_public_probe=0.0
+        self._public_connection_state=None
         self.ui_preferences={"theme":"dark","font_scale":1.0,"density":"comfortable"}; self.ui_profiles={}
         self._clock_runtime={}; self._last_clock_persist=time.monotonic()
         self._undo_stack=[]; self._redo_stack=[]; self._history_restoring=False; self._last_history_state=None
@@ -701,6 +708,10 @@ class MainWindow(QMainWindow):
             self.round_closures=data.get("round_closures",{}); self.incident_reports=data.get("incident_reports",[]); self.player_bios=data.get("player_bios",{}); self.notification_drafts=data.get("notification_drafts",[])
             self.ui_preferences=data.get("ui_preferences",getattr(self,"ui_preferences",{}))
             self.ui_profiles=data.get("ui_profiles",getattr(self,"ui_profiles",{}))
+            self.public_base_url=str(data.get("public_base_url",self.public_base_url)).strip().rstrip("/")
+            self.spectator_token=str(data.get("spectator_token") or self.spectator_token)
+            self.operational_alerts=data.get("operational_alerts",[])
+            self.long_match_minutes=int(data.get("long_match_minutes",120) or 120)
             saved_schedule=data.get("schedule")
             if saved_schedule:
                 parsed=[(g["id"],int(g["round"]),g["white"],g["black"]) for g in saved_schedule]
@@ -739,6 +750,8 @@ class MainWindow(QMainWindow):
             "withdrawn_players":self.withdrawn_players,
             "move_annotations":self.move_annotations,"round_closures":self.round_closures,
             "ui_preferences":self.ui_preferences,"ui_profiles":self.ui_profiles,"incident_reports":self.incident_reports,"player_bios":self.player_bios,"notification_drafts":self.notification_drafts,
+            "public_base_url":self.public_base_url,"spectator_token":self.spectator_token,
+            "operational_alerts":self.operational_alerts,"long_match_minutes":self.long_match_minutes,
             "saved_at":datetime.now().isoformat(timespec="seconds"),
         }
 
