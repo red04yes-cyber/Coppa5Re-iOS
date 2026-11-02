@@ -291,7 +291,8 @@ try:
     }, [{"source": str(evidence_two)}])
     assert updated_incident["id"] == incident["id"]
     assert updated_incident["status"] == "Risolto"
-    assert not first_attachment_path.exists()
+    assert first_attachment_path.is_file()  # Detached, but retained for undo/snapshot recovery.
+    assert len(updated_incident["attachments"]) == 1
     second_attachment_path = window.incident_attachment_path(updated_incident["attachments"][0]["path"])
     assert second_attachment_path.is_file()
     persisted, _ = read_document(storage_path())
