@@ -65,6 +65,10 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: |
           python -c "import chess; from PySide6.QtWidgets import QApplication; from windows_app.main import MainWindow, make_random_schedule, validate_schedule, DEFAULT_GAMES; app=QApplication([]); assert len(list(chess.Board().legal_moves)) == 20; validate_schedule(DEFAULT_GAMES); [validate_schedule(make_random_schedule()) for _ in range(100)]; window=MainWindow(); assert len(window.standings()) == 5; window.close(); print('Qt, chess, schedule generator and desktop UI OK')"
+      - name: Test Windows UI filters, empty states, sorting and preferences
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python windows_app/ui_features_smoke.py
       - name: Test odds and streaming controls
         env:
           QT_QPA_PLATFORM: offscreen
