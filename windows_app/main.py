@@ -2758,7 +2758,7 @@ class MainWindow(QMainWindow):
             "chesscom_username":chesscom.text().strip(),
             "ratings":rating_values,
             "photo_data":photo_data,
-            "ratings_updated_at":datetime.now().isoformat(timespec="seconds"),
+            "ratings_updated_at":datetime.now().isoformat(timespec="seconds") if any(value is not None for value in rating_values.values()) else "",
         }
         self.log_operation("Scheda giocatore aggiornata",player_id,"","Anagrafica, foto e rating Chess.com aggiornati")
         self.save()
@@ -2779,7 +2779,7 @@ class MainWindow(QMainWindow):
             value=profile["ratings"].get(kind)
             tile.set("—" if value is None else f"{value:,}".replace(",","."),
                      f"Rating Chess.com · {kind.title()}")
-        updated=profile.get("ratings_updated_at","")
+        updated=profile.get("ratings_updated_at","") if any(value is not None for value in profile["ratings"].values()) else ""
         self.profile_rating_date.setText(
             f"Valori aggiornati: {updated[:10]}" if updated else "Rating non ancora verificati")
 
@@ -2836,7 +2836,7 @@ class MainWindow(QMainWindow):
                 f"<span>{html.escape(rating_text or 'Rating non inseriti')}</span>"
                 f"<a href='{chess_link}'>Chess.com · {html.escape(username)}</a></div></div>")
         move_text=[]
-        if gid in GAMES:
+        if match is not None:
             board=chess.Board()
             for index,uci in enumerate(self.moves.get(gid,[]),1):
                 try:
@@ -4247,6 +4247,8 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
             self._dashboard_progress_animation.setDuration(340)
             self._dashboard_progress_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._dashboard_progress_animation.stop()
+        if self.dashboard_progress.value() < 0:
+            self.dashboard_progress.setValue(0)
         self._dashboard_progress_animation.setStartValue(self.dashboard_progress.value())
         self._dashboard_progress_animation.setEndValue(target_progress)
         if self.dashboard_progress.value() == target_progress:
