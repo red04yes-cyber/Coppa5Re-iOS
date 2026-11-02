@@ -10,7 +10,7 @@ import chess.pgn
 try:
     from . import c5r_theme as T
     from .c5r_widgets import (
-        SideNav, ToastStatusBar, Card, StatTile, EmptyState, ProbBar,
+        CardGlowController, SideNav, ToastStatusBar, Card, StatTile, EmptyState, ProbBar,
         PillDelegate, style_table, table_card, LineChart, ClockChip, ResultPicker,
         EvalBar, Avatar, label as ui_label, pill as ui_pill, set_pill, button as ui_button
     )
@@ -18,12 +18,12 @@ try:
 except ImportError:
     import c5r_theme as T
     from c5r_widgets import (
-        SideNav, ToastStatusBar, Card, StatTile, EmptyState, ProbBar,
+        CardGlowController, SideNav, ToastStatusBar, Card, StatTile, EmptyState, ProbBar,
         PillDelegate, style_table, table_card, LineChart, ClockChip, ResultPicker,
         EvalBar, Avatar, label as ui_label, pill as ui_pill, set_pill, button as ui_button
     )
     from c5r_board import BoardWidget
-from PySide6.QtCore import Qt, QSize, Signal, QThread, QTimer, QRect, QUrl, QDateTime, QByteArray, QBuffer, QIODevice
+from PySide6.QtCore import Qt, QSize, Signal, QThread, QTimer, QRect, QUrl, QDateTime, QByteArray, QBuffer, QIODevice, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPdfWriter, QKeySequence, QShortcut, QDesktopServices, QPixmap, QIntValidator, QPainterPath
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
@@ -1379,6 +1379,8 @@ class MainWindow(QMainWindow):
             self.tabs.addWidget(scroll)
 
         self.nav.currentChanged.connect(self._navigate_to)
+        self._page_fades, self._page_animations = {}, {}
+        self._card_glow = CardGlowController(root)
         self.nav.set_current("dashboard")
         workspace.addWidget(self.nav)
         workspace.addWidget(self.tabs, 1)
@@ -1422,7 +1424,26 @@ class MainWindow(QMainWindow):
 
     def _navigate_to(self, key):
         if key in self._nav_keys:
-            self.tabs.setCurrentIndex(self._nav_keys.index(key))
+            index = self._nav_keys.index(key)
+            self.tabs.setCurrentIndex(index)
+            page = self.tabs.widget(index)
+            effect = self._page_fades.get(page)
+            if effect is None:
+                effect = QGraphicsOpacityEffect(page)
+                effect.setOpacity(1.0)
+                page.setGraphicsEffect(effect)
+                self._page_fades[page] = effect
+            previous = self._page_animations.pop(page, None)
+            if previous:
+                previous.stop()
+            effect.setOpacity(0.0)
+            animation = QPropertyAnimation(effect, b"opacity", self)
+            animation.setDuration(190)
+            animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+            animation.setStartValue(0.0)
+            animation.setEndValue(1.0)
+            self._page_animations[page] = animation
+            animation.start()
 
     def build_dashboard(self):
         page = QWidget()
@@ -3829,7 +3850,18 @@ class MainWindow(QMainWindow):
         self.dashboard_tiles["pending"].set(str(pending), "Ancora da iniziare")
         self.dashboard_tiles["retired"].set(str(retired), "Ritiri registrati")
         closed = done + voided
-        self.dashboard_progress.setValue(round(closed * 100 / max(1, len(GAMES))))
+        target_progress = round(closed * 100 / max(1, len(GAMES)))
+        if not hasattr(self, "_dashboard_progress_animation"):
+            self._dashboard_progress_animation = QPropertyAnimation(self.dashboard_progress, b"value", self)
+            self._dashboard_progress_animation.setDuration(340)
+            self._dashboard_progress_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._dashboard_progress_animation.stop()
+        self._dashboard_progress_animation.setStartValue(self.dashboard_progress.value())
+        self._dashboard_progress_animation.setEndValue(target_progress)
+        if self.dashboard_progress.value() == target_progress:
+            self.dashboard_progress.setValue(target_progress)
+        else:
+            self._dashboard_progress_animation.start()
         self.dashboard_progress_detail.setText(
             f"{done} concluse · {voided} annullate · {pending} da iniziare · {running} in corso"
         )
