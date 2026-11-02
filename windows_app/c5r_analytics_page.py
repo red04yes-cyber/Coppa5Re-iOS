@@ -161,7 +161,7 @@ class TournamentAnalyticsPage(QWidget):
             )
         def pct(row, key):
             return "—" if row[key + "_pct"] is None else f"{row[key + '_pct']:.1f}%"
-        self.player_detail.set(
+        self.player_detail.setText(
             f"BIANCO: {pct(w, 'win')} vittorie · {pct(w, 'draw')} patte · {pct(w, 'loss')} sconfitte "
             f"({w['played']} partite).\n"
             f"NERO: {pct(b, 'win')} vittorie · {pct(b, 'draw')} patte · {pct(b, 'loss')} sconfitte "
