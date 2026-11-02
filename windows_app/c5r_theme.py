@@ -256,6 +256,15 @@ QLabel#Muted { color: @text2@; font-size: 13px; }
 QLabel#Footnote { color: @text3@; font-size: 10px; letter-spacing: 1px; }
 QLabel#SavedBadge { color: @success@; font-size: 10px; font-weight: 800; letter-spacing: 1px; padding: 8px 12px; background: rgba(88,179,148,.12); border: 1px solid rgba(88,179,148,.3); border-radius: 8px; }
 QStatusBar::item { border: none; }
+QFrame#Card:hover, QFrame#CardRaised:hover { border: 1px solid rgba(221,184,112,0.58); }
+QFrame#CardAccent:hover { border: 1px solid rgba(235,198,126,0.82); }
+QFrame#CardPlain:hover { border: 1px solid rgba(99,174,222,0.45); }
+QProgressBar { background: #101821; border: 1px solid #263545; border-radius: 6px; min-height: 10px; max-height: 10px; text-align: center; color: transparent; }
+QProgressBar::chunk { background: qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #8E6D35,stop:0.55 #C9A15B,stop:1 #E7C786); border-radius: 5px; }
+QFrame#Toast[toast_tone="success"] { border-left: 3px solid @success@; }
+QFrame#Toast[toast_tone="danger"] { border-left: 3px solid @danger@; }
+QFrame#Toast[toast_tone="warning"] { border-left: 3px solid @warning@; }
+QFrame#Toast[toast_tone="info"] { border-left: 3px solid @info@; }
 """
 
 
