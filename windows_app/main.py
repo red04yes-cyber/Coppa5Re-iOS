@@ -1095,7 +1095,8 @@ class MainWindow(QMainWindow):
         self.archive_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.archive_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.archive_table.horizontalHeader().setSectionResizeMode(1,QHeaderView.ResizeMode.Stretch)
-        layout.addWidget(self.archive_table,1)
+        style_table(self.archive_table, row_height=46, selectable=True)
+        layout.addWidget(table_card(self.archive_table),1)
         row=QHBoxLayout(); allpgn=QPushButton("ESPORTA TUTTO IL TORNEO IN PGN")
         allpgn.setObjectName("PrimaryButton"); allpgn.clicked.connect(self.export_all_pgn); row.addWidget(allpgn)
         one=QPushButton("ESPORTA PARTITA SELEZIONATA")
@@ -1115,7 +1116,8 @@ class MainWindow(QMainWindow):
         self.h2h_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.h2h_table.horizontalHeader().setSectionResizeMode(0,QHeaderView.ResizeMode.Stretch)
         for c in range(1,6): self.h2h_table.horizontalHeader().setSectionResizeMode(c,QHeaderView.ResizeMode.ResizeToContents)
-        layout.addWidget(self.h2h_table,1); return page
+        style_table(self.h2h_table, row_height=48, selectable=False)
+        layout.addWidget(table_card(self.h2h_table),1); return page
 
     def build_audit(self):
         page = QWidget()
@@ -1135,7 +1137,7 @@ class MainWindow(QMainWindow):
         self.audit_action_filter.addItem("Tutte le operazioni", None)
         for value, text in [
             ("Risultato", "Risultati"), ("Mossa", "Mosse"), ("Penalità", "Penalità"),
-            ("Ritiro", "Ritiri"), ("Stockfish", "Stockfish / Game Review"),
+            ("ritir", "Ritiri"), ("Stockfish", "Stockfish / Game Review"),
             ("Orologio", "Orologi"), ("Backup", "Backup e impostazioni"),
         ]:
             self.audit_action_filter.addItem(text, value)
@@ -1723,7 +1725,8 @@ class MainWindow(QMainWindow):
         self.draw_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.draw_table.horizontalHeader().setSectionResizeMode(0,QHeaderView.ResizeMode.ResizeToContents)
         for col in (1,2,3): self.draw_table.horizontalHeader().setSectionResizeMode(col,QHeaderView.ResizeMode.Stretch)
-        self.draw_table.setMinimumHeight(320); layout.addWidget(self.draw_table)
+        style_table(self.draw_table, row_height=56, selectable=False)
+        self.draw_table.setMinimumHeight(320); layout.addWidget(table_card(self.draw_table))
         note=QLabel("Nota: applicare un nuovo sorteggio o cambiare gli accoppiamenti azzera gli eventuali risultati e le mosse già registrate, dopo una richiesta di conferma. Le penalità restano associate ai giocatori.")
         note.setObjectName("Muted"); note.setWordWrap(True); layout.addWidget(note)
         self.refresh_draw_page()
