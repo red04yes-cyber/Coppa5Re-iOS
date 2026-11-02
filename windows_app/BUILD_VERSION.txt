@@ -1,2 +1,2 @@
-Coppa5Re Windows Desktop v1.0.0
-Build triggered by GitHub Actions on windows-latest.
+Coppa5Re Windows Desktop v1.0.1
+Build includes visible dashboard results and protected local recovery.
