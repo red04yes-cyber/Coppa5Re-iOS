@@ -2865,7 +2865,7 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
 <div class='card'><strong>Ultime mosse</strong><p>{html.escape(" ".join(move_text[-24:]) or "Nessuna mossa registrata")}</p></div>
 <div class='muted'>Pagina informativa in sola lettura sulla rete locale del torneo.</div></main></body></html>"""
 
-    def start_match_web_server(self):
+    def start_match_web_server(self,host_hint=None):
         if self.match_http_server is not None:
             return self.match_http_host,self.match_http_port
         app=self
@@ -2902,7 +2902,7 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
                 server.daemon_threads=True
                 self.match_http_server=server
                 self.match_http_port=server.server_address[1]
-                self.match_http_host=self.local_network_ip()
+                self.match_http_host=host_hint or self.local_network_ip()
                 self.match_http_thread=threading.Thread(target=server.serve_forever,
                     name="C5R-Match-LAN",daemon=True)
                 self.match_http_thread.start()
