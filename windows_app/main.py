@@ -22,7 +22,7 @@ except ImportError:
     )
     from c5r_board import BoardWidget
 from PySide6.QtCore import Qt, QSize, Signal, QThread, QTimer, QRect, QUrl, QDateTime, QByteArray, QBuffer, QIODevice
-from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPdfWriter, QKeySequence, QShortcut, QDesktopServices, QPixmap, QIntValidator
+from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPdfWriter, QKeySequence, QShortcut, QDesktopServices, QPixmap, QIntValidator, QPainterPath
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QComboBox,
@@ -2715,6 +2715,39 @@ class MainWindow(QMainWindow):
             self.profile_combo.addItem(name(player_id), player_id)
         selector.body.addWidget(self.profile_combo)
         layout.addWidget(selector)
+
+        identity=Card("Scheda biografica","Foto profilo, informazioni personali e rating del profilo Chess.com.")
+        identity_row=QHBoxLayout()
+        self.profile_identity_photo=QLabel()
+        self.profile_identity_photo.setFixedSize(116,116)
+        self.profile_identity_photo.setStyleSheet("border: 2px solid #C9A15B; border-radius: 58px;")
+        identity_row.addWidget(self.profile_identity_photo)
+        identity_details=QVBoxLayout()
+        self.profile_identity_name=ui_label("—","h2")
+        self.profile_identity_meta=ui_label("Età e username Chess.com","muted")
+        self.profile_identity_bio=ui_label("Biografia non ancora inserita.","body",wrap=True)
+        identity_details.addWidget(self.profile_identity_name)
+        identity_details.addWidget(self.profile_identity_meta)
+        identity_details.addWidget(self.profile_identity_bio,1)
+        edit_bio=QPushButton("MODIFICA SCHEDA")
+        edit_bio.setObjectName("PrimaryButton")
+        edit_bio.clicked.connect(lambda:self.edit_player_bio(self.profile_combo.currentData()))
+        identity_details.addWidget(edit_bio,0,Qt.AlignmentFlag.AlignLeft)
+        identity_row.addLayout(identity_details,1)
+        identity.body.addLayout(identity_row)
+        rating_row=QHBoxLayout()
+        self.profile_rating_tiles={
+            "bullet":StatTile("BULLET","clock"),
+            "blitz":StatTile("BLITZ","clock"),
+            "rapid":StatTile("RAPID","clock"),
+        }
+        for tile in self.profile_rating_tiles.values():
+            rating_row.addWidget(tile,1)
+        identity.body.addLayout(rating_row)
+        self.profile_rating_date=ui_label("Valori Chess.com non ancora inseriti.","caption")
+        identity.body.addWidget(self.profile_rating_date)
+        layout.addWidget(identity)
+
         metrics = QHBoxLayout()
         self.profile_tiles = {
             "points": StatTile("PUNTI NETTI", "trophy"),
@@ -2750,6 +2783,7 @@ class MainWindow(QMainWindow):
         if player_id not in PLAYERS:
             return
         data = self.player_profile_data(player_id)
+        self.refresh_player_identity(player_id)
         self.profile_tiles["points"].set(f"{data['points']:.1f}", f"{data['played']}/5 partite conteggiate")
         self.profile_tiles["record"].set(
             f"{data['wins']} · {data['draws']} · {data['losses']}",
