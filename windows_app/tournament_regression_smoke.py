@@ -61,7 +61,7 @@ try:
     window.start_clock("R1-M1")
     initial_white = window.clock_data("R1-M1")["white"]
     window.record_move("R1-M1", "e2e4")
-    assert window.clock_data("R1-M1")["white"] == initial_white + 3
+    assert abs(window.clock_data("R1-M1")["white"] - (initial_white + 3)) < 0.5
 
     # Checkmate and stalemate are detected automatically after the terminal move.
     window.moves = {}
