@@ -722,6 +722,7 @@ class ToastStatusBar(QStatusBar):
         tone = "danger" if any(k in low for k in self._DANGER) else (
             "warning" if any(k in low for k in self._WARN) else (
             "success" if any(k in low for k in self._OK) else "info"))
+        super().showMessage(text, timeout)
         if self.host:
             self.host.show_toast(text, tone, max(2600,int(timeout) or 3800))
 
