@@ -41,7 +41,7 @@ try:
     )
     assert abs(visible_points - 1.0) < 0.001
     assert "1.0" in window.podium_cards[1]["points"].text()
-    assert window.dashboard_tiles["done"].value.text() == "1"
+    assert window.dashboard_tiles["done"].hint.text() == "1/10 risultati validi"
     assert "1 concluse" in window.dashboard_progress_detail.text()
     window.set_result("R1-M1", None, confirm=False, detail="Reset verifica visualizzazione")
 
