@@ -9,8 +9,12 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate, QStyle, QStyleOptionViewItem, QTableWidget, QVBoxLayout, QWidget,
 )
 
-import c5r_theme as T
-from c5r_theme import C, MONO, SANS, SERIF, font, icon, mix, with_alpha
+try:
+    from . import c5r_theme as T
+    from .c5r_theme import C, MONO, SANS, SERIF, font, icon, mix, with_alpha
+except ImportError:
+    import c5r_theme as T
+    from c5r_theme import C, MONO, SANS, SERIF, font, icon, mix, with_alpha
 
 
 def repolish(widget: QWidget) -> None:
