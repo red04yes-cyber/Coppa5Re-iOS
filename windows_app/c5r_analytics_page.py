@@ -176,7 +176,7 @@ class TournamentAnalyticsPage(QWidget):
             f"Precisione: {summary['reviewed_moves']} mosse analizzate · "
             f"{summary['errors']['IMPRECISIONE']} imprecisioni · {summary['errors']['ERRORE']} errori · "
             f"{summary['errors']['GRAVE ERRORE']} gravi errori.\n"
-            f"Tempo medio per mossa: {avg_time} ({summary['timed_moves']} mosse cronometrate).\\n"
+            f"Tempo medio per mossa: {avg_time} ({summary['timed_moves']} mosse cronometrate).\n"
             f"Durata media misurata delle partite: {avg_game} ({summary['games_with_timing']} partite con tempi disponibili)."
         )
         self.refresh_simulation()
