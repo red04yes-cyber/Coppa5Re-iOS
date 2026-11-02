@@ -87,6 +87,10 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python windows_app/page_navigation_smoke.py
+      - name: Test Windows premium player and match components
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python windows_app/ui_player_components_smoke.py
       - name: Test QR spectator live chessboard and move synchronization
         env:
           QT_QPA_PLATFORM: offscreen
