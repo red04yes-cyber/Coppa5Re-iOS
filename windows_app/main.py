@@ -5407,10 +5407,12 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
             painter.end()
         self.statusBar().showMessage("Classifica PDF esportata.",2500)
 
-    def export_tournament_report_pdf(self):
-        path,_=QFileDialog.getSaveFileName(self,"Esporta report ufficiale","Report-Ufficiale-C5R.pdf","PDF (*.pdf)")
+    def export_tournament_report_pdf(self,destination=None,announce=True):
+        path=destination
+        if path is None:
+            path,_=QFileDialog.getSaveFileName(self,"Esporta report ufficiale","Report-Ufficiale-C5R.pdf","PDF (*.pdf)")
         if not path:
-            return
+            return None
         writer=QPdfWriter(path)
         writer.setTitle("Report ufficiale · Coppa dei 5 Re")
         writer.setCreator("Coppa dei 5 Re · Control Room")
@@ -5467,6 +5469,10 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
             write_line("Cadenze regolamentari: qualificazione 15+3 · semifinali e finali 30+10")
             write_line(f"Spareggi: {self.tie_break or 'Regolamento Art. 8'}")
             write_line(f"Generato il: {datetime.now().strftime('%d/%m/%Y alle %H:%M:%S')}")
+            completed=sum(1 for value in self.results.values() if value not in (None,"VOID"))+sum(1 for value in self.playoff_results.values() if value not in (None,"VOID"))
+            valid_void=sum(1 for value in self.results.values() if value=="VOID")
+            total_moves=sum(len(value) for value in self.moves.values())
+            write_line(f"Quadro torneo: {completed} partite concluse · {valid_void} annullate/escluse · {total_moves} mosse registrate · {len(self.incident_reports)} verbali/incidenti.")
             section("Classifica generale")
             write_line("POS.   GIOCATORE                         G   V   X   P   PEN.       PUNTI NETTI",9,True)
             for position,row in enumerate(self.standings(),1):
@@ -5474,6 +5480,17 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
                     f"{row['played']:>2}  {row['wins']:>2}  {row['draws']:>2}  {row['losses']:>2}  "
                     f"{row['penalty']:>+6.1f}     {row['points']:>6.1f}")
                 write_line(line,9)
+            section("Statistiche individuali")
+            raw,played,wins,draws,losses=self.raw_stats()
+            for row in self.standings():
+                player=row["id"]
+                rate=(wins[player]/played[player]*100.0) if played[player] else 0.0
+                write_line(
+                    f"{name(player)} · {played[player]} partite · {wins[player]} vittorie · "
+                    f"{draws[player]} patte · {losses[player]} sconfitte · {rate:.1f}% vittorie · "
+                    f"{row['points']:.1f} punti netti",
+                    9
+                )
             section("Calendario e risultati")
             for gid,rnd,white,black in GAMES:
                 result=self.results.get(gid,"Da disputare")
@@ -5482,6 +5499,17 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
                 elif result is None:
                     result="Da disputare"
                 write_line(f"Round {rnd} · {gid}   |   {name(white)} – {name(black)}   |   {result}")
+            section("Mosse e partite")
+            for gid,rnd,white,black in GAMES:
+                if not self.moves.get(gid):
+                    continue
+                try:
+                    pgn_node=self.build_pgn_game(gid)
+                    sans=pgn_node.accept(chess.pgn.StringExporter(headers=False,variations=False,comments=False)).strip()
+                    write_line(f"Round {rnd} · {gid} · {name(white)} – {name(black)}",9,True)
+                    write_line(sans or "Nessuna mossa SAN disponibile",8,gap=7)
+                except Exception as exc:
+                    write_line(f"{gid} · PGN non disponibile: {exc}",8)
             section("Playoff")
             for key,label in (("sf1","Semifinale 1"),("sf2","Semifinale 2"),("third","3°/4° posto"),("final","Finale")):
                 result=self.playoff_results.get(key,"Da disputare")
@@ -5503,6 +5531,14 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
             for item in self.audit_log[-80:]:
                 write_line(f"{item.get('time','')} · {item.get('action','')} · {item.get('entity','')} · "
                     f"{item.get('before','')} → {item.get('after','')} · {item.get('detail','')}",8)
+            section("Verbali e note arbitrali")
+            if not self.incident_reports and not self.match_notes:
+                write_line("Nessun verbale o nota arbitrale registrati.")
+            for incident in self.incident_reports:
+                write_line("Verbale · "+json.dumps(incident,ensure_ascii=False,default=str),8)
+            for gid,notes in self.match_notes.items():
+                for note in notes:
+                    write_line(f"Nota · {gid} · {note.get('time','')} · {note.get('referee','')} · {note.get('kind','Nota')} · {note.get('text','')}",8)
             section("Attestazione")
             write_line("Il presente documento riepiloga i dati registrati nella Control Room alla data di generazione. "
                 "Eventuali rettifiche successive devono essere annotate nel registro arbitrale.")
@@ -5510,7 +5546,104 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
             write_line("Data: ____________________________     Firma: ______________________________",10)
         finally:
             painter.end()
-        self.statusBar().showMessage("Report ufficiale PDF esportato.",3000)
+        if announce:
+            self.statusBar().showMessage("Report ufficiale PDF esportato.",3000)
+        return str(path)
+
+    def export_final_report_package(self):
+        destination,_=QFileDialog.getSaveFileName(
+            self,"Crea pacchetto finale del torneo","Pacchetto-Finale-C5R.zip","Archivio ZIP (*.zip)"
+        )
+        if not destination:
+            return
+        if not destination.lower().endswith(".zip"):
+            destination += ".zip"
+        temp_root=Path(tempfile.mkdtemp(prefix="c5r-final-report-"))
+        try:
+            report_path=temp_root/"Report-Ufficiale-C5R.pdf"
+            self.export_tournament_report_pdf(report_path,announce=False)
+            pgn_dir=temp_root/"PGN"
+            pgn_dir.mkdir(parents=True,exist_ok=True)
+            exporter=chess.pgn.StringExporter(headers=True,variations=False,comments=True)
+            pgn_count=0
+            for gid,round_no,white,black in GAMES:
+                node=self.build_pgn_game(gid)
+                (pgn_dir/f"{gid}.pgn").write_text(
+                    node.accept(exporter),encoding="utf-8"
+                )
+                pgn_count+=1
+            for gid in ("sf1","sf2","third","final"):
+                node=self.build_playoff_pgn(gid)
+                (pgn_dir/f"{gid}.pgn").write_text(
+                    node.accept(exporter),encoding="utf-8"
+                )
+                pgn_count+=1
+
+            standings_path=temp_root/"Classifica.csv"
+            with standings_path.open("w",newline="",encoding="utf-8-sig") as stream:
+                writer=csv.writer(stream,delimiter=";")
+                writer.writerow(["Posizione","Giocatore","Partite","Vittorie","Patte","Sconfitte","Penalita","Punti netti"])
+                for position,row in enumerate(self.standings(),1):
+                    writer.writerow([position,name(row["id"]),row["played"],row["wins"],row["draws"],
+                                     row["losses"],row["penalty"],row["points"]])
+
+            audit_path=temp_root/"Registro-arbitrale.csv"
+            with audit_path.open("w",newline="",encoding="utf-8-sig") as stream:
+                writer=csv.writer(stream,delimiter=";")
+                writer.writerow(["Data","Arbitro","Azione","Oggetto","Prima","Dopo","Dettagli"])
+                for entry in self.audit_log:
+                    writer.writerow([entry.get(key,"") for key in
+                        ("time","referee","action","entity","before","after","detail")])
+
+            matches=[]
+            for gid,round_no,white,black in GAMES:
+                node=self.build_pgn_game(gid)
+                moves=node.accept(chess.pgn.StringExporter(headers=False,variations=False,comments=False)).strip()
+                matches.append({"id":gid,"round":round_no,"white":name(white),"black":name(black),
+                                "result":self.results.get(gid),"moves":moves})
+            summary={
+                "tournament":"Coppa dei 5 Re",
+                "generated_at":datetime.now().isoformat(timespec="seconds"),
+                "referee":self.referee,
+                "time_controls":{"qualification":"15+3","playoffs":"30+10"},
+                "standings":[
+                    {"position":position,"player":name(row["id"]),"played":row["played"],
+                     "wins":row["wins"],"draws":row["draws"],"losses":row["losses"],
+                     "penalty":row["penalty"],"points":row["points"]}
+                    for position,row in enumerate(self.standings(),1)
+                ],
+                "matches":matches,
+                "playoff_results":self.playoff_results,
+                "playoff_winners":self.playoff_winners,
+                "penalties":self.penalties,
+                "incidents":self.incident_reports,
+                "notes":self.match_notes,
+                "total_moves":sum(len(value) for value in self.moves.values()),
+            }
+            (temp_root/"Riepilogo.json").write_text(
+                json.dumps(summary,ensure_ascii=False,indent=2,default=str),encoding="utf-8"
+            )
+            manifest={
+                "files":["Report-Ufficiale-C5R.pdf","Classifica.csv","Registro-arbitrale.csv",
+                         "Riepilogo.json","PGN/*.pgn"],
+                "pgn_files":pgn_count,
+                "generated_at":summary["generated_at"],
+            }
+            (temp_root/"LEGGIMI.txt").write_text(
+                "Pacchetto finale Coppa dei 5 Re\nContiene report PDF, classifica, registro arbitrale, "
+                "riepilogo JSON e PGN individuali per qualificazione e playoff.\n"
+                "I recapiti privati dei giocatori non sono inclusi.\n",
+                encoding="utf-8"
+            )
+            with zipfile.ZipFile(destination,"w",compression=zipfile.ZIP_DEFLATED,compresslevel=7) as archive:
+                for item in temp_root.rglob("*"):
+                    if item.is_file():
+                        archive.write(item,item.relative_to(temp_root).as_posix())
+            self.statusBar().showMessage(f"Pacchetto finale creato · {pgn_count} PGN inclusi.",5000)
+        except Exception as exc:
+            QMessageBox.critical(self,"Report finale non creato",f"Errore durante la generazione del pacchetto: {exc}")
+        finally:
+            shutil.rmtree(temp_root,ignore_errors=True)
 
     def export_audit_csv(self):
         path,_=QFileDialog.getSaveFileName(self,"Esporta registro","Registro-C5R.csv","CSV (*.csv)")
