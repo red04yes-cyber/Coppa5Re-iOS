@@ -1,7 +1,7 @@
 """Widget riutilizzabili C5R: composizione, navigazione, controlli e visualizzazioni."""
 from __future__ import annotations
 
-from PySide6.QtCore import QEasingCurve, QPointF, QRect, QRectF, QSize, Qt, QPropertyAnimation, QTimer, Signal
+from PySide6.QtCore import QEvent, QEasingCurve, QObject, QPointF, QRect, QRectF, QSize, Qt, QPropertyAnimation, QTimer, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QHeaderView, QLabel,
@@ -163,6 +163,64 @@ class FlowLayout(QLayout):
         return y + line_h - rect.y() + m.bottom()
 
 
+class CardGlowController(QObject):
+    """Glow leggero, animato solo al passaggio del mouse."""
+    TARGETS = {"Card", "CardAccent", "CardRaised", "CardPlain"}
+
+    def __init__(self, root: QWidget):
+        super().__init__(root)
+        self._effects, self._animations = {}, {}
+        for frame in root.findChildren(QFrame):
+            if frame.objectName() in self.TARGETS:
+                frame.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+                frame.installEventFilter(self)
+
+    def eventFilter(self, watched, event):
+        if isinstance(watched, QFrame) and watched.objectName() in self.TARGETS:
+            if event.type() == QEvent.Type.Enter:
+                self._animate(watched, True)
+            elif event.type() == QEvent.Type.Leave:
+                self._animate(watched, False)
+        return super().eventFilter(watched, event)
+
+    def _animate(self, frame: QFrame, active: bool):
+        old = self._animations.pop(frame, None)
+        if old:
+            old.stop()
+        effect = self._effects.get(frame)
+        if active and effect is None:
+            effect = QGraphicsDropShadowEffect(frame)
+            effect.setOffset(0, 0)
+            color = QColor(C.info if frame.objectName() == "CardPlain" else C.brass_hi)
+            color.setAlpha(48)
+            effect.setColor(color)
+            effect.setBlurRadius(0)
+            frame.setGraphicsEffect(effect)
+            self._effects[frame] = effect
+        if effect is None:
+            return
+        anim = QPropertyAnimation(effect, b"blurRadius", self)
+        anim.setDuration(165 if active else 125)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.setStartValue(effect.blurRadius())
+        anim.setEndValue(15.0 if active else 0.0)
+        if not active:
+            anim.finished.connect(lambda f=frame, e=effect: self._clear(f, e))
+        self._animations[frame] = anim
+        anim.start()
+
+    def _clear(self, frame: QFrame, effect: QGraphicsDropShadowEffect):
+        if self._effects.get(frame) is not effect:
+            return
+        self._effects.pop(frame, None)
+        self._animations.pop(frame, None)
+        try:
+            if frame.graphicsEffect() is effect:
+                frame.setGraphicsEffect(None)
+        except RuntimeError:
+            pass
+
+
 class Card(QFrame):
     def __init__(self, title: str | None = None, subtitle: str | None = None,
                  variant: str = "Card", padding: int = 20, spacing: int = 12,
@@ -244,14 +302,41 @@ class StatTile(QFrame):
             top.addWidget(ic)
         lay.addLayout(top)
         self.value = label("—", "num")
+        self._counter_timer = QTimer(self)
+        self._counter_timer.setInterval(18)
+        self._counter_timer.timeout.connect(self._advance_counter)
+        self._counter_start = self._counter_target = self._counter_step = 0
+        self._counter_frames = 12
+        self._counter_final = ""
         lay.addWidget(self.value)
         self.hint = label("", "muted", wrap=True)
         lay.addWidget(self.hint)
 
     def set(self, value: str, hint: str = "") -> None:
-        self.value.setText(value)
+        text, old = str(value), self.value.text()
+        if text != old and old.lstrip("-").isdigit() and text.lstrip("-").isdigit():
+            self._counter_timer.stop()
+            self._counter_start, self._counter_target = int(old), int(text)
+            self._counter_final, self._counter_step = text, 0
+            if self._counter_start != self._counter_target:
+                self._counter_timer.start()
+            else:
+                self.value.setText(text)
+        else:
+            self._counter_timer.stop()
+            self.value.setText(text)
         self.hint.setText(hint)
         self.hint.setVisible(bool(hint))
+
+    def _advance_counter(self):
+        self._counter_step += 1
+        x = min(1.0, self._counter_step / self._counter_frames)
+        eased = 1.0 - (1.0 - x) ** 3
+        n = round(self._counter_start + (self._counter_target - self._counter_start) * eased)
+        self.value.setText(str(n))
+        if self._counter_step >= self._counter_frames:
+            self.value.setText(self._counter_final)
+            self._counter_timer.stop()
 
 
 class EmptyState(QFrame):
@@ -656,6 +741,7 @@ class ToastHost(QWidget):
             self._dismiss(self._toasts[0], animate=False)
         toast = QFrame()
         toast.setObjectName("Toast")
+        toast.setProperty("toast_tone", tone)
         toast.setProperty("toast_text", text)
         toast.setMaximumWidth(460)
         row = QHBoxLayout(toast)
@@ -724,7 +810,12 @@ class ToastStatusBar(QStatusBar):
             "success" if any(k in low for k in self._OK) else "info"))
         super().showMessage(text, timeout)
         if self.host:
-            self.host.show_toast(text, tone, max(2600,int(timeout) or 3800))
+            duration = max(2600, int(timeout) or 3800)
+            if tone == "danger":
+                duration = max(duration, 5200)
+            elif tone == "warning":
+                duration = max(duration, 4200)
+            self.host.show_toast(text, tone, duration)
 
 
 class SideNav(QFrame):
