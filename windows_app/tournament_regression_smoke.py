@@ -27,6 +27,24 @@ old_question = QMessageBox.question
 QMessageBox.question = lambda *args, **kwargs: QMessageBox.StandardButton.Yes
 
 try:
+    # Result display regression: a saved result must be visible across all Windows views.
+    window.results = {}
+    window.moves = {}
+    window.boards.clear()
+    window.set_result("R1-M1", "1-0", confirm=False, detail="Verifica visualizzazione")
+    assert window.calendar_combos["R1-M1"].currentData() == "1-0"
+    assert window.calendar_status_labels["R1-M1"].text() == "CONCLUSA"
+    assert "1/10" in window.st_summary.text()
+    visible_points = sum(
+        float(window.st_table.item(row, 7).text().replace(",", "."))
+        for row in range(window.st_table.rowCount())
+    )
+    assert abs(visible_points - 1.0) < 0.001
+    assert "1.0" in window.podium_cards[1]["points"].text()
+    assert window.dashboard_tiles["done"].value.text() == "1"
+    assert "1 concluse" in window.dashboard_progress_detail.text()
+    window.set_result("R1-M1", None, confirm=False, detail="Reset verifica visualizzazione")
+
     # Article 5: phase-specific time controls.
     assert window.time_control_for_game("R1-M1") == "15+3"
     assert window.time_control_for_game("sf1") == "30+10"
