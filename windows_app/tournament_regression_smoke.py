@@ -4,6 +4,7 @@ import sys
 import tempfile
 import json
 import time
+import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -13,6 +14,7 @@ os.environ["APPDATA"] = APPDATA
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication, QMessageBox, QInputDialog, QFileDialog
+from PySide6.QtGui import QPixmap, QColor
 import chess
 
 from windows_app.main import MainWindow, PLAYERS, GAMES, storage_path
@@ -133,7 +135,7 @@ try:
     assert abs(clock["white"] - (before_white + 10)) < 0.5
     assert clock["side_to_move"] == "black"
     assert window.recovery_path.is_file()
-    clock["black"] = 1
+    clock["black"] = 0
     window.tick_clocks()
     assert window.playoff_results["sf2"] == "1-0"
     assert not clock["started"]
@@ -302,7 +304,7 @@ try:
     assert persisted["incident_reports"][0]["attachments"][0]["name"] == "foto-tavolo.txt"
     # UI registration and CSV/PDF export are reachable from the incident register.
     window.refresh_all()
-    assert len(window._page_keys) == 17
+    assert len(window._page_keys) == 18 and "communications" in window._page_keys
     assert window.incident_table.rowCount() == 1
     window.incident_table.selectRow(0)
     incident_pdf = str(Path(APPDATA) / "verbale-incidente.pdf")
@@ -328,7 +330,89 @@ try:
     except ValueError:
         pass
 
-    print("C5R Windows regression OK: tournament rules, PGN, recovery, precision clocks, undo/redo, predictive scenarios, UI profiles, PDF exports and incident reports.")
+    # Player identity: profile data, circular photo, Chess.com modes and live/broadcast display.
+    portrait_path = Path(APPDATA) / "portrait.png"
+    portrait = QPixmap(96, 96)
+    portrait.fill(QColor("#BF8A43"))
+    assert portrait.save(str(portrait_path), "PNG")
+    profile_photo = window._encode_player_photo(str(portrait_path))
+    window.player_bios["jacopo"] = {
+        "age": 21, "bio": "Giocatore aggressivo, preferisce posizioni tattiche.",
+        "email": "jacopo@example.test", "whatsapp": "+393331234567",
+        "chesscom_username": "jjand1",
+        "ratings": {"bullet": 1420, "blitz": 1580, "rapid": 1710},
+        "photo_data": profile_photo,
+    }
+    window.profile_combo.setCurrentIndex(window.profile_combo.findData("jacopo"))
+    window.refresh_player_profile()
+    window.live_cards[0].refresh()
+    assert not window.live_cards[0].white_photo.pixmap().isNull()
+    assert "BL 1580" in window.live_cards[0].white_ratings.text()
+    assert "R 1710" in window.live_cards[0].white_ratings.text()
+    assert window.player_profile_info("jacopo")["age"] == 21
+
+    # Printable player cards and printable match sheets are generated as PDFs.
+    badges_pdf = str(Path(APPDATA) / "tesserini.pdf")
+    old_save_dialog = QFileDialog.getSaveFileName
+    QFileDialog.getSaveFileName = lambda *args, **kwargs: (badges_pdf, "PDF (*.pdf)")
+    try:
+        window.export_player_badges_pdf()
+        assert Path(badges_pdf).is_file() and Path(badges_pdf).stat().st_size > 500
+    finally:
+        QFileDialog.getSaveFileName = old_save_dialog
+    sheet_pdf = str(Path(APPDATA) / "scheda-r1-m1.pdf")
+    QFileDialog.getSaveFileName = lambda *args, **kwargs: (sheet_pdf, "PDF (*.pdf)")
+    try:
+        window.export_match_sheet_pdf("R1-M1")
+        assert Path(sheet_pdf).is_file() and Path(sheet_pdf).stat().st_size > 500
+    finally:
+        QFileDialog.getSaveFileName = old_save_dialog
+
+    # QR codes resolve to a real, read-only local match web page, not a placeholder URL.
+    host, port = window.start_match_web_server(host_hint="127.0.0.1")
+    match_url = window.match_web_url("R1-M1")
+    with urllib.request.urlopen(match_url, timeout=5) as response:
+        html_page = response.read().decode("utf-8")
+        assert response.status == 200 and "Jacopo" in html_page and "Roberto" in html_page
+        assert "data:image/jpeg;base64" in html_page
+    qr_pixmap = window.make_qr_pixmap(match_url, 180)
+    assert not qr_pixmap.isNull()
+    qr_pdf = str(Path(APPDATA) / "qr-tavoli.pdf")
+    QFileDialog.getSaveFileName = lambda *args, **kwargs: (qr_pdf, "PDF (*.pdf)")
+    try:
+        window.export_all_match_qr_pdf()
+        assert Path(qr_pdf).is_file() and Path(qr_pdf).stat().st_size > 500
+    finally:
+        QFileDialog.getSaveFileName = old_save_dialog
+
+    # Notification templates create per-player messages and open a compose URL only on request.
+    for idx in range(window.notify_recipients.count()):
+        item = window.notify_recipients.item(idx)
+        item.setCheckState(Qt.CheckState.Checked if item.data(Qt.ItemDataRole.UserRole) == "jacopo" else Qt.CheckState.Unchecked)
+    window.notify_template.setCurrentIndex(window.notify_template.findData("convocation"))
+    window.notify_game.setCurrentIndex(window.notify_game.findData("R1-M1"))
+    window.generate_player_notifications()
+    draft = window.selected_notification_draft()
+    assert draft and draft["player_id"] == "jacopo"
+    assert "Round 1" in draft["body"] and "Roberto" in draft["body"]
+    old_open_url = QDesktopServices.openUrl
+    opened_urls = []
+    QDesktopServices.openUrl = lambda url: opened_urls.append(url.toString()) or True
+    try:
+        window.open_selected_notification("whatsapp")
+        assert opened_urls and "wa.me/393331234567" in opened_urls[-1]
+        assert "Round+1" in opened_urls[-1] or "Round%201" in opened_urls[-1]
+    finally:
+        QDesktopServices.openUrl = old_open_url
+    persisted_notifications, _ = read_document(storage_path())
+    assert persisted_notifications["notification_drafts"]
+    assert persisted_notifications["player_bios"]["jacopo"]["ratings"]["rapid"] == 1710
+    if window.match_http_server is not None:
+        window.match_http_server.shutdown()
+        window.match_http_server.server_close()
+        window.match_http_server = None
+
+    print("C5R Windows regression OK: tournament rules, PGN, clocks, undo/redo, predictions, player profiles, badges, match sheets, LAN QR pages, incident reports and player notifications.")
 finally:
     QMessageBox.question = old_question
     window.close()
