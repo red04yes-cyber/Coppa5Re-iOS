@@ -1,6 +1,6 @@
 from __future__ import annotations
 import json, os, random, sys, shutil, hashlib, math, csv, time, subprocess, queue, threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from itertools import combinations
 import chess
@@ -657,7 +657,7 @@ class MainWindow(QMainWindow):
                             played=[p for g in GAMES if g[1]==rnd for p in (g[2],g[3])]
                             BYES[rnd]=next(p for p in ORDER if p not in played)
             except Exception: self.results={}; self.penalties=[]; self.moves={}
-    def save(self):
+    def save(self, automatic_snapshot=True):
         path=storage_path(); tmp=path.with_suffix(".tmp")
         stored_schedule=[{"id":gid,"round":rnd,"white":white,"black":black} for gid,rnd,white,black in GAMES]
         tmp.write_text(json.dumps({"results":self.results,"penalties":self.penalties,"moves":self.moves,
@@ -670,7 +670,8 @@ class MainWindow(QMainWindow):
                                   "move_annotations":self.move_annotations,"round_closures":self.round_closures,
                                   "saved_at":datetime.now().isoformat(timespec="seconds")},ensure_ascii=False,indent=2),encoding="utf-8")
         tmp.replace(path)
-        self._maybe_create_auto_snapshot()
+        if automatic_snapshot:
+            self._maybe_create_auto_snapshot()
     def offer_recovery(self):
         path=getattr(self,"recovery_path",storage_path().with_name("recovery.json"))
         if not path.exists():
@@ -1424,6 +1425,390 @@ class MainWindow(QMainWindow):
         style_table(self.h2h_table, row_height=48, selectable=False)
         layout.addWidget(table_card(self.h2h_table),1); return page
 
+
+
+    def snapshot_directory(self):
+        folder = storage_path().parent / "snapshots"
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    def _store_snapshot(self, reason):
+        source = storage_path()
+        if not source.exists():
+            return None
+        state = json.loads(source.read_text(encoding="utf-8"))
+        created = datetime.now().isoformat(timespec="seconds")
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        target = self.snapshot_directory() / f"{stamp}.json"
+        payload = {"_c5r_snapshot": {"created_at": created, "reason": str(reason)}, "state": state}
+        tmp = target.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(target)
+        snapshots = sorted(self.snapshot_directory().glob("*.json"), key=lambda path: path.name, reverse=True)
+        for stale in snapshots[40:]:
+            stale.unlink(missing_ok=True)
+        return target
+
+    def _maybe_create_auto_snapshot(self):
+        try:
+            snapshots = sorted(self.snapshot_directory().glob("*.json"), key=lambda path: path.name, reverse=True)
+            latest_time = None
+            if snapshots:
+                latest = json.loads(snapshots[0].read_text(encoding="utf-8"))
+                value = latest.get("_c5r_snapshot", {}).get("created_at")
+                if value:
+                    latest_time = datetime.fromisoformat(value)
+            now = datetime.now()
+            if latest_time is None or (now - latest_time).total_seconds() >= 900:
+                self._store_snapshot("Automatico · intervallo 15 minuti")
+        except Exception as exc:
+            self.statusBar().showMessage(f"Snapshot automatico non riuscito: {exc}", 4000)
+
+    def create_snapshot(self, reason="Manuale"):
+        try:
+            self.save(automatic_snapshot=False)
+            target = self._store_snapshot(reason)
+            if target is None:
+                raise RuntimeError("Archivio del torneo non trovato.")
+            self.refresh_snapshot_status()
+            self.statusBar().showMessage(f"Snapshot creato: {target.name}", 4000)
+            return target
+        except Exception as exc:
+            QMessageBox.warning(self, "Snapshot non creato", str(exc))
+            return None
+
+    def snapshot_entries(self):
+        entries = []
+        for path in sorted(self.snapshot_directory().glob("*.json"), key=lambda item: item.name, reverse=True):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                metadata = payload.get("_c5r_snapshot", {})
+                state = payload.get("state", {})
+                if not isinstance(state, dict) or "results" not in state or "schedule" not in state:
+                    continue
+                created = metadata.get("created_at", path.stem)
+                reason = metadata.get("reason", "Snapshot")
+                entries.append((path, created, reason))
+            except Exception:
+                continue
+        return entries
+
+    def refresh_snapshot_status(self):
+        if not hasattr(self, "snapshot_status"):
+            return
+        entries = self.snapshot_entries()
+        if not entries:
+            self.snapshot_status.setText("Nessuno snapshot disponibile. Il primo verrà creato al prossimo salvataggio o manualmente.")
+        else:
+            path, created, reason = entries[0]
+            self.snapshot_status.setText(
+                f"{len(entries)} snapshot disponibili · ultimo: {created.replace('T', ' ')} · {reason} · {path.name}"
+            )
+
+    def restore_snapshot(self):
+        entries = self.snapshot_entries()
+        if not entries:
+            QMessageBox.information(self, "Ripristino snapshot", "Non ci sono snapshot validi da ripristinare.")
+            return False
+        labels = [
+            f"{created.replace('T', ' ')} · {reason} · {path.name}"
+            for path, created, reason in entries
+        ]
+        selected, ok = QInputDialog.getItem(
+            self, "Ripristina snapshot", "Seleziona la versione del torneo:", labels, 0, False
+        )
+        if not ok or not selected:
+            return False
+        index = labels.index(selected)
+        snapshot_path, _, _ = entries[index]
+        answer = QMessageBox.question(
+            self, "Conferma ripristino",
+            "Lo stato corrente verrà sostituito con lo snapshot selezionato. "
+            "Prima del ripristino verrà salvata una copia di sicurezza dello stato attuale. Continuare?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return False
+        try:
+            self.save(automatic_snapshot=False)
+            self._store_snapshot("Sicurezza prima del ripristino")
+            payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+            restored = payload["state"]
+            schedule = [
+                (item["id"], int(item["round"]), item["white"], item["black"])
+                for item in restored.get("schedule", [])
+            ]
+            validate_schedule(schedule)
+            temp = storage_path().with_suffix(".restore.tmp")
+            temp.write_text(json.dumps(restored, ensure_ascii=False, indent=2), encoding="utf-8")
+            temp.replace(storage_path())
+            self.load_state()
+            self.boards.clear()
+            self.log_operation("Ripristino snapshot", snapshot_path.name, "Stato precedente", "Snapshot ripristinato")
+            self.save(automatic_snapshot=False)
+            self.refresh_all()
+            self.refresh_snapshot_status()
+            self.statusBar().showMessage("Snapshot ripristinato. È stata conservata anche una copia dello stato precedente.", 5000)
+            return True
+        except Exception as exc:
+            QMessageBox.critical(self, "Ripristino non riuscito", str(exc))
+            return False
+
+    def collect_notifications(self):
+        notices = []
+        for gid, _, white, black in GAMES:
+            clock = self.clock_data(gid)
+            if clock.get("started") and self.results.get(gid) is None:
+                low = min(int(clock.get("white", 0)), int(clock.get("black", 0)))
+                if low <= 60:
+                    notices.append((
+                        "warning", f"Tempo quasi esaurito · {gid}",
+                        f"{name(white)} vs {name(black)} · almeno un orologio è a {max(0, low)} secondi.",
+                        "live"
+                    ))
+        for key in ("sf1", "sf2", "final", "third"):
+            if self.playoff_results.get(key) == "1/2-1/2" and not self.playoff_winners.get(key):
+                notices.append((
+                    "warning", f"Armageddon da registrare · {key.upper()}",
+                    "La partita playoff è patta: seleziona il vincitore dell'Armageddon.",
+                    "playoffs"
+                ))
+        for round_key, closed_at in self.round_closures.items():
+            try:
+                rnd = int(round_key)
+                pending = [gid for gid, game_round, _, _ in GAMES if game_round == rnd and self.results.get(gid) is None]
+                if pending:
+                    notices.append((
+                        "danger", f"Round {rnd} da riaprire",
+                        "Sono stati rilevati risultati mancanti dopo la chiusura: " + ", ".join(pending),
+                        "calendar"
+                    ))
+            except (TypeError, ValueError):
+                notices.append(("danger", "Chiusura round non valida", str(round_key), "health"))
+        findings = getattr(self, "_health_findings", None)
+        if findings:
+            errors = sum(1 for severity, _, _ in findings if severity == "ERRORE")
+            if errors:
+                notices.append((
+                    "danger", "Health Check: anomalie da risolvere",
+                    f"L'ultimo controllo ha rilevato {errors} errori. Apri Tournament Health Check.",
+                    "health"
+                ))
+        return notices
+
+    def refresh_notification_badge(self):
+        if not hasattr(self, "notification_button"):
+            return
+        notices = self.collect_notifications()
+        self.notification_button.setText(f"AVVISI · {len(notices)}")
+        self.notification_button.setToolTip(
+            "Nessuna notifica operativa." if not notices else
+            "\n".join(item[1] for item in notices[:8])
+        )
+
+    def open_notifications(self):
+        notices = self.collect_notifications()
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Centro notifiche C5R")
+        dialog.resize(700, 480)
+        root = QVBoxLayout(dialog)
+        root.addWidget(ui_label("Centro notifiche", "h1"))
+        root.addWidget(ui_label(
+            "Avvisi operativi generati dallo stato corrente del torneo. Doppio clic per aprire la sezione collegata.",
+            "muted", wrap=True
+        ))
+        items = QListWidget()
+        for severity, title, detail, target in notices:
+            items.addItem(f"[{severity.upper()}]  {title}\n{detail}")
+            items.item(items.count() - 1).setData(Qt.ItemDataRole.UserRole, target)
+        if not notices:
+            items.addItem("Tutto regolare · nessun avviso operativo.")
+        root.addWidget(items, 1)
+        def open_target(item):
+            target = item.data(Qt.ItemDataRole.UserRole)
+            if target:
+                self.navigate_to_page(target)
+                dialog.accept()
+        items.itemDoubleClicked.connect(open_target)
+        close = QPushButton("CHIUDI")
+        close.clicked.connect(dialog.accept)
+        root.addWidget(close, 0, Qt.AlignmentFlag.AlignRight)
+        dialog.exec()
+
+    def open_command_palette(self):
+        commands = [
+            ("Apri Dashboard", "dashboard", "Panoramica e prossimi incontri"),
+            ("Apri Live Arena", "live", "Scacchiere e cronometri"),
+            ("Apri Calendario", "calendar", "Risultati, turni e assistente round"),
+            ("Apri Classifica", "standings", "Podio e punteggi"),
+            ("Apri Profilo giocatori", "players", "Statistiche individuali"),
+            ("Confronta due giocatori", "compare", "Confronto diretto e rendimento"),
+            ("Apri Opening Explorer", "openings", "Aperture delle partite registrate"),
+            ("Esegui Tournament Health Check", "health_run", "Controllo di coerenza dei dati"),
+            ("Apri Centro notifiche", "notifications", "Cronometri e attività da completare"),
+            ("Apri Assistente Round", "round_wizard", "Procedura guidata per chiudere i turni"),
+            ("Crea snapshot manuale", "snapshot", "Salva una versione ripristinabile"),
+            ("Ripristina snapshot", "restore_snapshot", "Scegli una versione precedente"),
+            ("Esporta torneo PGN", "export_pgn", "Esporta tutte le partite e annotazioni"),
+            ("Crea backup JSON", "backup", "Salva una copia esterna dei dati"),
+            ("Apri Impostazioni", "settings", "Regolamento, arbitro e dati locali"),
+        ]
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Command Palette · Coppa dei 5 Re")
+        dialog.resize(680, 560)
+        root = QVBoxLayout(dialog)
+        search = QLineEdit()
+        search.setPlaceholderText("Cerca un'azione, una pagina o uno strumento…")
+        search.setAccessibleName("Cerca comando")
+        root.addWidget(search)
+        listing = QListWidget()
+        root.addWidget(listing, 1)
+        for title, key, description in commands:
+            listing.addItem(f"{title}\n{description}")
+            listing.item(listing.count() - 1).setData(Qt.ItemDataRole.UserRole, key)
+        def filter_commands(value):
+            query = value.casefold().strip()
+            for index in range(listing.count()):
+                listing.item(index).setHidden(query not in listing.item(index).text().casefold())
+            for index in range(listing.count()):
+                if not listing.item(index).isHidden():
+                    listing.setCurrentRow(index)
+                    break
+        def activate(item=None):
+            item = item or listing.currentItem()
+            if item is None or item.isHidden():
+                return
+            key = item.data(Qt.ItemDataRole.UserRole)
+            dialog.accept()
+            self.execute_palette_command(key)
+        search.textChanged.connect(filter_commands)
+        search.returnPressed.connect(activate)
+        listing.itemActivated.connect(activate)
+        listing.setCurrentRow(0)
+        search.setFocus()
+        dialog.exec()
+
+    def execute_palette_command(self, key):
+        commands = {
+            "dashboard": lambda: self.navigate_to_page("dashboard"),
+            "live": lambda: self.navigate_to_page("live"),
+            "calendar": lambda: self.navigate_to_page("calendar"),
+            "standings": lambda: self.navigate_to_page("standings"),
+            "players": lambda: self.navigate_to_page("players"),
+            "compare": lambda: self.navigate_to_page("compare"),
+            "openings": lambda: self.navigate_to_page("openings"),
+            "health": lambda: self.navigate_to_page("health"),
+            "health_run": lambda: (self.navigate_to_page("health"), self.run_health_check()),
+            "notifications": self.open_notifications,
+            "round_wizard": self.open_round_wizard,
+            "snapshot": lambda: self.create_snapshot("Manuale · Command Palette"),
+            "restore_snapshot": self.restore_snapshot,
+            "export_pgn": self.export_all_pgn,
+            "backup": self.export_backup,
+            "settings": lambda: self.navigate_to_page("settings"),
+        }
+        action = commands.get(key)
+        if action:
+            action()
+
+    def navigate_to_page(self, key):
+        if key in self._page_keys:
+            self.nav.set_current(key, emit=True)
+        elif key in self._nav_keys:
+            self.nav.set_current(key, emit=True)
+
+    def open_round_wizard(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Assistente operativo round")
+        dialog.resize(680, 520)
+        root = QVBoxLayout(dialog)
+        root.addWidget(ui_label("Assistente operativo round", "h1"))
+        root.addWidget(ui_label(
+            "Seleziona il turno, controlla gli incontri e chiudilo solo quando ogni partita ha un risultato o risulta annullata.",
+            "muted", wrap=True
+        ))
+        round_box = QComboBox()
+        for rnd in range(1, 6):
+            round_box.addItem(f"ROUND {rnd}", rnd)
+        root.addWidget(ui_label("TURNO", "field"))
+        root.addWidget(round_box)
+        status = ui_label("", "body", wrap=True)
+        root.addWidget(status)
+        game_list = QListWidget()
+        root.addWidget(game_list, 1)
+        actions = QHBoxLayout()
+        open_live = QPushButton("APRI PARTITE IN LIVE ARENA")
+        close_round = QPushButton("CHIUDI TURNO")
+        close_round.setObjectName("PrimaryButton")
+        actions.addWidget(open_live)
+        actions.addStretch(1)
+        actions.addWidget(close_round)
+        root.addLayout(actions)
+        def update_round():
+            rnd = round_box.currentData()
+            rows = [item for item in GAMES if item[1] == rnd]
+            game_list.clear()
+            unresolved = []
+            for gid, _, white, black in rows:
+                result = self.results.get(gid)
+                if result is None:
+                    unresolved.append(gid)
+                    if self.clock_data(gid).get("started") or self.moves.get(gid):
+                        label = "IN CORSO"
+                    else:
+                        label = "DA DISPUTARE"
+                elif result == "VOID":
+                    label = "ANNULLATA"
+                else:
+                    label = f"CONCLUSA · {result}"
+                game_list.addItem(f"{gid}   ·   {name(white)} vs {name(black)}   ·   {label}")
+            closure = self.round_closures.get(str(rnd))
+            if unresolved:
+                status.setText(
+                    f"{len(unresolved)} partite ancora da definire: {', '.join(unresolved)}. "
+                    "La chiusura è disabilitata."
+                )
+            else:
+                status.setText(
+                    f"Entrambe le partite sono risolte. "
+                    + (f"Turno già chiuso il {closure}." if closure else "Il turno può essere chiuso.")
+                )
+            close_round.setEnabled(not unresolved)
+            close_round.setText("TURNO GIÀ CHIUSO" if closure else "CHIUDI TURNO")
+        def open_live_games():
+            rnd = round_box.currentData()
+            game_rows = [item for item in GAMES if item[1] == rnd]
+            if not game_rows:
+                return
+            for slot, row in enumerate(game_rows[:2]):
+                combo = self.live_cards[slot].selector
+                index = combo.findData(row[0])
+                if index >= 0:
+                    combo.setCurrentIndex(index)
+            self.navigate_to_page("live")
+            dialog.accept()
+        def close_selected_round():
+            rnd = round_box.currentData()
+            game_rows = [item for item in GAMES if item[1] == rnd]
+            unresolved = [gid for gid, _, _, _ in game_rows if self.results.get(gid) is None]
+            if unresolved:
+                update_round()
+                return
+            if self.round_closures.get(str(rnd)):
+                QMessageBox.information(dialog, "Turno già chiuso", "Questo turno risulta già chiuso.")
+                return
+            stamp = datetime.now().strftime("%d/%m/%Y %H:%M")
+            self.round_closures[str(rnd)] = stamp
+            self.log_operation("Turno chiuso", f"Round {rnd}", "In corso", stamp)
+            self.save()
+            self.refresh_all()
+            update_round()
+        round_box.currentIndexChanged.connect(update_round)
+        open_live.clicked.connect(open_live_games)
+        close_round.clicked.connect(close_selected_round)
+        update_round()
+        dialog.exec()
 
     def player_profile_data(self, player_id):
         if player_id not in PLAYERS:
