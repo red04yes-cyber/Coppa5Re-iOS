@@ -675,6 +675,7 @@ class MainWindow(QMainWindow):
         self.ui_preferences={"theme":"dark","font_scale":1.0,"density":"comfortable"}; self.ui_profiles={}
         self._clock_runtime={}; self._last_clock_persist=time.monotonic()
         self._undo_stack=[]; self._redo_stack=[]; self._history_restoring=False; self._last_history_state=None
+        self.state_load_blocked=False
         self.recovery_path=storage_path().with_name("recovery.json")
         self.offer_recovery()
         self.load_state(); self._last_history_state=self._history_snapshot(self.state_payload()); self.build_ui(); self.apply_ui_preferences(); self.refresh_all()
@@ -721,9 +722,10 @@ class MainWindow(QMainWindow):
                     f"Il file principale non era integro. Sono stati recuperati i dati dalla copia {fallback.name}. "
                     "Salva il torneo per rigenerare l'archivio principale.")
         except Exception as exc:
+            self.state_load_blocked=True
             QMessageBox.critical(self,"Archivio non leggibile",
                 f"Non è stato possibile leggere i dati del torneo in modo sicuro.\n\n{exc}\n\n"
-                "I dati originali non sono stati sovrascritti.")
+                "I dati originali non sono stati sovrascritti. Il salvataggio resta bloccato finché non ripristini un backup valido.")
 
     def state_payload(self):
         stored_schedule=[{"id":gid,"round":rnd,"white":white,"black":black} for gid,rnd,white,black in GAMES]
@@ -748,6 +750,12 @@ class MainWindow(QMainWindow):
         return json.loads(json.dumps(data,ensure_ascii=False,sort_keys=True,default=str))
 
     def save(self, automatic_snapshot=True):
+        if getattr(self,"state_load_blocked",False):
+            self.statusBar().showMessage(
+                "Salvataggio bloccato: archivio locale non leggibile. Ripristina un backup valido prima di continuare.",
+                7000
+            )
+            return False
         payload=self.state_payload()
         current_history=self._history_snapshot(payload)
         if not self._history_restoring and self._last_history_state is not None and current_history!=self._last_history_state:
@@ -759,6 +767,7 @@ class MainWindow(QMainWindow):
         atomic_write_json(storage_path(),payload)
         if automatic_snapshot:
             self._maybe_create_auto_snapshot()
+        return True
 
     def _restore_history_snapshot(self,snapshot,action_label):
         current=self.state_payload()
@@ -823,6 +832,8 @@ class MainWindow(QMainWindow):
             path.unlink(missing_ok=True)
 
     def save_recovery(self):
+        if getattr(self,"state_load_blocked",False):
+            return
         active=any(
             (self.moves.get(gid) and not self.results.get(gid)) or self.clock_data(gid).get("started")
             for gid,_,_,_ in GAMES
@@ -1015,6 +1026,10 @@ class MainWindow(QMainWindow):
         self.save(); self.refresh_all()
         self.statusBar().showMessage(f"Ritiro di {name(player_id)} registrato secondo l'Art. 11.",4500)
     def set_result(self,gid,value,confirm=True,detail="inserimento manuale",termination=None):
+        if getattr(self,"state_load_blocked",False):
+            QMessageBox.warning(self,"Archivio non disponibile",
+                "Non registro risultati finché l'archivio locale non è leggibile. Ripristina un backup JSON valido.")
+            return
         old=self.results.get(gid)
         if old==value: return
         if old is not None and confirm:
@@ -1491,6 +1506,30 @@ class MainWindow(QMainWindow):
         for tile in self.dashboard_tiles.values():
             metrics.addWidget(tile, 1)
         root.addLayout(metrics)
+
+        results_card = Card(
+            "Ultimi risultati",
+            "Le partite concluse più di recente. Ogni nuovo risultato registrato compare qui automaticamente.",
+            padding=16,
+            spacing=8
+        )
+        self.dashboard_results_table=QTableWidget(0,5)
+        self.dashboard_results_table.setHorizontalHeaderLabels(["TURNO","PARTITA","BIANCO","NERO","RISULTATO"])
+        style_table(self.dashboard_results_table,row_height=38,selectable=False)
+        self.dashboard_results_table.horizontalHeader().setSectionResizeMode(1,QHeaderView.ResizeMode.Stretch)
+        for column in (0,2,3,4):
+            self.dashboard_results_table.horizontalHeader().setSectionResizeMode(column,QHeaderView.ResizeMode.ResizeToContents)
+        self.dashboard_results_table.setMaximumHeight(238)
+        self.dashboard_results_table.cellDoubleClicked.connect(self.open_dashboard_result)
+        results_card.body.addWidget(table_card(self.dashboard_results_table))
+        self.dashboard_results_empty=ui_label(
+            "Nessun risultato registrato. Inserisci un esito dal Calendario o dalla Live Arena: verrà mostrato qui.",
+            "muted",
+            wrap=True
+        )
+        self.dashboard_results_empty.setMinimumHeight(42)
+        results_card.body.addWidget(self.dashboard_results_empty)
+        root.addWidget(results_card)
 
         progress_card = Card("Avanzamento del girone", "Completamento delle dieci partite di qualificazione.")
         self.dashboard_progress = QProgressBar()
@@ -4425,9 +4464,52 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
             shortcut=QShortcut(QKeySequence(key),self)
             shortcut.activated.connect(callback); self.shortcuts.append(shortcut)
 
+    def open_dashboard_result(self,row,column):
+        item=self.dashboard_results_table.item(row,0)
+        gid=item.data(Qt.ItemDataRole.UserRole) if item else None
+        if not gid:
+            return
+        self.nav.set_current("live")
+        if self.live_cards:
+            selector=self.live_cards[0].selector
+            index=selector.findData(gid)
+            if index>=0:
+                selector.setCurrentIndex(index)
+
+    def refresh_dashboard_results(self):
+        if not hasattr(self,"dashboard_results_table"):
+            return
+        schedule_order={gid:index for index,(gid,_,_,_) in enumerate(GAMES)}
+        last_result_event={}
+        for index,entry in enumerate(self.audit_log):
+            if entry.get("action")=="Risultato":
+                gid=str(entry.get("entity",""))
+                last_result_event[gid]=index
+        completed=[g for g in GAMES if self.results.get(g[0]) is not None]
+        completed.sort(
+            key=lambda g:(last_result_event.get(g[0],-1),schedule_order.get(g[0],-1)),
+            reverse=True
+        )
+        latest=completed[:6]
+        self.dashboard_results_table.setRowCount(len(latest))
+        labels={"1-0":"1  –  0","1/2-1/2":"½  –  ½","0-1":"0  –  1","VOID":"ANNULLATA"}
+        for row,(gid,round_no,white,black) in enumerate(latest):
+            result=self.results.get(gid)
+            values=(f"ROUND {round_no:02d}",gid,name(white),name(black),labels.get(result,str(result or "")))
+            for column,value in enumerate(values):
+                item=QTableWidgetItem(str(value))
+                item.setData(Qt.ItemDataRole.UserRole,gid)
+                if column in (0,1,4):
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.dashboard_results_table.setItem(row,column,item)
+        has_results=bool(latest)
+        self.dashboard_results_table.setVisible(has_results)
+        self.dashboard_results_empty.setVisible(not has_results)
+
     def refresh_dashboard(self):
         if not hasattr(self, "dashboard_tiles"):
             return
+        self.refresh_dashboard_results()
         done = sum(1 for gid, _, _, _ in GAMES if self.results.get(gid) not in (None, "VOID"))
         voided = sum(1 for gid, _, _, _ in GAMES if self.results.get(gid) == "VOID")
         active_games = [
@@ -5227,6 +5309,7 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
                 QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,QMessageBox.StandardButton.No)
             if answer!=QMessageBox.StandardButton.Yes: return
             atomic_write_json(storage_path(),data)
+            self.state_load_blocked=False
             self.boards.clear(); self._odds_cache_key=None; self._odds_cache=None
             self.results={}; self.penalties=[]; self.moves={}; self.clocks={}; self.audit_log=[]; self.match_notes={}
             self.load_state(); self.refresh_all()
@@ -5749,6 +5832,10 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
         return page
 
     def set_playoff_result(self,key,value,detail="Inserimento manuale"):
+        if getattr(self,"state_load_blocked",False):
+            QMessageBox.warning(self,"Archivio non disponibile",
+                "Non registro risultati playoff finché l'archivio locale non è leggibile. Ripristina un backup JSON valido.")
+            return
         old=self.playoff_results.get(key)
         if old==value: return
         if old is not None:
@@ -6175,8 +6262,9 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
         if service is not None and service.isRunning():
             service.stop()
             service.wait(6000)
-        self.save()
-        self.recovery_path.unlink(missing_ok=True)
+        if not getattr(self,"state_load_blocked",False):
+            self.save()
+            self.recovery_path.unlink(missing_ok=True)
         if self.broadcast: self.broadcast.close()
         event.accept()
 
