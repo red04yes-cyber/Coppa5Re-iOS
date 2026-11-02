@@ -2501,6 +2501,204 @@ class MainWindow(QMainWindow):
             "colors": colors, "history": history, "openings": opening_counts,
         }
 
+    def player_photo_pixmap(self,player_id,size,photo_data=None):
+        size=max(24,int(size))
+        profile=self.player_bios.get(player_id,{})
+        encoded=photo_data if photo_data is not None else profile.get("photo_data","")
+        source=QPixmap()
+        if encoded:
+            try:
+                source.loadFromData(base64.b64decode(encoded,validate=True))
+            except Exception:
+                source=QPixmap()
+        canvas=QPixmap(size,size)
+        canvas.fill(Qt.GlobalColor.transparent)
+        painter=QPainter(canvas)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing,True)
+        path=QPainterPath()
+        path.addEllipse(0,0,size,size)
+        painter.setClipPath(path)
+        if not source.isNull():
+            scaled=source.scaled(size,size,Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                                 Qt.TransformationMode.SmoothTransformation)
+            crop=scaled.copy(max(0,(scaled.width()-size)//2),max(0,(scaled.height()-size)//2),size,size)
+            painter.drawPixmap(0,0,crop)
+        else:
+            color=QColor(T.player_tint(ORDER.index(player_id)))
+            painter.fillRect(0,0,size,size,color)
+            initials="".join(part[0] for part in name(player_id).split()[:2]).upper() or "?"
+            painter.setPen(QColor("#FFFFFF"))
+            painter.setFont(QFont("Segoe UI",max(10,int(size*0.34)),QFont.Weight.Bold))
+            painter.drawText(QRect(0,0,size,size),Qt.AlignmentFlag.AlignCenter,initials)
+        painter.end()
+        return canvas
+
+    def set_player_avatar_label(self,label,player_id,size):
+        label.setFixedSize(size,size)
+        label.setPixmap(self.player_photo_pixmap(player_id,size))
+        label.setText("")
+        label.setToolTip(name(player_id))
+        label.setStyleSheet("border: 2px solid #C9A15B; border-radius: %dpx;" % (size//2))
+
+    def player_profile_info(self,player_id):
+        profile=dict(self.player_bios.get(player_id,{}) or {})
+        profile.setdefault("age","")
+        profile.setdefault("bio","")
+        profile.setdefault("chesscom_username",PLAYERS[player_id][1])
+        ratings=profile.get("ratings",{}) or {}
+        profile["ratings"]={kind:ratings.get(kind) for kind in ("bullet","blitz","rapid")}
+        profile.setdefault("photo_data","")
+        return profile
+
+    def _encode_player_photo(self,path):
+        source=QPixmap(path)
+        if source.isNull():
+            raise ValueError("Il file selezionato non è un'immagine supportata.")
+        scaled=source.scaled(640,640,Qt.AspectRatioMode.KeepAspectRatio,
+                             Qt.TransformationMode.SmoothTransformation)
+        buffer=QBuffer()
+        if not buffer.open(QIODevice.OpenModeFlag.WriteOnly):
+            raise ValueError("Impossibile preparare la foto selezionata.")
+        try:
+            if not scaled.save(buffer,"JPG",88):
+                raise ValueError("Impossibile convertire la foto in JPEG.")
+            payload=bytes(buffer.data())
+        finally:
+            buffer.close()
+        if len(payload)>512*1024:
+            raise ValueError("La foto compressa supera 512 KB.")
+        return base64.b64encode(payload).decode("ascii")
+
+    def edit_player_bio(self,player_id):
+        if player_id not in PLAYERS:
+            return
+        current=self.player_profile_info(player_id)
+        dialog=QDialog(self)
+        dialog.setWindowTitle(f"Anagrafica giocatore · {name(player_id)}")
+        dialog.resize(680,650)
+        root=QVBoxLayout(dialog)
+        root.setContentsMargins(22,20,22,18)
+        root.setSpacing(12)
+        photo_row=QHBoxLayout()
+        preview=QLabel()
+        preview.setFixedSize(112,112)
+        preview.setPixmap(self.player_photo_pixmap(player_id,112,current.get("photo_data","")))
+        preview.setStyleSheet("border: 2px solid #C9A15B; border-radius: 56px;")
+        photo_row.addWidget(preview)
+        photo_help=QVBoxLayout()
+        photo_help.addWidget(ui_label("FOTO PROFILO","field"))
+        photo_help.addWidget(ui_label(
+            "La foto viene ridimensionata e salvata nei dati locali del torneo, così resta inclusa nei backup e negli snapshot.",
+            "muted",wrap=True))
+        photo_button=QPushButton("SCEGLI / CAMBIA FOTO")
+        remove_photo=QPushButton("RIMUOVI FOTO")
+        photo_actions=QHBoxLayout()
+        photo_actions.addWidget(photo_button)
+        photo_actions.addWidget(remove_photo)
+        photo_help.addLayout(photo_actions)
+        photo_row.addLayout(photo_help,1)
+        root.addLayout(photo_row)
+        photo_data=current.get("photo_data","")
+
+        fields=QGridLayout()
+        age=QLineEdit(str(current.get("age","") or ""))
+        age.setPlaceholderText("Età in anni")
+        age.setValidator(QIntValidator(1,120,dialog))
+        chesscom=QLineEdit(str(current.get("chesscom_username") or ""))
+        chesscom.setPlaceholderText("Username Chess.com")
+        fields.addWidget(ui_label("ETÀ","field"),0,0)
+        fields.addWidget(age,0,1)
+        fields.addWidget(ui_label("USERNAME CHESS.COM","field"),0,2)
+        fields.addWidget(chesscom,0,3)
+        root.addLayout(fields)
+
+        ratings_card=Card("Rating Chess.com","Inserisci i rating attuali del profilo online. I campi possono restare vuoti finché non mi comunichi i valori.")
+        rating_grid=QGridLayout()
+        rating_edits={}
+        for col,(kind,label) in enumerate((("bullet","BULLET"),("blitz","BLITZ"),("rapid","RAPID"))):
+            edit=QLineEdit("" if current["ratings"][kind] is None else str(current["ratings"][kind]))
+            edit.setPlaceholderText("—")
+            edit.setValidator(QIntValidator(100,4000,dialog))
+            rating_edits[kind]=edit
+            rating_grid.addWidget(ui_label(label,"field"),0,col)
+            rating_grid.addWidget(edit,1,col)
+        ratings_card.body.addLayout(rating_grid)
+        root.addWidget(ratings_card)
+
+        biography=QPlainTextEdit()
+        biography.setPlaceholderText("Breve biografia: stile di gioco, percorso scacchistico, club, curiosità…")
+        biography.setPlainText(str(current.get("bio","")))
+        biography.setMaximumHeight(130)
+        root.addWidget(ui_label("BIOGRAFIA","field"))
+        root.addWidget(biography)
+
+        def choose_photo():
+            nonlocal photo_data
+            path,_=QFileDialog.getOpenFileName(dialog,"Scegli foto profilo","","Immagini (*.png *.jpg *.jpeg *.webp *.bmp)")
+            if not path:
+                return
+            try:
+                photo_data=self._encode_player_photo(path)
+                preview.setPixmap(self.player_photo_pixmap(player_id,112,photo_data))
+            except Exception as exc:
+                QMessageBox.warning(dialog,"Foto non caricata",str(exc))
+        def clear_photo():
+            nonlocal photo_data
+            photo_data=""
+            preview.setPixmap(self.player_photo_pixmap(player_id,112,""))
+        photo_button.clicked.connect(choose_photo)
+        remove_photo.clicked.connect(clear_photo)
+        root.addWidget(ui_label(
+            "Fonte dei rating: Chess.com. Non vengono mostrati rating FIDE/OTB. Il valore inserito è quello che vuoi usare come riferimento.",
+            "caption",wrap=True))
+        buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Save|QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Save).setText("SALVA SCHEDA")
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        root.addWidget(buttons)
+        if dialog.exec()!=QDialog.DialogCode.Accepted:
+            return
+        if age.text().strip() and not 1<=int(age.text())<=120:
+            QMessageBox.warning(self,"Età non valida","Inserisci un'età compresa tra 1 e 120 anni.")
+            return
+        rating_values={}
+        for kind,edit in rating_edits.items():
+            raw=edit.text().strip()
+            if raw and not 100<=int(raw)<=4000:
+                QMessageBox.warning(self,"Rating non valido",f"Il rating {kind.title()} deve essere tra 100 e 4000.")
+                return
+            rating_values[kind]=int(raw) if raw else None
+        self.player_bios[player_id]={
+            "age":int(age.text()) if age.text().strip() else "",
+            "bio":biography.toPlainText().strip(),
+            "chesscom_username":chesscom.text().strip(),
+            "ratings":rating_values,
+            "photo_data":photo_data,
+            "ratings_updated_at":datetime.now().isoformat(timespec="seconds"),
+        }
+        self.log_operation("Scheda giocatore aggiornata",player_id,"","Anagrafica, foto e rating Chess.com aggiornati")
+        self.save()
+        self.refresh_all()
+        self.statusBar().showMessage(f"Scheda di {name(player_id)} salvata.",3000)
+
+    def refresh_player_identity(self,player_id):
+        if not hasattr(self,"profile_identity_name"):
+            return
+        profile=self.player_profile_info(player_id)
+        self.profile_identity_photo.setPixmap(self.player_photo_pixmap(player_id,116))
+        self.profile_identity_name.setText(name(player_id))
+        age=f"{profile['age']} anni" if profile.get("age") else "Età non inserita"
+        username=profile.get("chesscom_username") or "username non inserito"
+        self.profile_identity_meta.setText(f"{age}   ·   Chess.com: {username}")
+        self.profile_identity_bio.setText(profile.get("bio") or "Biografia non ancora inserita.")
+        for kind,tile in self.profile_rating_tiles.items():
+            value=profile["ratings"].get(kind)
+            tile.set("—" if value is None else f"{value:,}".replace(",","."),
+                     f"Rating Chess.com · {kind.title()}")
+        updated=profile.get("ratings_updated_at","")
+        self.profile_rating_date.setText(
+            f"Valori aggiornati: {updated[:10]}" if updated else "Rating non ancora verificati")
+
     def build_players(self):
         page = QWidget()
         layout = QVBoxLayout(page)
