@@ -35,6 +35,18 @@ Le percentuali sono stime Monte Carlo (15.000 scenari) basate sui pronostici 1-X
 - Esportazione PGN del torneo e dei playoff, classifica CSV/PDF, registro CSV e backup/ripristino JSON.
 - Scorciatoie da tastiera e salvataggio automatico.
 
+## Analisi avanzata Windows
+La pagina **Analisi torneo** aggiunge:
+- grafico del punteggio cumulativo di ogni giocatore, turno dopo turno;
+- percentuali di vittoria, patta e sconfitta separate per Bianco e Nero;
+- confronto tra partecipanti di imprecisioni, errori e gravi errori rilevati da Game Review;
+- statistiche sul tempo di riflessione medio e mediano per mossa;
+- report generale con aperture, tipi di conclusione, precisione e tempi misurati;
+- simulatore della classifica: i risultati ipotetici delle partite ancora da disputare non modificano né salvano i risultati ufficiali;
+- scheda personale PDF con andamento, risultati, colori, aperture, Game Review e tempi.
+
+I tempi di riflessione vengono raccolti quando il cronometro della partita è attivo e misurano l'intero intervallo del turno, non il solo ultimo aggiornamento dell'orologio. Le partite precedenti all'aggiornamento non hanno tempi retroattivi: i report indicano esplicitamente quando i dati non sono disponibili. Le statistiche di apertura e Game Review si basano sulle mosse e sulle analisi effettivamente registrate.
+
 ## Build Windows
 Il workflow GitHub Actions “Build Coppa dei 5 Re for Windows”:
 1. installa le dipendenze Python;
