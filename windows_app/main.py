@@ -1470,7 +1470,7 @@ class MainWindow(QMainWindow):
         items = [
             ("ESPORTA PGN TORNEO", self.export_all_pgn),
             ("CLASSIFICA CSV", self.export_standings_csv),
-            ("CLASSIFICA PDF", self.export_standings_pdf),
+            ("CLASSIFICA PDF", self.export_standings_pdf),\n            ("REPORT UFFICIALE PDF", self.export_tournament_report_pdf),
             ("CREA BACKUP", self.export_backup),
             ("RIPRISTINA BACKUP", self.restore_backup),
         ]
@@ -3347,6 +3347,111 @@ class MainWindow(QMainWindow):
         finally:
             painter.end()
         self.statusBar().showMessage("Classifica PDF esportata.",2500)
+
+    def export_tournament_report_pdf(self):
+        path,_=QFileDialog.getSaveFileName(self,"Esporta report ufficiale","Report-Ufficiale-C5R.pdf","PDF (*.pdf)")
+        if not path:
+            return
+        writer=QPdfWriter(path)
+        writer.setTitle("Report ufficiale · Coppa dei 5 Re")
+        writer.setCreator("Coppa dei 5 Re · Control Room")
+        writer.setResolution(150)
+        painter=QPainter(writer)
+        try:
+            page_width=writer.width()
+            page_height=writer.height()
+            margin=170
+            max_width=page_width-margin*2
+            y=margin
+            page_no=1
+
+            def page_header():
+                nonlocal y,page_no
+                painter.setPen(QColor("#9A6A18"))
+                painter.setFont(QFont("Segoe UI",17,QFont.Weight.Bold))
+                painter.drawText(margin,margin+35,"COPPA DEI 5 RE")
+                painter.setPen(QColor("#596675"))
+                painter.setFont(QFont("Segoe UI",8))
+                painter.drawText(margin,page_height-65,
+                    f"Report arbitrale · {datetime.now().strftime('%d/%m/%Y %H:%M')} · Pagina {page_no}")
+                y=margin+90
+
+            def ensure_space(height):
+                nonlocal y,page_no
+                if y+height>page_height-margin-100:
+                    writer.newPage()
+                    page_no+=1
+                    page_header()
+
+            def write_line(text,size=9,bold=False,color="#202A35",gap=10):
+                nonlocal y
+                font=QFont("Segoe UI",size,QFont.Weight.Bold if bold else QFont.Weight.Normal)
+                painter.setFont(font)
+                painter.setPen(QColor(color))
+                rect=painter.fontMetrics().boundingRect(0,0,max_width,2000,Qt.TextFlag.TextWordWrap,str(text))
+                height=max(font.pixelSize()+8,rect.height())
+                ensure_space(height+gap)
+                painter.drawText(QRect(margin,y,max_width,height+4),Qt.TextFlag.TextWordWrap,str(text))
+                y+=height+gap
+
+            def section(title):
+                nonlocal y
+                ensure_space(48)
+                write_line(title.upper(),11,True,"#9A6A18",8)
+                painter.setPen(QPen(QColor("#D7DEE5"),2))
+                painter.drawLine(margin,y,max_width+margin,y)
+                y+=14
+
+            page_header()
+            write_line("REPORT UFFICIALE DEL TORNEO",15,True,"#202A35",8)
+            write_line(f"Arbitro responsabile: {self.referee or 'Non indicato'}")
+            write_line("Cadenze regolamentari: qualificazione 15+3 · semifinali e finali 30+10")
+            write_line(f"Spareggi: {self.tie_break or 'Regolamento Art. 8'}")
+            write_line(f"Generato il: {datetime.now().strftime('%d/%m/%Y alle %H:%M:%S')}")
+            section("Classifica generale")
+            write_line("POS.   GIOCATORE                         G   V   X   P   PEN.       PUNTI NETTI",9,True)
+            for position,row in enumerate(self.standings(),1):
+                line=(f"{position:>2}       {name(row['id']):<30} "
+                    f"{row['played']:>2}  {row['wins']:>2}  {row['draws']:>2}  {row['losses']:>2}  "
+                    f"{row['penalty']:>+6.1f}     {row['points']:>6.1f}")
+                write_line(line,9)
+            section("Calendario e risultati")
+            for gid,rnd,white,black in GAMES:
+                result=self.results.get(gid,"Da disputare")
+                if result=="VOID":
+                    result="Annullata / esclusa"
+                elif result is None:
+                    result="Da disputare"
+                write_line(f"Round {rnd} · {gid}   |   {name(white)} – {name(black)}   |   {result}")
+            section("Playoff")
+            for key,label in (("sf1","Semifinale 1"),("sf2","Semifinale 2"),("third","3°/4° posto"),("final","Finale")):
+                result=self.playoff_results.get(key,"Da disputare")
+                winner=self.playoff_winners.get(key)
+                pair=getattr(self,"playoff_pairs",{}).get(key,(None,None))
+                players=" – ".join(name(player) if player else "Da definire" for player in pair)
+                if winner:
+                    result+=f" · Armageddon: {name(winner)}"
+                write_line(f"{label}: {players} · {result}")
+            section("Penalità e provvedimenti")
+            if not self.penalties:
+                write_line("Nessuna penalità registrata.")
+            for item in self.penalties:
+                write_line(f"{item.get('time','')} · {name(item.get('player',''))} · "
+                    f"{float(item.get('points',0)):+.1f} pt · {item.get('reason','')}")
+            section("Registro arbitrale")
+            if not self.audit_log:
+                write_line("Nessuna operazione registrata.")
+            for item in self.audit_log[-80:]:
+                write_line(f"{item.get('time','')} · {item.get('action','')} · {item.get('entity','')} · "
+                    f"{item.get('before','')} → {item.get('after','')} · {item.get('detail','')}",8)
+            section("Attestazione")
+            write_line("Il presente documento riepiloga i dati registrati nella Control Room alla data di generazione. "
+                "Eventuali rettifiche successive devono essere annotate nel registro arbitrale.")
+            write_line("Firma del direttore di gara: ______________________________________________",10)
+            write_line("Data: ____________________________     Firma: ______________________________",10)
+        finally:
+            painter.end()
+        self.statusBar().showMessage("Report ufficiale PDF esportato.",3000)
 
     def export_audit_csv(self):
         path,_=QFileDialog.getSaveFileName(self,"Esporta registro","Registro-C5R.csv","CSV (*.csv)")
