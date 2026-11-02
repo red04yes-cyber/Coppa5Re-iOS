@@ -1319,7 +1319,7 @@ class MainWindow(QMainWindow):
         archive_items = [
             ("archive", "Archivio", "archive"),
             ("h2h", "Testa a testa", "versus"),
-            ("incidents", "Verbali incidenti", "file-text"),
+            ("incidents", "Verbali incidenti", "file"),
             ("audit", "Registro operazioni", "log"),
             ("settings", "Impostazioni", "settings"),
         ]
