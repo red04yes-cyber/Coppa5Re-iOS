@@ -1774,7 +1774,7 @@ class MainWindow(QMainWindow):
                     f"Entrambe le partite sono risolte. "
                     + (f"Turno già chiuso il {closure}." if closure else "Il turno può essere chiuso.")
                 )
-            close_round.setEnabled(not unresolved)
+            close_round.setEnabled(not unresolved and not bool(closure))
             close_round.setText("TURNO GIÀ CHIUSO" if closure else "CHIUDI TURNO")
         def open_live_games():
             rnd = round_box.currentData()
@@ -2685,15 +2685,31 @@ class MainWindow(QMainWindow):
         }
         for ply,move_node in enumerate(node.mainline(),1):
             review=reviews.get(ply)
-            if not review:
-                continue
-            label=review.get("label","")
-            loss=float(review.get("expected_points_loss",0))*100
-            note=f"C5R Game Review: {label}; expected-points loss {loss:.1f}%; eval before {int(review.get('before_cp',0))/100:+.2f}, after {int(review.get('after_cp',0))/100:+.2f}"
-            move_node.comment=(move_node.comment+" | "+note).strip(" |")
-            nag=nag_map.get(label)
-            if nag is not None:
-                move_node.nags.add(nag)
+            if review:
+                label=review.get("label","")
+                loss=float(review.get("expected_points_loss",0))*100
+                note=f"C5R Game Review: {label}; expected-points loss {loss:.1f}%; eval before {int(review.get('before_cp',0))/100:+.2f}, after {int(review.get('after_cp',0))/100:+.2f}"
+                move_node.comment=(move_node.comment+" | "+note).strip(" |")
+                nag=nag_map.get(label)
+                if nag is not None:
+                    move_node.nags.add(nag)
+
+            annotation = self.move_annotations.get(gid, {}).get(str(ply), {})
+            if isinstance(annotation, dict):
+                comment = str(annotation.get("note", "")).strip()
+                if comment:
+                    move_node.comment = (move_node.comment + " | Nota C5R: " + comment).strip(" |")
+                variation = str(annotation.get("variation", "")).strip()
+                if variation:
+                    variation_board = move_node.board()
+                    variation_parent = move_node
+                    try:
+                        for token in variation.split():
+                            variation_move = variation_board.parse_san(token)
+                            variation_parent = variation_parent.add_variation(variation_move)
+                            variation_board.push(variation_move)
+                    except ValueError as exc:
+                        raise ValueError(f"Variante non valida per {gid}, mossa {ply}: {exc}") from exc
         return node
 
     def build_playoff_pgn(self,key):
@@ -2724,7 +2740,7 @@ class MainWindow(QMainWindow):
         chunks=[]
         for gid,_,_,_ in GAMES:
             node=self.build_pgn_game(gid)
-            chunks.append(node.accept(chess.pgn.StringExporter(headers=True,variations=False,comments=True)))
+            chunks.append(node.accept(chess.pgn.StringExporter(headers=True,variations=True,comments=True)))
         for key in ("sf1","sf2","third","final"):
             pair=getattr(self,"playoff_pairs",{}).get(key,(None,None))
             if self.playoff_results.get(key) or all(pair):
@@ -2865,6 +2881,78 @@ class MainWindow(QMainWindow):
             board_card.body.addLayout(preview_row)
             move_detail = ui_label("Seleziona una mossa nella timeline.", "muted", wrap=True)
             board_card.body.addWidget(move_detail)
+
+            annotation_card = Card(
+                "Annotazioni della mossa",
+                "Salva commenti e una variante alternativa in notazione SAN, partendo dalla posizione dopo la mossa selezionata.",
+                padding=12, spacing=7
+            )
+            annotation_note = ui_label("Nessuna nota associata.", "muted", wrap=True)
+            annotation_variation = ui_label("Variante: —", "muted", wrap=True)
+            annotation_card.body.addWidget(annotation_note)
+            annotation_card.body.addWidget(annotation_variation)
+            edit_annotation = QPushButton("MODIFICA NOTA / VARIANTE")
+            edit_annotation.clicked.connect(lambda: edit_current_annotation())
+            annotation_card.body.addWidget(edit_annotation)
+            board_card.body.addWidget(annotation_card)
+
+            def refresh_annotation_display(item):
+                ply = str(int(item.get("ply", 1)))
+                saved = self.move_annotations.get(gid, {}).get(ply, {})
+                note = str(saved.get("note", "")).strip() if isinstance(saved, dict) else ""
+                variation = str(saved.get("variation", "")).strip() if isinstance(saved, dict) else ""
+                annotation_note.setText("Nota: " + (note or "nessuna"))
+                annotation_variation.setText("Variante: " + (variation or "—"))
+
+            def edit_current_annotation():
+                current = table.currentRow()
+                if not (0 <= current < len(positions)):
+                    return
+                item = positions[current]
+                ply = str(int(item.get("ply", current + 1)))
+                saved = self.move_annotations.get(gid, {}).get(ply, {})
+                old_note = str(saved.get("note", "")) if isinstance(saved, dict) else ""
+                old_variation = str(saved.get("variation", "")) if isinstance(saved, dict) else ""
+                note_text, ok = QInputDialog.getMultiLineText(
+                    dialog, "Annotazione mossa", f"{gid} · mossa {ply} · commento:", old_note
+                )
+                if not ok:
+                    return
+                variation_text, ok = QInputDialog.getText(
+                    dialog, "Variante alternativa",
+                    "Inserisci una sequenza di mosse SAN (es. Nf6 d4 d6):", old_variation
+                )
+                if not ok:
+                    return
+                variation_text = variation_text.strip()
+                fen = item.get("fen")
+                if variation_text and fen:
+                    try:
+                        validation_board = chess.Board(fen)
+                        for token in variation_text.split():
+                            validation_move = validation_board.parse_san(token)
+                            validation_board.push(validation_move)
+                    except Exception as exc:
+                        QMessageBox.warning(dialog, "Variante non valida", f"La variante non è legale da questa posizione: {exc}")
+                        return
+                note_text = note_text.strip()
+                entry = {"note": note_text, "variation": variation_text}
+                if not note_text and not variation_text:
+                    if gid in self.move_annotations:
+                        self.move_annotations[gid].pop(ply, None)
+                        if not self.move_annotations[gid]:
+                            self.move_annotations.pop(gid, None)
+                else:
+                    self.move_annotations.setdefault(gid, {})[ply] = entry
+                self.log_operation(
+                    "Annotazione mossa", f"{gid} · ply {ply}",
+                    "Annotazione presente" if old_note or old_variation else "Vuota",
+                    "Annotazione aggiornata" if note_text or variation_text else "Annotazione rimossa"
+                )
+                self.save()
+                refresh_annotation_display(item)
+                self.statusBar().showMessage(f"Annotazione della mossa {ply} salvata.", 3000)
+
             content.addWidget(board_card, 2)
             root.addLayout(content, 1)
 
@@ -2887,6 +2975,7 @@ class MainWindow(QMainWindow):
                     f"{item.get('label', '—')} · perdita punti attesi "
                     f"{float(item.get('expected_points_loss', 0)) * 100:.1f}%"
                 )
+                refresh_annotation_display(item)
             table.cellClicked.connect(select_position)
             table.selectRow(0)
             select_position(0)
@@ -3284,7 +3373,11 @@ class MainWindow(QMainWindow):
             done = sum(1 for gid, _, _, _ in games if self.results.get(gid) not in (None, "VOID"))
             voided = sum(1 for gid, _, _, _ in games if self.results.get(gid) == "VOID")
             progress_label = self.calendar_round_progress[rnd]
-            progress_label.setText(f"{done}/2 concluse" + (f" · {voided} annullate" if voided else ""))
+            closed = self.round_closures.get(str(rnd))
+            progress_label.setText(
+                f"{done}/2 concluse" + (f" · {voided} annullate" if voided else "")
+                + (f" · CHIUSO {closed}" if closed else "")
+            )
             self.calendar_round_bars[rnd].setValue(done + voided)
             self.calendar_bye_labels[rnd].setText(f"RIPOSA  ·  {name(BYES[rnd])}")
 
@@ -3670,7 +3763,8 @@ class MainWindow(QMainWindow):
         self.refresh_draw_page()
         self.refresh_standings(); self.refresh_odds(); self.refresh_penalties(); self.refresh_playoffs()
         self.refresh_dashboard(); self.refresh_archive(); self.refresh_h2h(); self.refresh_audit()
-        self.apply_calendar_filters()
+        self.refresh_player_profile(); self.refresh_compare(); self.refresh_openings(); self.refresh_snapshot_status()
+        self.apply_calendar_filters(); self.refresh_notification_badge()
         if self.broadcast and self.broadcast.isVisible(): self.broadcast.refresh_from_app()
     def refresh_standings(self):
         rows = self.standings()
