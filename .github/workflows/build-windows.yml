@@ -59,7 +59,7 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: python windows_app/stockfish_service_smoke.py
       - name: Check Python syntax
-        run: python -m compileall -q windows_app/main.py
+        run: python -m compileall -q windows_app
       - name: Smoke test Qt, chess and tournament draw
         env:
           QT_QPA_PLATFORM: offscreen
