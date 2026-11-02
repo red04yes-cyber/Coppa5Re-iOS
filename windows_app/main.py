@@ -1424,6 +1424,464 @@ class MainWindow(QMainWindow):
         style_table(self.h2h_table, row_height=48, selectable=False)
         layout.addWidget(table_card(self.h2h_table),1); return page
 
+
+    def player_profile_data(self, player_id):
+        if player_id not in PLAYERS:
+            raise ValueError("Giocatore non riconosciuto.")
+        standings_row = next(row for row in self.standings() if row["id"] == player_id)
+        raw, played, wins, draws, losses = self.raw_stats()
+        penalties = self.penalty_points()
+        move_losses = [
+            float(item.get("expected_points_loss", 0))
+            for reviews in self.move_reviews.values()
+            for item in reviews
+            if item.get("player") == player_id
+        ]
+        accuracy = None if not move_losses else max(
+            0.0, min(100.0, 100.0 * (1.0 - sum(move_losses) / len(move_losses)))
+        )
+        history = []
+        colors = {"white": {"wins": 0, "draws": 0, "losses": 0},
+                  "black": {"wins": 0, "draws": 0, "losses": 0}}
+        opening_counts = {}
+        for gid, rnd, white, black in GAMES:
+            if player_id not in (white, black):
+                continue
+            color = "white" if player_id == white else "black"
+            opponent = black if color == "white" else white
+            result = self.results.get(gid)
+            if result == "VOID":
+                outcome = "ANNULLATA"
+            elif result is None:
+                outcome = "DA DISPUTARE"
+            elif result == "1/2-1/2":
+                outcome = "PATTA"
+                colors[color]["draws"] += 1
+            else:
+                player_won = (result == "1-0" and color == "white") or (result == "0-1" and color == "black")
+                outcome = "VITTORIA" if player_won else "SCONFITTA"
+                colors[color]["wins" if player_won else "losses"] += 1
+            opening = self.opening_name(gid)
+            opening_counts[opening] = opening_counts.get(opening, 0) + 1
+            history.append({
+                "round": rnd, "gid": gid, "opponent": opponent, "color": color,
+                "result": result, "outcome": outcome, "opening": opening,
+                "accuracy": self.accuracy_for_player(gid, player_id)
+            })
+        return {
+            "id": player_id, "name": name(player_id), "points": standings_row["points"],
+            "played": played[player_id], "wins": wins[player_id], "draws": draws[player_id],
+            "losses": losses[player_id], "penalty": penalties[player_id],
+            "accuracy": accuracy, "reviewed_moves": len(move_losses),
+            "colors": colors, "history": history, "openings": opening_counts,
+        }
+
+    def build_players(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(26, 24, 26, 30)
+        layout.setSpacing(14)
+        layout.addWidget(ui_label("Profili giocatori", "h1"))
+        layout.addWidget(ui_label(
+            "Schede individuali con rendimento, colori, precisione Stockfish, aperture e storico degli incontri.",
+            "lead", wrap=True
+        ))
+        selector = Card("Seleziona partecipante", padding=14, spacing=8)
+        self.profile_combo = QComboBox()
+        for player_id in ORDER:
+            self.profile_combo.addItem(name(player_id), player_id)
+        selector.body.addWidget(self.profile_combo)
+        layout.addWidget(selector)
+        metrics = QHBoxLayout()
+        self.profile_tiles = {
+            "points": StatTile("PUNTI NETTI", "trophy"),
+            "record": StatTile("VITTORIE · PATTE · SCONFITTE", "chart"),
+            "accuracy": StatTile("PRECISIONE STOCKFISH", "info"),
+            "penalty": StatTile("PENALITÀ", "flag"),
+        }
+        for tile in self.profile_tiles.values():
+            metrics.addWidget(tile, 1)
+        layout.addLayout(metrics)
+        color_card = Card("Rendimento per colore", "Risultati separati con i pezzi bianchi e neri.")
+        self.profile_color_label = ui_label("—", "body", wrap=True)
+        self.profile_opening_label = ui_label("Aperture più giocate: —", "muted", wrap=True)
+        color_card.body.addWidget(self.profile_color_label)
+        color_card.body.addWidget(self.profile_opening_label)
+        layout.addWidget(color_card)
+        history_card = Card("Storico partite", "Risultati e analisi disponibili per il partecipante selezionato.")
+        self.profile_table = QTableWidget(0, 7)
+        self.profile_table.setHorizontalHeaderLabels(
+            ["ROUND", "PARTITA", "AVVERSARIO", "COLORE", "ESITO", "APERTURA", "PRECISIONE"]
+        )
+        self.profile_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        style_table(self.profile_table, row_height=40, selectable=False)
+        history_card.body.addWidget(self.profile_table)
+        layout.addWidget(history_card, 1)
+        self.profile_combo.currentIndexChanged.connect(self.refresh_player_profile)
+        return page
+
+    def refresh_player_profile(self):
+        if not hasattr(self, "profile_combo"):
+            return
+        player_id = self.profile_combo.currentData()
+        if player_id not in PLAYERS:
+            return
+        data = self.player_profile_data(player_id)
+        self.profile_tiles["points"].set(f"{data['points']:.1f}", f"{data['played']}/5 partite conteggiate")
+        self.profile_tiles["record"].set(
+            f"{data['wins']} · {data['draws']} · {data['losses']}",
+            "Vittorie · patte · sconfitte"
+        )
+        self.profile_tiles["accuracy"].set(
+            "—" if data["accuracy"] is None else f"{data['accuracy']:.1f}%",
+            f"{data['reviewed_moves']} mosse valutate" if data["reviewed_moves"] else "Nessuna analisi disponibile"
+        )
+        self.profile_tiles["penalty"].set(f"{data['penalty']:+.1f}", "Detrazioni registrate")
+        white = data["colors"]["white"]
+        black = data["colors"]["black"]
+        self.profile_color_label.setText(
+            f"BIANCO  ·  {white['wins']} vittorie / {white['draws']} patte / {white['losses']} sconfitte"
+            f"        NERO  ·  {black['wins']} vittorie / {black['draws']} patte / {black['losses']} sconfitte"
+        )
+        popular = sorted(data["openings"].items(), key=lambda item: (-item[1], item[0]))[:3]
+        self.profile_opening_label.setText(
+            "Aperture più giocate: " + (" · ".join(f"{opening} ({count})" for opening, count in popular) if popular else "—")
+        )
+        self.profile_table.setRowCount(len(data["history"]))
+        for row, item in enumerate(data["history"]):
+            values = [
+                f"R{item['round']}", item["gid"], name(item["opponent"]),
+                "Bianco" if item["color"] == "white" else "Nero",
+                item["outcome"], item["opening"],
+                "—" if item["accuracy"] is None else f"{item['accuracy']:.1f}%"
+            ]
+            for col, value in enumerate(values):
+                cell = QTableWidgetItem(str(value))
+                if col in (0, 1, 3, 4, 6):
+                    cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.profile_table.setItem(row, col, cell)
+
+    def build_compare(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(26, 24, 26, 30)
+        layout.setSpacing(14)
+        layout.addWidget(ui_label("Confronto giocatori", "h1"))
+        layout.addWidget(ui_label(
+            "Confronta rendimento, risultati con ciascun colore, precisione analitica e scontro diretto.",
+            "lead", wrap=True
+        ))
+        selectors = Card("Partecipanti", padding=14)
+        row = QHBoxLayout()
+        self.compare_left = QComboBox()
+        self.compare_right = QComboBox()
+        for player_id in ORDER:
+            self.compare_left.addItem(name(player_id), player_id)
+            self.compare_right.addItem(name(player_id), player_id)
+        self.compare_right.setCurrentIndex(1 if len(ORDER) > 1 else 0)
+        row.addWidget(ui_label("GIOCATORE A", "field"))
+        row.addWidget(self.compare_left, 1)
+        row.addWidget(ui_label("GIOCATORE B", "field"))
+        row.addWidget(self.compare_right, 1)
+        selectors.body.addLayout(row)
+        layout.addWidget(selectors)
+        panels = QHBoxLayout()
+        self.compare_tiles = []
+        for heading in ("GIOCATORE A", "GIOCATORE B"):
+            panel = Card(heading, padding=14)
+            tiles = {
+                "points": StatTile("PUNTI NETTI", "trophy"),
+                "record": StatTile("V · X · P", "chart"),
+                "accuracy": StatTile("PRECISIONE", "info"),
+            }
+            for tile in tiles.values():
+                panel.body.addWidget(tile)
+            self.compare_tiles.append(tiles)
+            panels.addWidget(panel, 1)
+        layout.addLayout(panels)
+        self.compare_direct = Card("Scontro diretto", padding=14)
+        self.compare_direct_label = ui_label("Seleziona due giocatori diversi.", "h3", wrap=True)
+        self.compare_direct.body.addWidget(self.compare_direct_label)
+        self.compare_direct_detail = ui_label("", "muted", wrap=True)
+        self.compare_direct.body.addWidget(self.compare_direct_detail)
+        layout.addWidget(self.compare_direct)
+        self.compare_table_card = Card("Partite tra i due giocatori", "Storico ufficiale degli scontri diretti del girone.")
+        self.compare_table = QTableWidget(0, 5)
+        self.compare_table.setHorizontalHeaderLabels(["ROUND", "BIANCO", "NERO", "RISULTATO", "APERTURA"])
+        self.compare_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.compare_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        style_table(self.compare_table, row_height=42, selectable=False)
+        self.compare_table_card.body.addWidget(self.compare_table)
+        layout.addWidget(self.compare_table_card, 1)
+        self.compare_left.currentIndexChanged.connect(self.refresh_compare)
+        self.compare_right.currentIndexChanged.connect(self.refresh_compare)
+        return page
+
+    def refresh_compare(self):
+        if not hasattr(self, "compare_left"):
+            return
+        left_id, right_id = self.compare_left.currentData(), self.compare_right.currentData()
+        for index, player_id in enumerate((left_id, right_id)):
+            data = self.player_profile_data(player_id)
+            tiles = self.compare_tiles[index]
+            tiles["points"].set(f"{data['points']:.1f}", f"{data['played']}/5 partite")
+            tiles["record"].set(f"{data['wins']} · {data['draws']} · {data['losses']}", "Vittorie · patte · sconfitte")
+            tiles["accuracy"].set(
+                "—" if data["accuracy"] is None else f"{data['accuracy']:.1f}%",
+                f"{data['reviewed_moves']} mosse valutate"
+            )
+        if left_id == right_id:
+            self.compare_direct_label.setText("Scegli due giocatori diversi per il confronto diretto.")
+            self.compare_direct_detail.setText("")
+            self.compare_table.setRowCount(0)
+            return
+        direct = []
+        for gid, rnd, white, black in GAMES:
+            if frozenset((white, black)) == frozenset((left_id, right_id)):
+                direct.append((gid, rnd, white, black, self.results.get(gid)))
+        self.compare_table.setRowCount(len(direct))
+        for row, (gid, rnd, white, black, result) in enumerate(direct):
+            values = [f"R{rnd}", name(white), name(black), result or "—", self.opening_name(gid)]
+            for col, value in enumerate(values):
+                cell = QTableWidgetItem(str(value))
+                if col in (0, 3):
+                    cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.compare_table.setItem(row, col, cell)
+        if not direct or direct[0][4] in (None, "VOID"):
+            self.compare_direct_label.setText("Scontro diretto non ancora disputato.")
+            self.compare_direct_detail.setText("Il risultato verrà mostrato automaticamente quando sarà registrato.")
+        else:
+            gid, rnd, white, black, result = direct[0]
+            winner = "Patta" if result == "1/2-1/2" else name(white if result == "1-0" else black)
+            self.compare_direct_label.setText(f"{name(left_id)}  vs  {name(right_id)}  ·  {winner}")
+            self.compare_direct_detail.setText(
+                f"Round {rnd} · {gid} · {result} · {self.opening_name(gid)}"
+            )
+
+    def opening_name(self, game_id):
+        board = chess.Board()
+        san_moves = []
+        for uci in self.moves.get(game_id, []):
+            try:
+                move = chess.Move.from_uci(uci)
+                if move not in board.legal_moves:
+                    break
+                san_moves.append(board.san(move))
+                board.push(move)
+            except (ValueError, chess.InvalidMoveError, chess.IllegalMoveError):
+                break
+        moves = tuple(san_moves)
+        patterns = [
+            (("e4", "e5", "Nf3", "Nc6", "Bb5"), "Spagnola · Ruy Lopez"),
+            (("e4", "e5", "Nf3", "Nc6", "Bc4"), "Italiana"),
+            (("e4", "e5", "Nf3", "Nc6", "d4"), "Scozzese"),
+            (("e4", "e5", "Nf3", "Nf6"), "Petrov"),
+            (("e4", "c5"), "Siciliana"),
+            (("e4", "e6"), "Francese"),
+            (("e4", "c6"), "Caro-Kann"),
+            (("d4", "d5", "c4"), "Gambetto di Donna"),
+            (("d4", "Nf6", "c4", "g6"), "Indiana di Re"),
+            (("d4", "Nf6", "Bf4"), "Sistema Londra"),
+            (("c4",), "Apertura Inglese"),
+            (("Nf3",), "Apertura Réti"),
+            (("e4",), "Apertura Re"),
+            (("d4",), "Apertura Donna"),
+        ]
+        for prefix, label in patterns:
+            if len(moves) >= len(prefix) and moves[:len(prefix)] == prefix:
+                return label
+        return "Non classificata"
+
+    def build_openings(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(26, 24, 26, 30)
+        layout.setSpacing(14)
+        layout.addWidget(ui_label("Opening Explorer", "h1"))
+        layout.addWidget(ui_label(
+            "Raggruppa le partite registrate per apertura riconosciuta dalla sequenza iniziale di mosse. "
+            "Il catalogo locale copre le linee più comuni; le altre restano non classificate.",
+            "lead", wrap=True
+        ))
+        summary = Card("Distribuzione aperture", "Conteggi calcolati dai PGN e dalle mosse salvate localmente.")
+        self.opening_summary = ui_label("Nessuna apertura ancora disponibile.", "body", wrap=True)
+        summary.body.addWidget(self.opening_summary)
+        layout.addWidget(summary)
+        filters = Card("Filtra per apertura", padding=14)
+        row = QHBoxLayout()
+        self.opening_filter = QComboBox()
+        self.opening_filter.addItem("Tutte le aperture", None)
+        row.addWidget(self.opening_filter, 1)
+        filters.body.addLayout(row)
+        self.opening_filter.currentIndexChanged.connect(self.refresh_openings)
+        layout.addWidget(filters)
+        table_card_widget = Card("Partite riconosciute", "La classificazione si basa sulle prime mosse effettivamente registrate.")
+        self.opening_table = QTableWidget(0, 6)
+        self.opening_table.setHorizontalHeaderLabels(["PARTITA", "ROUND", "BIANCO", "NERO", "APERTURA", "RISULTATO"])
+        self.opening_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        style_table(self.opening_table, row_height=42, selectable=False)
+        table_card_widget.body.addWidget(self.opening_table)
+        layout.addWidget(table_card_widget, 1)
+        return page
+
+    def refresh_openings(self):
+        if not hasattr(self, "opening_filter"):
+            return
+        all_rows = []
+        counts = {}
+        for gid, rnd, white, black in GAMES:
+            opening = self.opening_name(gid)
+            counts[opening] = counts.get(opening, 0) + 1
+            all_rows.append((gid, rnd, white, black, opening, self.results.get(gid)))
+        selected = self.opening_filter.currentData()
+        self.opening_filter.blockSignals(True)
+        self.opening_filter.clear()
+        self.opening_filter.addItem("Tutte le aperture", None)
+        for opening in sorted(counts):
+            self.opening_filter.addItem(f"{opening} · {counts[opening]}", opening)
+        index = self.opening_filter.findData(selected)
+        self.opening_filter.setCurrentIndex(max(0, index))
+        self.opening_filter.blockSignals(False)
+        self.opening_summary.setText(
+            "   ·   ".join(f"{opening}: {count}" for opening, count in sorted(counts.items(), key=lambda item: (-item[1], item[0])))
+        )
+        visible = [row for row in all_rows if selected is None or row[4] == selected]
+        self.opening_table.setRowCount(len(visible))
+        for row_index, (gid, rnd, white, black, opening, result) in enumerate(visible):
+            values = [gid, f"R{rnd}", name(white), name(black), opening, result or "—"]
+            for col, value in enumerate(values):
+                cell = QTableWidgetItem(str(value))
+                if col in (0, 1, 5):
+                    cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.opening_table.setItem(row_index, col, cell)
+
+    def health_check(self):
+        findings = []
+        def add(severity, title, detail):
+            findings.append((severity, title, detail))
+        try:
+            validate_schedule(GAMES)
+        except Exception as exc:
+            add("ERRORE", "Calendario non valido", str(exc))
+        allowed_results = {None, "1-0", "0-1", "1/2-1/2", "VOID"}
+        valid_ids = {gid for gid, _, _, _ in GAMES}
+        for gid, result in self.results.items():
+            if gid not in valid_ids and gid not in ("sf1", "sf2", "final", "third"):
+                add("ERRORE", "Risultato orfano", f"{gid}: la partita non esiste nel calendario attuale.")
+            elif result not in allowed_results:
+                add("ERRORE", "Risultato non riconosciuto", f"{gid}: valore {result!r}.")
+        for gid, moves in self.moves.items():
+            if gid not in valid_ids:
+                add("AVVISO", "Mosse senza partita", f"{gid}: sono presenti mosse ma non una partita del girone.")
+                continue
+            board = chess.Board()
+            try:
+                for ply, uci in enumerate(moves, 1):
+                    move = chess.Move.from_uci(uci)
+                    if move not in board.legal_moves:
+                        raise ValueError(f"mossa {ply} non legale ({uci})")
+                    board.push(move)
+            except Exception as exc:
+                add("ERRORE", "Sequenza mosse non valida", f"{gid}: {exc}")
+        for gid, clock in self.clocks.items():
+            for side in ("white", "black"):
+                try:
+                    if int(clock.get(side, 0)) < 0:
+                        add("ERRORE", "Cronometro negativo", f"{gid}: tempo {side} sotto zero.")
+                except (TypeError, ValueError):
+                    add("ERRORE", "Cronometro non valido", f"{gid}: tempo {side} non numerico.")
+        for player_id in self.withdrawn_players:
+            if player_id not in PLAYERS:
+                add("ERRORE", "Ritiro sconosciuto", f"ID giocatore non valido: {player_id}.")
+        for round_key in self.round_closures:
+            try:
+                round_number = int(round_key)
+                games = [gid for gid, rnd, _, _ in GAMES if rnd == round_number]
+                unresolved = [gid for gid in games if self.results.get(gid) is None]
+                if unresolved:
+                    add("ERRORE", "Turno chiuso ma incompleto",
+                        f"Round {round_number}: risultati mancanti per {', '.join(unresolved)}.")
+            except (TypeError, ValueError):
+                add("ERRORE", "Chiusura turno non valida", f"Chiave round non valida: {round_key}.")
+        for gid, plies in self.move_annotations.items():
+            if gid not in valid_ids:
+                add("AVVISO", "Annotazioni orfane", f"{gid}: annotazioni collegate a una partita non presente.")
+                continue
+            for ply, annotation in plies.items():
+                if not str(ply).isdigit() or int(ply) < 1 or not isinstance(annotation, dict):
+                    add("AVVISO", "Annotazione non valida", f"{gid}: annotazione della mossa {ply} non leggibile.")
+        try:
+            for gid in valid_ids:
+                node = self.build_pgn_game(gid)
+                if node.errors:
+                    add("ERRORE", "PGN non valido", f"{gid}: {node.errors[0]}")
+        except Exception as exc:
+            add("ERRORE", "Errore durante la verifica PGN", str(exc))
+        if not findings:
+            add("OK", "Nessuna anomalia rilevata", "Calendario, risultati, mosse, cronometri e PGN sono coerenti.")
+        return findings
+
+    def run_health_check(self):
+        findings = self.health_check()
+        self._health_findings = findings
+        errors = sum(1 for severity, _, _ in findings if severity == "ERRORE")
+        warnings = sum(1 for severity, _, _ in findings if severity == "AVVISO")
+        if hasattr(self, "health_summary"):
+            self.health_summary.setText(
+                f"{errors} errori · {warnings} avvisi · {len(findings) - errors - warnings} controlli positivi"
+            )
+            self.health_list.clear()
+            for severity, title, detail in findings:
+                self.health_list.addItem(f"[{severity}]  {title}\n{detail}")
+        self.statusBar().showMessage(
+            "Health Check completato: " + (f"{errors} errori, {warnings} avvisi." if errors or warnings else "nessuna anomalia."),
+            5000
+        )
+        self.refresh_notification_badge()
+        return findings
+
+    def build_health(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(26, 24, 26, 30)
+        layout.setSpacing(14)
+        layout.addWidget(ui_label("Tournament Health Check", "h1"))
+        layout.addWidget(ui_label(
+            "Verifica coerenza del calendario, risultati, mosse legali, cronometri, ritiri, annotazioni e PGN.",
+            "lead", wrap=True
+        ))
+        health_card = Card("Integrità del torneo", "Esegui la verifica prima di chiudere un round o esportare il torneo.")
+        actions = QHBoxLayout()
+        run = QPushButton("ESEGUI CONTROLLO")
+        run.setObjectName("PrimaryButton")
+        run.clicked.connect(self.run_health_check)
+        actions.addWidget(run)
+        actions.addStretch(1)
+        self.health_summary = ui_label("Controllo non ancora eseguito.", "caption")
+        actions.addWidget(self.health_summary)
+        health_card.body.addLayout(actions)
+        self.health_list = QListWidget()
+        self.health_list.setMinimumHeight(180)
+        health_card.body.addWidget(self.health_list)
+        layout.addWidget(health_card, 1)
+
+        snapshots = Card("Cronologia e ripristino", "Snapshot locali automatici e manuali. Il ripristino sostituisce lo stato corrente dopo una conferma.")
+        self.snapshot_status = ui_label("Nessuno snapshot disponibile.", "muted", wrap=True)
+        snapshots.body.addWidget(self.snapshot_status)
+        snapshot_actions = QHBoxLayout()
+        create = QPushButton("CREA SNAPSHOT")
+        create.clicked.connect(lambda: self.create_snapshot("Manuale"))
+        restore = QPushButton("VISUALIZZA E RIPRISTINA")
+        restore.setObjectName("PrimaryButton")
+        restore.clicked.connect(self.restore_snapshot)
+        snapshot_actions.addWidget(create)
+        snapshot_actions.addWidget(restore)
+        snapshot_actions.addStretch(1)
+        snapshots.body.addLayout(snapshot_actions)
+        layout.addWidget(snapshots)
+        self.refresh_snapshot_status()
+        return page
+
     def build_audit(self):
         page = QWidget()
         layout = QVBoxLayout(page)
