@@ -65,6 +65,11 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: |
           python -c "import chess; from PySide6.QtWidgets import QApplication; from windows_app.main import MainWindow, make_random_schedule, validate_schedule, DEFAULT_GAMES; app=QApplication([]); assert len(list(chess.Board().legal_moves)) == 20; validate_schedule(DEFAULT_GAMES); [validate_schedule(make_random_schedule()) for _ in range(100)]; window=MainWindow(); assert len(window.standings()) == 5; window.close(); print('Qt, chess, schedule generator and desktop UI OK')"
+      - name: Verify redesigned desktop panels
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python -c "from PySide6.QtWidgets import QApplication; from windows_app.main import MainWindow; app=QApplication([]); w=MainWindow(); assert len(w.podium_cards)==3; assert len(w.odds_rows)==5; assert len(w.calendar_round_bars)==5; assert hasattr(w,'audit_events_layout'); w.refresh_all(); assert w.dashboard_progress.value()>=0; w.close(); print('Dashboard, podium, calendar, odds, playoffs and audit timeline OK')"
       - name: Test odds and streaming controls
         env:
           QT_QPA_PLATFORM: offscreen
