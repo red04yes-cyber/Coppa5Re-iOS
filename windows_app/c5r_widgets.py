@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QEasingCurve, QObject, QPointF, QRect, QRectF, QSize, Qt, QPropertyAnimation, QTimer, Signal
-from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QFrame, QGraphicsDropShadowEffect, QGraphicsOpacityEffect, QHBoxLayout, QHeaderView, QLabel,
     QLayout, QMenu, QPushButton, QScrollArea, QSizePolicy, QStatusBar,
@@ -902,3 +902,140 @@ class SideNav(QFrame):
             btn.setStyleSheet("padding:0;" if collapsed else "")
 
 
+
+
+# --------------------------------------------------------------------------
+# Componenti premium per schede giocatore e abbinamenti
+# --------------------------------------------------------------------------
+class Swatch(QWidget):
+    """Indicatore compatto del colore dei pezzi assegnato al giocatore."""
+
+    def __init__(self, white: bool = True, size: int = 12):
+        super().__init__()
+        self._white = white
+        self.setFixedSize(size, size)
+
+    def set_white(self, white: bool) -> None:
+        self._white = white
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(QColor("#F4EEDF") if self._white else QColor("#15120F"))
+        painter.setPen(QPen(QColor("#8C8372") if self._white else QColor("#6C6558"), 1.2))
+        painter.drawRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 3, 3)
+
+
+class PlayerStrip(QFrame):
+    """Scheda giocatore con avatar, colore, rating, turno e orologio."""
+
+    def __init__(self, big: bool = False):
+        super().__init__()
+        self.setObjectName("RowHover")
+        self._big = big
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 8, 12, 8) if not big else layout.setContentsMargins(16, 10, 16, 10)
+        layout.setSpacing(10)
+        self.avatar = Avatar("?", C.brass, 44 if big else 32)
+        layout.addWidget(self.avatar)
+
+        text = QVBoxLayout()
+        text.setSpacing(1)
+        name_row = QHBoxLayout()
+        name_row.setSpacing(7)
+        self.swatch = Swatch(True, 14 if big else 12)
+        name_row.addWidget(self.swatch)
+        self.name = label("Giocatore", "h2" if big else "h3")
+        name_row.addWidget(self.name, 1)
+        self.material = label("", "caption")
+        name_row.addWidget(self.material)
+        text.addLayout(name_row)
+        self.sub = label("", "muted" if big else "caption")
+        text.addWidget(self.sub)
+        layout.addLayout(text, 1)
+
+        self.turn = pill("Al tratto", "brass")
+        layout.addWidget(self.turn)
+        self.clock = ClockChip(big)
+        layout.addWidget(self.clock)
+        self.turn.hide()
+
+    def set_photo(self, pixmap: QPixmap | None) -> None:
+        self.avatar.set_pixmap(pixmap)
+
+    def set_data(
+        self, name: str, handle: str, tint: str, white: bool, seconds,
+        running: bool, to_move: bool, material: int = 0, points: str = "",
+        show_clock: bool = True,
+    ) -> None:
+        self.avatar.set_player(name[:1].upper(), tint)
+        self.name.setText(name)
+        self.swatch.set_white(white)
+        self.material.setText(f"+{material}" if material > 0 else "")
+        side = "Bianco" if white else "Nero"
+        self.sub.setText(" · ".join(part for part in (handle, side, points) if part))
+        self.turn.setVisible(to_move)
+        self.clock.setVisible(show_clock)
+        if show_clock:
+            self.clock.set_time(seconds, bool(running and to_move))
+
+
+class FormStrip(QWidget):
+    """Ultimi risultati: V vittoria, X pareggio, P sconfitta."""
+
+    COLORS = {"V": C.success, "X": C.text3, "P": C.danger}
+
+    def __init__(self):
+        super().__init__()
+        self._items: list[str] = []
+        self.setFixedHeight(22)
+        self.setMinimumWidth(96)
+
+    def set_items(self, items: list) -> None:
+        self._items = [str(item) for item in list(items)[-4:]]
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setFont(font(SANS, 11, 700))
+        x = 0.0
+        for item in self._items:
+            color = QColor(self.COLORS.get(item, C.text3))
+            rect = QRectF(x, 1, 20, 20)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(with_alpha(color, 0.18))
+            painter.drawRoundedRect(rect, 6, 6)
+            painter.setPen(color)
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, item)
+            x += 24
+        if not self._items:
+            painter.setPen(QColor(C.text3))
+            painter.setFont(font(SANS, 12, 400))
+            painter.drawText(
+                QRectF(0, 0, 90, 22),
+                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                "—",
+            )
+
+
+class MatchLine(QWidget):
+    """Abbinamento con indicatori del colore Bianco/Nero."""
+
+    def __init__(self, big: bool = False):
+        super().__init__()
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        role = "h2" if big else "h3"
+        self.sw1, self.sw2 = Swatch(True), Swatch(False)
+        self.n1, self.n2 = label("", role), label("", role)
+        self.vs = label("vs", "caption")
+        for widget in (self.sw1, self.n1, self.vs, self.sw2, self.n2):
+            layout.addWidget(widget)
+        layout.addStretch(1)
+
+    def set_players(self, white: str, black: str) -> None:
+        self.n1.setText(white)
+        self.n2.setText(black)
