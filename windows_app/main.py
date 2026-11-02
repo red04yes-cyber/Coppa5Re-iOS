@@ -5398,6 +5398,7 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
             QMessageBox.warning(self, "Scheda giocatore", "Giocatore non riconosciuto.")
             return
         data = self.player_profile_data(player_id)
+        profile_info = self.player_profile_info(player_id)
         colors = data["colors"]
         errors = {
             key: sum(
@@ -5447,6 +5448,12 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
             write(f"Generata il {datetime.now().strftime('%d/%m/%Y alle %H:%M')}")
             write(f"Classifica attuale: {next(i for i, row in enumerate(self.standings(), 1) if row['id'] == player_id)}° posto · {data['points']:.1f} punti netti")
             write(f"Partite: {data['played']} · Vittorie: {data['wins']} · Patte: {data['draws']} · Sconfitte: {data['losses']} · Penalità: {data['penalty']:+.1f}")
+            ratings = profile_info.get("ratings", {})
+            rating_text = " · ".join(
+                f"{label}: {ratings.get(key) if ratings.get(key) is not None else 'N/D'}"
+                for label, key in (("Bullet", "bullet"), ("Blitz", "blitz"), ("Rapid", "rapid"))
+            )
+            write(f"Rating Chess.com · {rating_text}")
             write("RENDIMENTO PER COLORE", 12, True, 6)
             for color, label in (("white", "Bianco"), ("black", "Nero")):
                 row = colors[color]
