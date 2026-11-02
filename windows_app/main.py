@@ -520,8 +520,7 @@ class BoardCard(QFrame):
         full=self.app.get_board(self.game_id)
         self.history_index=min(len(full.move_stack),(len(full.move_stack) if self.history_index is None else self.history_index)+1)
         self.refresh()
-    def refresh_clock(self):
-        gid, _, white, black = game(self.game_id)
+    def refresh_players(self, gid, white, black):
         state = self.app.clock_data(gid)
         board = self.app.get_board(gid)
         finished = self.app.results.get(gid) is not None
@@ -538,6 +537,21 @@ class BoardCard(QFrame):
         )
         self.white_strip.set_photo(self.app.player_photo_pixmap(white, 32))
         self.black_strip.set_photo(self.app.player_photo_pixmap(black, 32))
+
+    def refresh_clock(self):
+        gid, _, _, _ = game(self.game_id)
+        state = self.app.clock_data(gid)
+        board = self.app.get_board(gid)
+        finished = self.app.results.get(gid) is not None
+        running = bool(state.get("started") and not finished)
+        self.white_strip.clock.set_time(
+            state.get("white", 0),
+            running and board.turn == chess.WHITE,
+        )
+        self.black_strip.clock.set_time(
+            state.get("black", 0),
+            running and board.turn == chess.BLACK,
+        )
         self.clock_btn.setEnabled(not finished and not state.get("started"))
         self.clock_btn.setText("OROLOGIO IN CORSO" if state.get("started") else "AVVIA OROLOGIO")
     def refresh_move_quality(self):
@@ -596,6 +610,7 @@ class BoardCard(QFrame):
         for move in board.move_stack[:self.history_index]: visible.push(move)
         self.engine_btn.setText("STOCKFISH · ON" if self.app.engine_enabled else "STOCKFISH · OFF")
         clock_state=self.app.clock_data(gid)
+        self.refresh_players(gid,w,b)
         self.state_label.setText("CONCLUSA" if self.app.results.get(gid) else ("IN CORSO" if clock_state.get("started") or board.move_stack else "LIVE"))
         self.turn.setText("PARTITA CONCLUSA · SCACCHIERA BLOCCATA" if self.app.results.get(gid) else
                           f"{'REVISIONE · ' if self.history_index<len(board.move_stack) else ''}AL MUOVERE: {'BIANCO' if visible.turn else 'NERO'} · {visible.fullmove_number}ª mossa")
