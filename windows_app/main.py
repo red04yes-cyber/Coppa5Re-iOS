@@ -8,12 +8,12 @@ import chess.pgn
 from PySide6.QtCore import Qt, QSize, Signal, QThread, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPdfWriter, QKeySequence, QShortcut
 from PySide6.QtSvg import QSvgRenderer
-from PySide6.QtWidgets import (
+from PySide6.QtWidgets (
     QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QComboBox,
     QDoubleSpinBox, QLineEdit, QVBoxLayout, QHBoxLayout, QGridLayout, QTabWidget,
     QTableWidget, QTableWidgetItem, QHeaderView, QScrollArea, QMessageBox,
     QListWidget, QInputDialog, QFileDialog, QAbstractItemView, QSizePolicy,
-    QDialog, QDialogButtonBox, QProgressBar, QStackedWidget
+    QDialog, QDialogButtonBox, QProgressBar, QStackedWidget, QCheckBox
 )
 
 APP_NAME = "Coppa dei 5 Re"
@@ -170,6 +170,13 @@ class ScheduleEditorDialog(QDialog):
         self.accept()
 
 RESULT_OPTIONS = [(None,"In corso"),("1-0","1–0"),("1/2-1/2","½–½"),("0-1","0–1"),("VOID","Annullata / esclusa")]
+THEMES = {
+    "Midnight": {"bg":"#090D12","panel":"#111923","panel2":"#151F2B","line":"#283444","text":"#EEF1F5","muted":"#8F9BAA","green":"#65C69A"},
+    "Graphite": {"bg":"#111418","panel":"#1A2027","panel2":"#242C35","line":"#39434F","text":"#EEF1F5","muted":"#A2ACB8","green":"#70CBA1"},
+    "Light": {"bg":"#F2F5F9","panel":"#FFFFFF","panel2":"#EAF0F6","line":"#D7E0EA","text":"#182333","muted":"#647386","green":"#20875F"},
+}
+ACCENTS = {"Gold":"#D8B36A","Blue":"#65A9E8","Mint":"#65C69A","Violet":"#B39AFF","Coral":"#F08C79"}
+UI_DEFAULTS = {"theme":"Midnight","accent":"Gold","density":"Standard","reduced_motion":False}
 GOLD="#D8B36A"; BG="#090D12"; PANEL="#111923"; PANEL2="#151F2B"
 LINE="#283444"; TEXT="#EEF1F5"; MUTED="#8F9BAA"; GREEN="#65C69A"
 
@@ -186,7 +193,7 @@ class BoardWidget(QWidget):
         super().__init__()
         self.interactive=interactive; self.board=chess.Board()
         self.selected=None; self.targets=set(); self.locked=False; self.flipped=False; self.theme_index=0; self.drag_source=None
-        self.move_flash=0.0; self.flash_timer=QTimer(self); self.flash_timer.setInterval(45); self.flash_timer.timeout.connect(self.fade_move_flash)
+        self.move_flash=0.0; self.reduced_motion=False; self.flash_timer=QTimer(self); self.flash_timer.setInterval(45); self.flash_timer.timeout.connect(self.fade_move_flash)
         self.setMinimumSize(320,320); self.setSizePolicy(QSizePolicy.Policy.Expanding,QSizePolicy.Policy.Expanding)
     def sizeHint(self): return QSize(420,420)
     def set_position(self, board, locked=False):
@@ -194,7 +201,9 @@ class BoardWidget(QWidget):
         previous_last=self.board.peek() if self.board.move_stack else None
         self.board=board.copy(stack=True); self.locked=locked
         new_last=self.board.peek() if self.board.move_stack else None
-        if len(self.board.move_stack)>previous_len or (new_last and new_last!=previous_last):
+        if self.reduced_motion:
+            self.move_flash=0.0; self.flash_timer.stop()
+        elif len(self.board.move_stack)>previous_len or (new_last and new_last!=previous_last):
             self.move_flash=1.0; self.flash_timer.start()
         self.selected=None; self.targets=set(); self.update()
     def fade_move_flash(self):
@@ -321,6 +330,33 @@ class LogoWidget(QWidget):
         painter=QPainter(self)
         self.renderer.render(painter,self.rect())
         painter.end()
+
+
+class EmptyStateWidget(QFrame):
+    """Empty state riutilizzabile con illustrazione tipografica e azione contestuale."""
+    def __init__(self, icon, title, description, action_text, callback, parent=None):
+        super().__init__(parent)
+        self.setObjectName("EmptyStateCard"); self.setMinimumHeight(205)
+        layout=QVBoxLayout(self); layout.setContentsMargins(24,20,24,20); layout.setSpacing(8)
+        self.icon_label=QLabel(icon); self.icon_label.setObjectName("EmptyStateIcon")
+        self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter); layout.addWidget(self.icon_label)
+        self.title_label=QLabel(title); self.title_label.setObjectName("EmptyStateTitle")
+        self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter); layout.addWidget(self.title_label)
+        self.description_label=QLabel(description); self.description_label.setObjectName("Muted")
+        self.description_label.setWordWrap(True); self.description_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.description_label)
+        self.action_button=QPushButton(action_text); self.action_button.setObjectName("PrimaryButton")
+        self.action_button.clicked.connect(lambda _checked=False: callback())
+        layout.addWidget(self.action_button,0,Qt.AlignmentFlag.AlignCenter)
+
+    def set_state(self, icon, title, description, action_text, callback):
+        self.icon_label.setText(icon); self.title_label.setText(title)
+        self.description_label.setText(description); self.action_button.setText(action_text)
+        try:
+            self.action_button.clicked.disconnect()
+        except (RuntimeError, TypeError):
+            pass
+        self.action_button.clicked.connect(lambda _checked=False: callback())
 
 
 class StockfishService(QThread):
@@ -737,8 +773,9 @@ class MainWindow(QMainWindow):
         self.time_control="15+3"; self.clocks={}; self.audit_log=[]; self.match_notes={}; self.referee=""
         self.tie_break="Regolamento Art. 8"; self.playoff_results={}; self.eval_history={}; self.clock_ticks=0; self.board_theme=0
         self.game_terminations={}; self.move_reviews={}; self.withdrawn_players={}; self.recovery_path=storage_path().with_name("recovery.json")
+        self.ui_preferences=dict(UI_DEFAULTS)
         self.offer_recovery()
-        self.load_state(); self.build_ui(); self.refresh_all()
+        self.load_state(); self.apply_ui_preferences(); self.build_ui(); self.refresh_all()
         self.clock_timer=QTimer(self); self.clock_timer.timeout.connect(self.tick_clocks); self.clock_timer.start(1000)
         self.install_shortcuts()
     def load_state(self):
@@ -753,6 +790,9 @@ class MainWindow(QMainWindow):
                 self.playoff_results=data.get("playoff_results",{}); self.playoff_winners=data.get("playoff_winners",{}); self.eval_history=data.get("eval_history",{})
                 self.game_terminations=data.get("game_terminations",{}); self.move_reviews=data.get("move_reviews",{})
                 self.withdrawn_players=data.get("withdrawn_players",{})
+                saved_preferences=data.get("ui_preferences",{})
+                if isinstance(saved_preferences,dict):
+                    self.ui_preferences={**UI_DEFAULTS,**saved_preferences}
                 saved_schedule=data.get("schedule")
                 if saved_schedule:
                     parsed=[(g["id"],int(g["round"]),g["white"],g["black"]) for g in saved_schedule]
@@ -773,6 +813,7 @@ class MainWindow(QMainWindow):
                                   "eval_history":self.eval_history,"playoff_winners":getattr(self,"playoff_winners",{}),
                                   "game_terminations":self.game_terminations,"move_reviews":self.move_reviews,
                                   "withdrawn_players":self.withdrawn_players,
+                                  "ui_preferences":self.ui_preferences,
                                   "saved_at":datetime.now().isoformat(timespec="seconds")},ensure_ascii=False,indent=2),encoding="utf-8")
         tmp.replace(path)
     def offer_recovery(self):
@@ -1263,7 +1304,7 @@ class MainWindow(QMainWindow):
         page=QWidget(); root=QVBoxLayout(page)
         hero=QFrame(); hero.setObjectName("Card"); hl=QHBoxLayout(hero)
         crown=LogoWidget(170,190)
-        title=QLabel("<span style='font-size:27px;font-weight:900;color:#EEF1F5'>C5R · COPPA DEI 5 RE</span><br><span style='color:#D8B36A;letter-spacing:3px'>CHESS TOURNAMENT CONTROL ROOM</span>")
+        title=QLabel(f"<span style='font-size:27px;font-weight:900;color:{TEXT}'>C5R · COPPA DEI 5 RE</span><br><span style='color:{GOLD};letter-spacing:3px'>CHESS TOURNAMENT CONTROL ROOM</span>")
         title.setTextFormat(Qt.TextFormat.RichText)
         hl.addWidget(crown); hl.addWidget(title,1); root.addWidget(hero)
         self.dashboard_summary=QLabel(); self.dashboard_summary.setObjectName("SectionTitle"); root.addWidget(self.dashboard_summary)
@@ -1293,13 +1334,30 @@ class MainWindow(QMainWindow):
     def build_archive(self):
         page=QWidget(); layout=QVBoxLayout(page)
         title=QLabel("ARCHIVIO PARTITE"); title.setObjectName("SectionTitle"); layout.addWidget(title)
+        filters=QHBoxLayout()
+        self.archive_search=QLineEdit(); self.archive_search.setPlaceholderText("Cerca partita, giocatore, turno o nota…")
+        self.archive_search.setClearButtonEnabled(True); self.archive_search.textChanged.connect(lambda *_:self.apply_archive_filters())
+        self.archive_filter_type=QComboBox(); self.archive_filter_type.addItem("Tutti i tabelloni","all")
+        self.archive_filter_type.addItem("Qualificazione","qualification"); self.archive_filter_type.addItem("Playoff","playoff")
+        self.archive_filter_result=QComboBox(); self.archive_filter_result.addItem("Tutti gli esiti",None)
+        for value,label in RESULT_OPTIONS[1:]: self.archive_filter_result.addItem(label,value)
+        self.archive_filter_type.currentIndexChanged.connect(self.apply_archive_filters)
+        self.archive_filter_result.currentIndexChanged.connect(self.apply_archive_filters)
+        clear=QPushButton("AZZERA FILTRI"); clear.clicked.connect(self.reset_archive_filters)
+        filters.addWidget(self.archive_search,2); filters.addWidget(self.archive_filter_type,1)
+        filters.addWidget(self.archive_filter_result,1); filters.addWidget(clear)
+        layout.addLayout(filters)
+        self.archive_results_label=QLabel("0 partite"); self.archive_results_label.setObjectName("Muted"); layout.addWidget(self.archive_results_label)
         self.archive_table=QTableWidget(0,6)
         self.archive_table.setHorizontalHeaderLabels(["TURNO","PARTITA","BIANCO","NERO","RISULTATO","MOSSE / NOTE"])
         self.archive_table.verticalHeader().setVisible(False)
         self.archive_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.archive_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.archive_table.horizontalHeader().setSectionResizeMode(1,QHeaderView.ResizeMode.Stretch)
+        self.archive_table.setSortingEnabled(True)
         layout.addWidget(self.archive_table,1)
+        self.archive_empty=EmptyStateWidget("♟","Nessuna partita in archivio","I risultati conclusi compariranno qui, con mosse, note e annotazioni disponibili.","VAI AL CALENDARIO",lambda:self.nav.setCurrentRow(3))
+        layout.addWidget(self.archive_empty); self.archive_empty.hide()
         row=QHBoxLayout(); allpgn=QPushButton("ESPORTA TUTTO IL TORNEO IN PGN")
         allpgn.setObjectName("PrimaryButton"); allpgn.clicked.connect(self.export_all_pgn); row.addWidget(allpgn)
         one=QPushButton("ESPORTA PARTITA SELEZIONATA")
@@ -1319,6 +1377,7 @@ class MainWindow(QMainWindow):
         self.h2h_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.h2h_table.horizontalHeader().setSectionResizeMode(0,QHeaderView.ResizeMode.Stretch)
         for c in range(1,6): self.h2h_table.horizontalHeader().setSectionResizeMode(c,QHeaderView.ResizeMode.ResizeToContents)
+        self.h2h_table.setSortingEnabled(True)
         layout.addWidget(self.h2h_table,1); return page
 
     def build_audit(self):
@@ -1330,6 +1389,7 @@ class MainWindow(QMainWindow):
         self.audit_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.audit_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.audit_table.horizontalHeader().setSectionResizeMode(6,QHeaderView.ResizeMode.Stretch)
+        self.audit_table.setSortingEnabled(True)
         layout.addWidget(self.audit_table,1)
         export=QPushButton("ESPORTA REGISTRO CSV"); export.clicked.connect(self.export_audit_csv)
         layout.addWidget(export,0,Qt.AlignmentFlag.AlignRight); return page
@@ -1354,6 +1414,27 @@ class MainWindow(QMainWindow):
         grid.addWidget(withdraw,3,1)
         save=QPushButton("SALVA IMPOSTAZIONI"); save.setObjectName("PrimaryButton"); save.clicked.connect(self.save_settings)
         grid.addWidget(save,4,1); layout.addWidget(card)
+        appearance=QFrame(); appearance.setObjectName("Card"); appearance_grid=QGridLayout(appearance)
+        appearance_title=QLabel("PERSONALIZZAZIONE INTERFACCIA"); appearance_title.setObjectName("Eyebrow")
+        appearance_grid.addWidget(appearance_title,0,0,1,4)
+        appearance_grid.addWidget(QLabel("TEMA"),1,0)
+        self.theme_combo=QComboBox(); self.theme_combo.addItems(["Midnight","Graphite","Light"])
+        self.theme_combo.setCurrentText(self.ui_preferences.get("theme","Midnight")); appearance_grid.addWidget(self.theme_combo,1,1)
+        appearance_grid.addWidget(QLabel("COLORE ACCENT"),1,2)
+        self.accent_combo=QComboBox(); self.accent_combo.addItems(list(ACCENTS))
+        self.accent_combo.setCurrentText(self.ui_preferences.get("accent","Gold")); appearance_grid.addWidget(self.accent_combo,1,3)
+        appearance_grid.addWidget(QLabel("DENSITÀ TABELLE"),2,0)
+        self.density_combo=QComboBox(); self.density_combo.addItems(["Standard","Compatta"])
+        self.density_combo.setCurrentText(self.ui_preferences.get("density","Standard")); appearance_grid.addWidget(self.density_combo,2,1)
+        self.reduced_motion_check=QCheckBox("Riduci animazioni e transizioni")
+        self.reduced_motion_check.setChecked(bool(self.ui_preferences.get("reduced_motion",False)))
+        appearance_grid.addWidget(self.reduced_motion_check,2,2,1,2)
+        appearance_note=QLabel("Le preferenze vengono applicate subito e salvate automaticamente su questo PC.")
+        appearance_note.setObjectName("Muted"); appearance_note.setWordWrap(True)
+        appearance_grid.addWidget(appearance_note,3,0,1,4); layout.addWidget(appearance)
+        for control in (self.theme_combo,self.accent_combo,self.density_combo):
+            control.currentTextChanged.connect(self.save_ui_preferences)
+        self.reduced_motion_check.toggled.connect(self.save_ui_preferences)
         desc=QLabel("I controlli tempo sono fissi per regolamento: qualificazione 15+3; semifinali e finali 30+10. I ritiri seguono la soglia di due partite dell'Art. 11.")
         desc.setObjectName("Muted"); desc.setWordWrap(True); layout.addWidget(desc)
         layout.addStretch(); return page
@@ -1364,6 +1445,33 @@ class MainWindow(QMainWindow):
         self.log_operation("Impostazioni torneo","","",f"arbitro={self.referee}; spareggio={self.tie_break}")
         self.save(); self.refresh_all()
         self.statusBar().showMessage("Impostazioni torneo salvate.",2500)
+
+    def apply_ui_preferences(self):
+        global GOLD,BG,PANEL,PANEL2,LINE,TEXT,MUTED,GREEN
+        prefs={**UI_DEFAULTS,**getattr(self,"ui_preferences",{})}
+        palette=THEMES.get(prefs.get("theme"),THEMES["Midnight"])
+        GOLD=ACCENTS.get(prefs.get("accent"),ACCENTS["Gold"])
+        BG=palette["bg"]; PANEL=palette["panel"]; PANEL2=palette["panel2"]
+        LINE=palette["line"]; TEXT=palette["text"]; MUTED=palette["muted"]; GREEN=palette["green"]
+        app=QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(make_stylesheet(prefs.get("density","Standard")))
+        for board in self.findChildren(BoardWidget):
+            board.reduced_motion=bool(prefs.get("reduced_motion",False))
+            if board.reduced_motion:
+                board.move_flash=0.0; board.flash_timer.stop(); board.update()
+
+    def save_ui_preferences(self,*_):
+        if not all(hasattr(self,key) for key in ("theme_combo","accent_combo","density_combo","reduced_motion_check")):
+            return
+        self.ui_preferences={
+            "theme":self.theme_combo.currentText(),
+            "accent":self.accent_combo.currentText(),
+            "density":self.density_combo.currentText(),
+            "reduced_motion":self.reduced_motion_check.isChecked(),
+        }
+        self.apply_ui_preferences(); self.save()
+        self.statusBar().showMessage("Preferenze interfaccia salvate su questo PC.",2500)
 
     def install_shortcuts(self):
         shortcuts=[("Ctrl+S",self.save),("Ctrl+E",self.export_all_pgn),
@@ -1400,6 +1508,7 @@ class MainWindow(QMainWindow):
     def refresh_archive(self):
         if not hasattr(self,"archive_table"): return
         entries=self.archive_entries()
+        sorting=self.archive_table.isSortingEnabled(); self.archive_table.setSortingEnabled(False)
         self.archive_table.setRowCount(len(entries))
         for row,(kind,gid,round_label,white,black) in enumerate(entries):
             if kind=="qualification":
@@ -1421,9 +1530,51 @@ class MainWindow(QMainWindow):
                 item=QTableWidgetItem(str(value)); item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 item.setData(Qt.ItemDataRole.UserRole,(kind,gid))
                 self.archive_table.setItem(row,col,item)
+        self.archive_table.setSortingEnabled(sorting)
+        self.apply_archive_filters()
+
+    def apply_archive_filters(self):
+        if not hasattr(self,"archive_table"): return
+        tokens=[token for token in self.archive_search.text().strip().casefold().split() if token]
+        kind_filter=self.archive_filter_type.currentData()
+        result_filter=self.archive_filter_result.currentData()
+        total=self.archive_table.rowCount(); visible=0
+        for row in range(total):
+            key_item=self.archive_table.item(row,0)
+            key=key_item.data(Qt.ItemDataRole.UserRole) if key_item else None
+            kind,gid=key if isinstance(key,tuple) and len(key)==2 else (None,None)
+            result=self.results.get(gid) if kind=="qualification" else self.playoff_results.get(gid)
+            haystack=" ".join(self.archive_table.item(row,col).text() for col in range(self.archive_table.columnCount()) if self.archive_table.item(row,col)).casefold()
+            matches_kind=(kind_filter=="all" or kind==kind_filter)
+            matches_result=(result_filter is None or result==result_filter)
+            matches_query=all(token in haystack for token in tokens)
+            show=matches_kind and matches_result and matches_query
+            self.archive_table.setRowHidden(row,not show); visible+=int(show)
+        self.archive_results_label.setText(f"{visible} / {total} partite visualizzate")
+        self.archive_table.setVisible(visible>0); self.archive_empty.setVisible(visible==0)
+        if total==0:
+            self.archive_empty.set_state("♟","Nessuna partita in archivio","Quando registri un risultato, la partita apparirà qui con il relativo storico.","VAI AL CALENDARIO",lambda:self.nav.setCurrentRow(3))
+        elif visible==0:
+            self.archive_empty.set_state("⌕","Nessun risultato trovato","La ricerca o i filtri attivi non corrispondono a nessuna partita archiviata.","AZZERA FILTRI",self.reset_archive_filters)
+
+    def reset_archive_filters(self):
+        controls=(self.archive_search,self.archive_filter_type,self.archive_filter_result)
+        for control in controls: control.blockSignals(True)
+        self.archive_search.clear(); self.archive_filter_type.setCurrentIndex(0); self.archive_filter_result.setCurrentIndex(0)
+        for control in controls: control.blockSignals(False)
+        self.apply_archive_filters()
+
+    def selected_archive_entry(self):
+        row=self.archive_table.currentRow()
+        if row<0: return None
+        item=self.archive_table.item(row,0)
+        key=item.data(Qt.ItemDataRole.UserRole) if item else None
+        if not isinstance(key,tuple) or len(key)!=2: return None
+        return next((entry for entry in self.archive_entries() if entry[0]==key[0] and entry[1]==key[1]),None)
 
     def refresh_h2h(self):
         if not hasattr(self,"h2h_table"): return
+        sorting=self.h2h_table.isSortingEnabled(); self.h2h_table.setSortingEnabled(False)
         for row,p in enumerate(ORDER):
             self.h2h_table.setItem(row,0,QTableWidgetItem(name(p)))
             for col,opponent in enumerate(ORDER,1):
@@ -1439,9 +1590,11 @@ class MainWindow(QMainWindow):
                     elif score==.5: draws+=1
                     else: losses+=1
                 self.h2h_table.setItem(row,col,QTableWidgetItem(f"{wins}–{draws}–{losses}"))
+        self.h2h_table.setSortingEnabled(sorting)
 
     def refresh_audit(self):
         if not hasattr(self,"audit_table"): return
+        sorting=self.audit_table.isSortingEnabled(); self.audit_table.setSortingEnabled(False)
         entries=list(reversed(self.audit_log))
         self.audit_table.setRowCount(len(entries))
         for row,entry in enumerate(entries):
@@ -1449,6 +1602,7 @@ class MainWindow(QMainWindow):
                   entry.get("entity",""),entry.get("before",""),entry.get("after",""),entry.get("detail","")]
             for col,value in enumerate(vals):
                 self.audit_table.setItem(row,col,QTableWidgetItem(str(value)))
+        self.audit_table.setSortingEnabled(sorting)
 
     def accuracy_for_player(self,gid,player_id):
         reviews=self.move_reviews.get(gid,[])
@@ -1553,14 +1707,11 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Archivio PGN esportato con risultati, terminazioni e annotazioni C5R disponibili.",3500)
 
     def analyze_selected_archive_game(self):
-        row = self.archive_table.currentRow()
-        if row < 0:
+        entry=self.selected_archive_entry()
+        if entry is None:
             QMessageBox.information(self, "Analisi partita", "Seleziona una partita conclusa nell'archivio.")
             return
-        entries=self.archive_entries()
-        if row>=len(entries):
-            return
-        kind,gid,_,_,_=entries[row]
+        kind,gid,_,_,_=entry
         if kind=="playoff":
             QMessageBox.information(self,"Analisi playoff","Il tabellone salva risultati, terminazioni e vincitore Armageddon. Le mosse delle partite playoff non sono ancora registrate su una scacchiera nell'app.")
             return
@@ -1624,11 +1775,9 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def export_selected_archive_game(self):
-        row=self.archive_table.currentRow()
-        if row<0: return
-        entries=self.archive_entries()
-        if row>=len(entries): return
-        kind,gid,_,_,_=entries[row]
+        entry=self.selected_archive_entry()
+        if entry is None: return
+        kind,gid,_,_,_=entry
         if kind=="qualification":
             self.export_pgn(gid)
         else:
@@ -1795,13 +1944,22 @@ class MainWindow(QMainWindow):
         d=QLabel("Calendario round-robin già caricato. Ogni risultato aggiorna immediatamente classifica e simulazioni quote.")
         d.setObjectName("Muted"); l.addWidget(d)
         filters=QHBoxLayout()
+        self.calendar_search=QLineEdit(); self.calendar_search.setPlaceholderText("Cerca partita o giocatore…")
+        self.calendar_search.setClearButtonEnabled(True); self.calendar_search.textChanged.connect(lambda *_:self.apply_calendar_filters())
         self.filter_round=QComboBox(); self.filter_round.addItems(["Tutti i turni"]+[f"Round {r}" for r in range(1,6)])
         self.filter_player=QComboBox(); self.filter_player.addItem("Tutti i giocatori",None)
         for pid in ORDER: self.filter_player.addItem(name(pid),pid)
         self.filter_status=QComboBox(); self.filter_status.addItems(["Tutti gli stati","In corso","Concluse"])
-        for control in (self.filter_round,self.filter_player,self.filter_status):
-            control.currentIndexChanged.connect(self.apply_calendar_filters); filters.addWidget(control)
+        self.filter_result=QComboBox(); self.filter_result.addItem("Tutti gli esiti",None)
+        for value,label in RESULT_OPTIONS[1:]: self.filter_result.addItem(label,value)
+        for control in (self.filter_round,self.filter_player,self.filter_status,self.filter_result):
+            control.currentIndexChanged.connect(self.apply_calendar_filters)
+        clear=QPushButton("AZZERA FILTRI"); clear.clicked.connect(self.reset_calendar_filters)
+        filters.addWidget(self.calendar_search,2); filters.addWidget(self.filter_round,1)
+        filters.addWidget(self.filter_player,1); filters.addWidget(self.filter_status,1)
+        filters.addWidget(self.filter_result,1); filters.addWidget(clear)
         l.addLayout(filters)
+        self.calendar_results_label=QLabel("10 partite"); self.calendar_results_label.setObjectName("Muted"); l.addWidget(self.calendar_results_label)
         scroll=QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.Shape.NoFrame)
         content=QWidget(); v=QVBoxLayout(content); self.calendar_combos={}; self.calendar_pairings={}; self.calendar_bye_labels={}; self.calendar_cards={}
         for gid,r,w,b in GAMES:
@@ -1816,22 +1974,49 @@ class MainWindow(QMainWindow):
         for r,p in BYES.items():
             bye=QLabel(f"ROUND {r}  ·  Riposa: {name(p)}  ·  BYE"); bye.setObjectName("Muted")
             self.calendar_bye_labels[r]=bye; v.addWidget(bye)
+        self.calendar_empty=EmptyStateWidget("⌕","Nessuna partita trovata","Modifica i filtri oppure azzerali per rivedere tutto il calendario.","AZZERA FILTRI",self.reset_calendar_filters)
+        v.addWidget(self.calendar_empty); self.calendar_empty.hide()
         v.addStretch(); scroll.setWidget(content); l.addWidget(scroll,1); return page
     def apply_calendar_filters(self):
         if not hasattr(self,"calendar_cards"): return
         rnd_text=self.filter_round.currentText()
         selected_player=self.filter_player.currentData()
         state=self.filter_status.currentText()
+        selected_result=self.filter_result.currentData()
+        tokens=[token for token in self.calendar_search.text().strip().casefold().split() if token]
+        visible=0
         for gid,card in self.calendar_cards.items():
             _,rnd,white,black=game(gid)
+            result=self.results.get(gid)
             matches_round=(rnd_text=="Tutti i turni" or rnd_text==f"Round {rnd}")
             matches_player=(selected_player is None or selected_player in (white,black))
-            completed=bool(self.results.get(gid))
+            completed=bool(result)
             matches_state=(state=="Tutti gli stati" or (state=="Concluse" and completed) or (state=="In corso" and not completed))
-            card.setVisible(matches_round and matches_player and matches_state)
+            matches_result=(selected_result is None or result==selected_result)
+            result_text=next((label for value,label in RESULT_OPTIONS if value==result),"In corso")
+            haystack=f"{gid} round {rnd} {name(white)} {name(black)} {result or ''} {result_text}".casefold()
+            matches_query=all(token in haystack for token in tokens)
+            show=matches_round and matches_player and matches_state and matches_result and matches_query
+            card.setVisible(show); visible+=int(show)
         if hasattr(self,"calendar_bye_labels"):
             for rnd,label in self.calendar_bye_labels.items():
-                label.setVisible(rnd_text=="Tutti i turni" or rnd_text==f"Round {rnd}")
+                bye_player=BYES.get(rnd)
+                bye_text=f"round {rnd} riposa {name(bye_player)} bye".casefold()
+                show_bye=(rnd_text=="Tutti i turni" or rnd_text==f"Round {rnd}")
+                show_bye=show_bye and (selected_player is None or selected_player==bye_player)
+                show_bye=show_bye and (selected_result is None) and (state=="Tutti gli stati")
+                show_bye=show_bye and all(token in bye_text for token in tokens)
+                label.setVisible(show_bye)
+        self.calendar_results_label.setText(f"{visible} / {len(self.calendar_cards)} partite visualizzate")
+        self.calendar_empty.setVisible(visible==0)
+
+    def reset_calendar_filters(self):
+        controls=(self.calendar_search,self.filter_round,self.filter_player,self.filter_status,self.filter_result)
+        for control in controls: control.blockSignals(True)
+        self.calendar_search.clear(); self.filter_round.setCurrentIndex(0); self.filter_player.setCurrentIndex(0)
+        self.filter_status.setCurrentIndex(0); self.filter_result.setCurrentIndex(0)
+        for control in controls: control.blockSignals(False)
+        self.apply_calendar_filters()
 
     def build_standings(self):
         page=QWidget(); l=QVBoxLayout(page)
@@ -1841,9 +2026,13 @@ class MainWindow(QMainWindow):
         self.st_table=QTableWidget(0,8); self.st_table.setHorizontalHeaderLabels(["POS","GIOCATORE","G","V","X","P","PEN.","PT"])
         self.st_table.verticalHeader().setVisible(False); self.st_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.st_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.st_table.setSortingEnabled(True)
         self.st_table.horizontalHeader().setSectionResizeMode(1,QHeaderView.ResizeMode.Stretch)
         for c in (0,2,3,4,5,6,7): self.st_table.horizontalHeader().setSectionResizeMode(c,QHeaderView.ResizeMode.ResizeToContents)
-        l.addWidget(self.st_table,1); self.st_summary=QLabel(); self.st_summary.setObjectName("Muted"); l.addWidget(self.st_summary)
+        l.addWidget(self.st_table,1)
+        self.st_empty=EmptyStateWidget("♟","Nessun giocatore disponibile","Il roster del torneo è vuoto. Verifica la configurazione dei partecipanti.","APRI IMPOSTAZIONI",lambda:self.tabs.setCurrentIndex(11))
+        l.addWidget(self.st_empty); self.st_empty.hide()
+        self.st_summary=QLabel(); self.st_summary.setObjectName("Muted"); l.addWidget(self.st_summary)
         return page
     def build_odds(self):
         page=QWidget(); l=QVBoxLayout(page)
@@ -1853,6 +2042,7 @@ class MainWindow(QMainWindow):
         self.odds_table=QTableWidget(0,4); self.odds_table.setHorizontalHeaderLabels(["GIOCATORE","VINCENTE TORNEO","QUOTA EQUA","TOP 4"])
         self.odds_table.verticalHeader().setVisible(False); self.odds_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.odds_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.odds_table.setSortingEnabled(True)
         self.odds_table.horizontalHeader().setSectionResizeMode(0,QHeaderView.ResizeMode.Stretch)
         for c in (1,2,3): self.odds_table.horizontalHeader().setSectionResizeMode(c,QHeaderView.ResizeMode.ResizeToContents)
         l.addWidget(self.odds_table,1); self.odds_footer=QLabel(); self.odds_footer.setObjectName("Muted"); l.addWidget(self.odds_footer)
@@ -2048,7 +2238,11 @@ class MainWindow(QMainWindow):
         self.apply_calendar_filters()
         if self.broadcast and self.broadcast.isVisible(): self.broadcast.refresh_from_app()
     def refresh_standings(self):
-        rows=self.standings(); self.st_table.setRowCount(5); previous=None; rank=0
+        rows=self.standings(); sorting=self.st_table.isSortingEnabled(); self.st_table.setSortingEnabled(False)
+        if not rows:
+            self.st_table.setRowCount(0); self.st_table.hide(); self.st_empty.show()
+            self.st_table.setSortingEnabled(sorting); return
+        self.st_empty.hide(); self.st_table.show(); self.st_table.setRowCount(len(rows)); previous=None; rank=0
         for i,x in enumerate(rows):
             current_key=(x["points"],self.tie_break_value(x["id"],[r["id"] for r in rows if r["points"]==x["points"]]))
             if previous is None or current_key!=previous: rank=i+1
@@ -2074,8 +2268,10 @@ class MainWindow(QMainWindow):
                     break
         self.st_summary.setText(f"PARTITE CONCLUSE  {concluded}/10  ·  ANNULLATE {voided}  ·  PENALITÀ {len(self.penalties)}" +
             ("  ·  SPAREGGIO ART. 8 DA DISPUTARE" if unresolved_ties else ""))
+        self.st_table.setSortingEnabled(sorting)
     def refresh_odds(self):
-        values=self.odds(); ordered=sorted(PLAYERS,key=lambda p:values[p][0],reverse=True); self.odds_table.setRowCount(5)
+        sorting=self.odds_table.isSortingEnabled(); self.odds_table.setSortingEnabled(False)
+        values=self.odds(); ordered=sorted(PLAYERS,key=lambda p:values[p][0],reverse=True); self.odds_table.setRowCount(len(ordered))
         for i,p in enumerate(ordered):
             win,top=values[p]; vals=[name(p),f"{win*100:.1f}%",("—" if win<=0 else f"{1/win:.2f}"),f"{top*100:.1f}%"]
             for c,val in enumerate(vals):
@@ -2083,6 +2279,7 @@ class MainWindow(QMainWindow):
                 if p=="simone": item.setForeground(QColor(GOLD))
                 self.odds_table.setItem(i,c,item)
         self.odds_footer.setText(f"15.000 scenari simulati · aggiornamento deterministico a ogni risultato, penalità o calendario · quota equa = 1 / probabilità stimata.")
+        self.odds_table.setSortingEnabled(sorting)
     def refresh_penalties(self):
         self.pen_list.clear()
         if not self.penalties: self.pen_list.addItem("Nessuna penalità registrata.")
@@ -2149,48 +2346,67 @@ class MainWindow(QMainWindow):
         if self.broadcast: self.broadcast.close()
         event.accept()
 
-STYLE=f"""
+def make_stylesheet(density="Standard"):
+    compact=(density=="Compatta")
+    light=(BG=="#F2F5F9")
+    field_bg="#F7F9FC" if light else "#0D141D"
+    selected_bg="#E3EAF2" if light else "#253546"
+    sidebar_bg="#E8EEF5" if light else BG
+    disabled_bg="#E9EDF2" if light else "#10151C"
+    disabled_text="#98A2AE" if light else "#5E6875"
+    saved_bg="#E8F5EE" if light else "#10241F"
+    saved_line="#B7DCC8" if light else "#28513F"
+    row_alt="#F5F7FA" if light else ("#202832" if BG=="#111418" else "#141E29")
+    item_v=6 if compact else 12
+    item_h=6 if compact else 8
+    return f"""
 QMainWindow,QWidget{{background:{BG};color:{TEXT};font-family:'Segoe UI';font-size:13px;}}
 QTabWidget::pane{{border:1px solid {LINE};border-radius:12px;background:{BG};top:-1px;}}
-QTabBar::tab{{background:#101721;color:{MUTED};padding:12px 18px;margin-right:4px;border-top-left-radius:8px;border-top-right-radius:8px;font-weight:800;letter-spacing:1px;}}
-QTabBar::tab:selected{{background:#1B2633;color:{GOLD};border-bottom:2px solid {GOLD};}}
-QFrame#Card{{background:{PANEL};border:1px solid {LINE};border-radius:14px;}}
+QTabBar::tab{{background:{PANEL2};color:{MUTED};padding:12px 18px;margin-right:4px;border-top-left-radius:8px;border-top-right-radius:8px;font-weight:800;letter-spacing:1px;}}
+QTabBar::tab:selected{{background:{PANEL};color:{GOLD};border-bottom:2px solid {GOLD};}}
+QFrame#Card,QFrame#EmptyStateCard{{background:{PANEL};border:1px solid {LINE};border-radius:14px;}}
+QFrame#EmptyStateCard{{padding:12px;}}
+QLabel#EmptyStateIcon{{color:{GOLD};font-size:36px;font-weight:900;}}
+QLabel#EmptyStateTitle{{color:{TEXT};font-size:18px;font-weight:900;}}
 QLabel#BrandTitle{{color:{TEXT};font-size:22px;font-weight:900;letter-spacing:3px;}}
 QLabel#Eyebrow{{color:{GOLD};font-size:10px;font-weight:900;letter-spacing:2px;}}
 QLabel#MatchTitle{{color:{TEXT};font-size:17px;font-weight:800;}}
 QLabel#SectionTitle{{color:{TEXT};font-size:21px;font-weight:900;letter-spacing:1px;padding:8px 0;}}
 QLabel#Muted{{color:{MUTED};font-size:12px;}}
-QLabel#Footnote{{color:#677485;font-size:10px;letter-spacing:1.5px;}}
-QLabel#SavedBadge{{color:{GREEN};font-size:10px;font-weight:800;letter-spacing:1px;padding:8px 12px;background:#10241F;border:1px solid #28513F;border-radius:8px;}}
+QLabel#Footnote{{color:{MUTED};font-size:10px;letter-spacing:1.5px;}}
+QLabel#SavedBadge{{color:{GREEN};font-size:10px;font-weight:800;letter-spacing:1px;padding:8px 12px;background:{saved_bg};border:1px solid {saved_line};border-radius:8px;}}
 QPushButton{{background:{PANEL2};color:{TEXT};border:1px solid {LINE};border-radius:8px;padding:9px 13px;font-weight:700;}}
 QPushButton:hover{{border-color:{GOLD};color:{GOLD};}}
-QPushButton:disabled{{color:#5E6875;background:#10151C;}}
-QPushButton#PrimaryButton{{background:#B68D48;color:#10151B;border:1px solid #D6B16B;font-weight:900;}}
-QPushButton#PrimaryButton:hover{{background:#D6B16B;color:#080B10;}}
-QComboBox,QLineEdit,QDoubleSpinBox{{background:#0D141D;color:{TEXT};border:1px solid {LINE};border-radius:7px;padding:8px 10px;min-height:22px;}}
-QComboBox QAbstractItemView{{background:{PANEL};color:{TEXT};selection-background-color:#334457;}}
-QTableWidget{{background:{PANEL};alternate-background-color:#141E29;border:1px solid {LINE};border-radius:10px;gridline-color:{LINE};}}
-QTableWidget::item{{padding:12px 8px;border-bottom:1px solid {LINE};}}
-QHeaderView::section{{background:#1A2633;color:{GOLD};padding:11px 8px;border:none;font-size:10px;font-weight:900;}}
-QListWidget#Sidebar{{background:#0C131D;border:1px solid {LINE};border-radius:12px;padding:8px;font-weight:800;}}
+QPushButton:disabled{{color:{disabled_text};background:{disabled_bg};}}
+QPushButton#PrimaryButton{{background:{GOLD};color:#111820;border:1px solid {GOLD};font-weight:900;}}
+QPushButton#PrimaryButton:hover{{background:{TEXT};color:{BG};border-color:{TEXT};}}
+QComboBox,QLineEdit,QDoubleSpinBox{{background:{field_bg};color:{TEXT};border:1px solid {LINE};border-radius:7px;padding:8px 10px;min-height:22px;}}
+QCheckBox{{color:{TEXT};spacing:8px;}}
+QComboBox QAbstractItemView{{background:{PANEL};color:{TEXT};selection-background-color:{selected_bg};}}
+QTableWidget{{background:{PANEL};alternate-background-color:{row_alt};border:1px solid {LINE};border-radius:10px;gridline-color:{LINE};}}
+QTableWidget::item{{padding:{item_v}px {item_h}px;border-bottom:1px solid {LINE};}}
+QHeaderView::section{{background:{PANEL2};color:{GOLD};padding:11px 8px;border:none;font-size:10px;font-weight:900;}}
+QListWidget#Sidebar{{background:{sidebar_bg};border:1px solid {LINE};border-radius:12px;padding:8px;font-weight:800;}}
 QListWidget#Sidebar::item{{color:{MUTED};padding:13px 10px;border-radius:8px;margin:3px 0;}}
-QListWidget#Sidebar::item:selected{{background:#1B2633;color:{GOLD};border-left:3px solid {GOLD};}}
-QListWidget#Sidebar::item:hover{{background:#151F2B;color:{TEXT};}}
+QListWidget#Sidebar::item:selected{{background:{selected_bg};color:{GOLD};border-left:3px solid {GOLD};}}
+QListWidget#Sidebar::item:hover{{background:{PANEL2};color:{TEXT};}}
 QListWidget{{background:{PANEL};border:1px solid {LINE};border-radius:10px;padding:8px;}}
-QProgressBar{{background:#0D141D;color:{TEXT};border:1px solid {LINE};border-radius:6px;text-align:center;font-size:10px;font-weight:800;}}
-QProgressBar::chunk{{background:#B68D48;border-radius:5px;}}
+QProgressBar{{background:{field_bg};color:{TEXT};border:1px solid {LINE};border-radius:6px;text-align:center;font-size:10px;font-weight:800;}}
+QProgressBar::chunk{{background:{GOLD};border-radius:5px;}}
 QListWidget::item{{padding:12px;border-bottom:1px solid {LINE};}}
-QListWidget::item:selected{{background:#253546;color:{GOLD};}}
-QStatusBar{{background:#0D131B;color:{MUTED};border-top:1px solid {LINE};}}
+QListWidget::item:selected{{background:{selected_bg};color:{GOLD};}}
+QStatusBar{{background:{PANEL2};color:{MUTED};border-top:1px solid {LINE};}}
 QLabel{{background:transparent;}}
 """
+
+STYLE=make_stylesheet()
 
 def main():
     if "--bundle-smoke" in sys.argv:
         report=Path(os.environ.get("TEMP",str(Path.home())))/"c5r-bundle-smoke.txt"
         win=None
         try:
-            app=QApplication(["Coppa5Re"]); app.setApplicationName(APP_NAME); app.setStyle("Fusion"); app.setStyleSheet(STYLE)
+            app=QApplication(["Coppa5Re"]); app.setApplicationName(APP_NAME); app.setStyle("Fusion"); app.setStyleSheet(make_stylesheet())
             win=MainWindow()
             engine_path=win.find_engine()
             logo_widgets=win.findChildren(LogoWidget)
@@ -2214,6 +2430,6 @@ def main():
                 try: win.close()
                 except Exception: pass
             sys.exit(3)
-    app=QApplication(sys.argv); app.setApplicationName(APP_NAME); app.setStyle("Fusion"); app.setStyleSheet(STYLE)
+    app=QApplication(sys.argv); app.setApplicationName(APP_NAME); app.setStyle("Fusion")
     win=MainWindow(); win.show(); sys.exit(app.exec())
 if __name__=="__main__": main()
