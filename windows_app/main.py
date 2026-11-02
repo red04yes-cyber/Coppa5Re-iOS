@@ -4418,6 +4418,39 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
         referee.body.addWidget(self.referee_input)
         layout.addWidget(referee)
 
+        spectator = Card(
+            "Portale spettatori · rete locale e Internet",
+            "Il portale pubblica tavoli, scacchiere, orologi e classifica. Per l'accesso da Internet configura un tunnel o reverse proxy HTTPS verso la porta locale indicata; l'EXE non apre porte sul router."
+        )
+        self.public_base_url_input=QLineEdit(self.public_base_url)
+        self.public_base_url_input.setPlaceholderText("https://live.tuodominio.it")
+        spectator.body.addWidget(ui_label("INDIRIZZO PUBBLICO HTTPS (OPZIONALE)", "field"))
+        spectator.body.addWidget(self.public_base_url_input)
+        self.long_match_combo=QComboBox()
+        for minutes,label in ((60,"60 minuti"),(90,"90 minuti"),(120,"120 minuti"),(180,"180 minuti"),(240,"4 ore")):
+            self.long_match_combo.addItem(label,minutes)
+        current_long=self.long_match_combo.findData(self.long_match_minutes)
+        if current_long>=0:self.long_match_combo.setCurrentIndex(current_long)
+        spectator.body.addWidget(ui_label("AVVISO PARTITA OLTRE DURATA", "field"))
+        spectator.body.addWidget(self.long_match_combo)
+        remote_actions=QHBoxLayout()
+        portal_qr=QPushButton("QR PORTALE · TUTTI I TAVOLI")
+        portal_qr.setObjectName("PrimaryButton")
+        portal_qr.clicked.connect(self.show_portal_qr_dialog)
+        rotate_token=QPushButton("RINNOVA TOKEN DI ACCESSO")
+        rotate_token.clicked.connect(self.rotate_spectator_token)
+        remote_actions.addWidget(portal_qr)
+        remote_actions.addWidget(rotate_token)
+        remote_actions.addStretch(1)
+        spectator.body.addLayout(remote_actions)
+        self.spectator_config_hint=ui_label(
+            f"Token privato attivo · server non avviato · {self.public_base_url or 'accesso Internet non configurato'}. "
+            "Il link pubblico richiede HTTPS e un tunnel attivo verso il PC arbitro.",
+            "muted",wrap=True
+        )
+        spectator.body.addWidget(self.spectator_config_hint)
+        layout.addWidget(spectator)
+
         regulation = Card("Regolamento applicato", "Le cadenze sono vincolate alle regole della competizione.")
         timing = QHBoxLayout()
         for heading, value in [("QUALIFICAZIONE", "15 + 3"), ("SEMIFINALI E FINALI", "30 + 10")]:
@@ -4489,6 +4522,7 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
             ("BACKUP DATI", self.export_backup), ("RIPRISTINA BACKUP", self.restore_backup),
             ("ESPORTA PGN TORNEO", self.export_all_pgn), ("CLASSIFICA CSV", self.export_standings_csv),
             ("CLASSIFICA PDF", self.export_standings_pdf), ("REPORT UFFICIALE PDF", self.export_tournament_report_pdf),
+            ("PACCHETTO FINALE · PDF + PGN + DATI", self.export_final_report_package),
             ("REGISTRO CSV", self.export_audit_csv),
         ]
         for index, (text, callback) in enumerate(operations):
@@ -4604,12 +4638,48 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
         self.statusBar().showMessage(f"Profilo '{profile_name}' applicato.",2500)
 
     def save_settings(self):
+        public_url=self.public_base_url_input.text().strip().rstrip("/")
+        if public_url:
+            parsed=urlparse(public_url)
+            if parsed.scheme!="https" or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ("","/"):
+                QMessageBox.warning(
+                    self,"Indirizzo pubblico non valido",
+                    "Inserisci un'origine HTTPS senza credenziali, query o percorso, ad esempio https://live.tuodominio.it. "
+                    "Il dominio deve essere instradato al server locale tramite tunnel o reverse proxy."
+                )
+                return
         self.referee=self.referee_input.text().strip()
+        self.public_base_url=public_url
+        self.long_match_minutes=int(self.long_match_combo.currentData() or 120)
         self._read_ui_preferences()
         self.tie_break="Regolamento Art. 8"
-        self.log_operation("Impostazioni torneo","","",f"arbitro={self.referee}; spareggio={self.tie_break}")
+        self.log_operation("Impostazioni torneo","","",f"arbitro={self.referee}; spareggio={self.tie_break}; portale={self.public_base_url or 'solo LAN'}")
         self.save(); self.refresh_all()
+        self.refresh_spectator_config_hint()
         self.statusBar().showMessage("Impostazioni torneo salvate.",2500)
+
+    def refresh_spectator_config_hint(self):
+        label=getattr(self,"spectator_config_hint",None)
+        if label is None:return
+        local=f"Server attivo su {self.match_http_host}:{self.match_http_port}" if self.match_http_server is not None else "Server in attesa del primo QR"
+        remote=self.public_base_url or "accesso Internet non configurato"
+        label.setText(
+            f"Token di accesso privato attivo · {local} · {remote}. "
+            "Per l'accesso remoto il tunnel HTTPS deve inoltrare la porta locale del server e restare attivo."
+        )
+
+    def rotate_spectator_token(self):
+        answer=QMessageBox.question(
+            self,"Rinnovare il token spettatori?",
+            "Tutti i QR e i link già distribuiti smetteranno di funzionare. I nuovi link useranno una chiave casuale diversa.",
+            QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if answer!=QMessageBox.StandardButton.Yes:return
+        self.spectator_token=secrets.token_urlsafe(32)
+        self.log_operation("Token spettatori rinnovato","","","Link precedenti revocati")
+        self.save()
+        self.statusBar().showMessage("Token rinnovato: ristampa o ridistribuisci i QR.",4500)
 
     def install_shortcuts(self):
         shortcuts=[("Ctrl+S",self.save),("Ctrl+E",self.export_all_pgn),
