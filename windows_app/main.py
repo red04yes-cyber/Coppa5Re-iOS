@@ -3215,11 +3215,12 @@ class MainWindow(QMainWindow):
 
     def match_web_state(self,gid):
         match=next((item for item in GAMES if item[0]==gid),None)
+        is_playoff=gid in ("sf1","sf2","third","final")
         if match:
             _,rnd,white,black=match
             round_label=f"Round {rnd}"
             result=self.results.get(gid) or "Da disputare"
-        elif gid in ("sf1","sf2","third","final"):
+        elif is_playoff:
             label={"sf1":"Semifinale 1","sf2":"Semifinale 2","third":"3° / 4° posto","final":"Finale"}[gid]
             white,black=getattr(self,"playoff_pairs",{}).get(gid,(None,None))
             round_label="Playoff · "+label
@@ -3227,26 +3228,46 @@ class MainWindow(QMainWindow):
         else:
             return None
 
-        board=self.get_board(gid)
+        board=chess.Board()
         move_text=[]
         valid_uci=[]
-        notation_board=chess.Board()
         for index,uci in enumerate(self.moves.get(gid,[]),1):
             try:
                 move=chess.Move.from_uci(uci)
-                if move not in notation_board.legal_moves:
+                if move not in board.legal_moves:
                     break
-                san=notation_board.san(move)
+                san=board.san(move)
                 move_text.append((f"{(index+1)//2}. " if index%2 else "")+san)
-                notation_board.push(move)
+                board.push(move)
                 valid_uci.append(move.uci())
             except Exception:
                 break
 
         clock=self.clocks.get(gid,{})
-        clock_text=""
-        if clock:
-            clock_text=f"Bianco {math.ceil(float(clock.get('white',0)))}s · Nero {math.ceil(float(clock.get('black',0)))}s"
+        base_seconds=30*60 if is_playoff else 15*60
+        white_seconds=max(0.0,float(clock.get("white",base_seconds)))
+        black_seconds=max(0.0,float(clock.get("black",base_seconds)))
+        running=bool(clock.get("started") and result=="Da disputare")
+        clock_turn=clock.get("side_to_move","white") if is_playoff else ("white" if board.turn==chess.WHITE else "black")
+        if running:
+            try:
+                elapsed=min(43200.0,max(0.0,time.time()-float(clock.get("last_wall",time.time()))))
+            except (TypeError,ValueError):
+                elapsed=0.0
+            if clock_turn=="white":
+                white_seconds=max(0.0,white_seconds-elapsed)
+            else:
+                black_seconds=max(0.0,black_seconds-elapsed)
+        def fmt_clock(seconds):
+            value=max(0,int(math.ceil(seconds)))
+            return f"{value//60:02d}:{value%60:02d}"
+        clock_text=f"Bianco {fmt_clock(white_seconds)} · Nero {fmt_clock(black_seconds)}"
+        if running:
+            clock_text+=" · IN CORSO"
+        elif result!="Da disputare":
+            clock_text+=" · CONCLUSO"
+        else:
+            clock_text+=" · FERMO"
         return {
             "game_id":gid,
             "round":round_label,
@@ -3258,8 +3279,43 @@ class MainWindow(QMainWindow):
             "move_text":" ".join(move_text) or "Nessuna mossa registrata",
             "turn":"Bianco" if board.turn==chess.WHITE else "Nero",
             "clock_text":clock_text,
+            "clock_white":int(math.ceil(white_seconds)),
+            "clock_black":int(math.ceil(black_seconds)),
+            "clock_running":running,
+            "clock_turn":clock_turn,
             "ply":len(valid_uci),
+            "status":"CONCLUSA" if result!="Da disputare" else ("IN CORSO" if running or valid_uci else "DA GIOCARE"),
+            "is_playoff":is_playoff,
         }
+
+    def public_portal_state(self):
+        states=[]
+        for gid,_,_,_ in GAMES:
+            state=self.match_web_state(gid)
+            if state:states.append(state)
+        for gid in ("sf1","sf2","third","final"):
+            state=self.match_web_state(gid)
+            if state:states.append(state)
+        rows=[]
+        for position,row in enumerate(self.standings(),1):
+            rows.append({
+                "position":position,"player":name(row["id"]),
+                "played":row["played"],"wins":row["wins"],"draws":row["draws"],
+                "losses":row["losses"],"penalty":row["penalty"],"points":row["points"],
+            })
+        return {
+            "tournament":"Coppa dei 5 Re",
+            "as_of":datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+            "matches":states,
+            "standings":rows,
+            "completed":sum(1 for item in states if item["result"] not in ("Da disputare","VOID")),
+            "live":sum(1 for item in states if item["status"]=="IN CORSO"),
+        }
+
+    def valid_spectator_token(self,token):
+        candidate=str(token or "")
+        expected=str(getattr(self,"spectator_token",""))
+        return bool(candidate and expected and hmac.compare_digest(candidate,expected))
 
     def match_web_html(self,gid):
         state=self.match_web_state(gid)
@@ -3289,7 +3345,7 @@ class MainWindow(QMainWindow):
 
         title=f"{html.escape(state['round'])} · {html.escape(gid)}"
         state_json=json.dumps(state,ensure_ascii=True).replace("<","\\u003c").replace(">","\\u003e").replace("&","\\u0026")
-        state_path="/api/match/"+urllib.parse.quote(gid,safe="")
+        state_path="/api/match/"+urllib.parse.quote(gid,safe="")+"?token="+urllib.parse.quote(self.spectator_token,safe="")
         return f"""<!doctype html><html lang='it'><head><meta charset='utf-8'>
 <meta name='viewport' content='width=device-width,initial-scale=1'>
 <meta name='theme-color' content='#101720'>
@@ -3403,6 +3459,116 @@ async function poll(){{
   finally{{pollBusy=false;}}
 }}
 window.setInterval(poll,1000);
+document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}});
+</script></body></html>"""
+
+    def portal_web_html(self):
+        initial=self.public_portal_state()
+        state_json=json.dumps(initial,ensure_ascii=True).replace("<","\\u003c").replace(">","\\u003e").replace("&","\\u0026")
+        api_path="/api/portal?token="+urllib.parse.quote(self.spectator_token,safe="")
+        return f"""<!doctype html><html lang='it'><head><meta charset='utf-8'>
+<meta name='viewport' content='width=device-width,initial-scale=1'><meta name='theme-color' content='#101720'>
+<title>Coppa dei 5 Re · Portale LIVE</title><style>
+:root{{color-scheme:dark;--bg:#101720;--panel:#1b2633;--line:#344252;--gold:#e3c07f;--muted:#aab5c2}}
+*{{box-sizing:border-box}}body{{margin:0;padding:clamp(12px,3vw,28px);background:var(--bg);color:#edf1f5;font-family:Segoe UI,Arial,sans-serif}}
+main{{max-width:1500px;margin:auto}}header{{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px}}
+.brand{{color:#c9a15b;font-weight:900;letter-spacing:2px}}.live{{color:#78d6a0;font-weight:900;font-size:13px}}
+.summary{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:14px 0}}
+.metric,.card{{background:var(--panel);border:1px solid var(--line);border-radius:15px;padding:16px}}
+.metric b{{display:block;color:var(--gold);font-size:24px}}.metric span{{color:var(--muted);font-size:11px;letter-spacing:1px}}
+.section-title{{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:24px 0 12px}}
+.games{{display:grid;grid-template-columns:repeat(auto-fit,minmax(285px,1fr));gap:14px}}
+.game{{background:var(--panel);border:1px solid var(--line);border-radius:15px;padding:14px;text-decoration:none;color:inherit;display:block;transition:border-color .15s,transform .15s}}
+.game:hover{{border-color:var(--gold);transform:translateY(-2px)}}.game-head{{display:flex;justify-content:space-between;gap:8px;align-items:center;color:var(--muted);font-size:12px}}
+.status{{font-weight:800;font-size:10px;letter-spacing:.7px;color:#9bd8b3}}.status.done{{color:var(--gold)}}.status.wait{{color:var(--muted)}}
+.names{{display:flex;justify-content:space-between;gap:8px;margin:10px 0 6px;font-weight:800;font-size:14px}}.score{{color:var(--gold);text-align:center;font-weight:900;margin-bottom:8px}}
+.mini{{width:min(100%,180px);margin:8px auto 10px;display:grid;grid-template-columns:repeat(8,1fr);aspect-ratio:1;overflow:hidden;border:2px solid #35465a;border-radius:5px}}
+.sq{{display:grid;place-items:center;font:clamp(13px,2vw,21px) 'Segoe UI Symbol','DejaVu Sans',serif;line-height:1}}.light{{background:#f0d9b5;color:#fff}}.dark{{background:#b58863;color:#171717}}
+.clock{{display:flex;justify-content:space-between;gap:8px;color:#d4dce4;font:12px ui-monospace,Consolas,monospace;margin-top:8px}}
+.move{{font-size:11px;color:var(--muted);margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+.standings{{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}}
+.standings th,.standings td{{padding:11px 9px;border-bottom:1px solid var(--line);text-align:left;font-size:13px}}
+.standings th{{color:var(--gold);font-size:10px;letter-spacing:.8px}}.standings td:last-child,.standings th:last-child{{text-align:right;font-weight:900}}
+.muted{{color:var(--muted);font-size:12px}}.footer{{text-align:center;color:var(--muted);font-size:11px;padding:22px}}
+@media(max-width:560px){{.summary{{gap:7px}}.metric{{padding:10px}}.metric b{{font-size:19px}}.metric span{{font-size:9px}}.standings th,.standings td{{padding:9px 5px;font-size:11px}}}}
+</style></head><body><main>
+<header><div><div class='brand'>COPPA DEI 5 RE</div><div class='muted'>Portale pubblico · Tutti i tavoli</div></div><div class='live'>● LIVE · AGGIORNAMENTO AUTOMATICO</div></header>
+<div class='summary'><div class='metric'><b id='live-count'>{initial['live']}</b><span>PARTITE IN CORSO</span></div><div class='metric'><b id='done-count'>{initial['completed']}</b><span>PARTITE CONCLUSE</span></div><div class='metric'><b id='updated'>{html.escape(initial['as_of'])}</b><span>ULTIMO AGGIORNAMENTO</span></div></div>
+<div class='section-title'><strong>TUTTI I TAVOLI</strong><span class='muted'>Apri una partita per la scacchiera grande</span></div>
+<div id='games' class='games'></div>
+<div class='section-title'><strong>CLASSIFICA LIVE</strong><span class='muted'>Punti netti e risultati registrati</span></div>
+<div class='card' style='padding:0;overflow:auto'><table class='standings'><thead><tr><th>POS</th><th>GIOCATORE</th><th>G</th><th>V</th><th>X</th><th>P</th><th>PUNTI</th></tr></thead><tbody id='ranking'></tbody></table></div>
+<div class='footer'>Vista spettatore in sola lettura · Orologi e mosse provengono dalla Control Room Windows.</div>
+</main><script>
+const INITIAL={state_json};
+const API={json.dumps(api_path)};
+const GLYPHS={{K:'♔',Q:'♕',R:'♖',B:'♗',N:'♘',P:'♙',k:'♚',q:'♛',r:'♜',b:'♝',n:'♞',p:'♟'}};
+const tokenQuery={json.dumps("?token="+urllib.parse.quote(self.spectator_token,safe=""))};
+function miniBoard(fen){{
+ const ranks=String(fen||'').split(' ')[0].split('/');
+ const board=document.createElement('div');board.className='mini';
+ ranks.forEach((rank,row)=>{{
+  const cells=[];
+  for(const token of rank){{
+   if(/[1-8]/.test(token))for(let n=0;n<Number(token);n++)cells.push('');
+   else cells.push(token);
+  }}
+  while(cells.length<8)cells.push('');
+  cells.slice(0,8).forEach((token,col)=>{{
+   const cell=document.createElement('div');cell.className='sq '+(((row+col)%2===1)?'dark':'light');
+   cell.textContent=GLYPHS[token]||'';board.appendChild(cell);
+  }});
+ }});
+ return board;
+}}
+function render(data){{
+ document.getElementById('live-count').textContent=data.live||0;
+ document.getElementById('done-count').textContent=data.completed||0;
+ document.getElementById('updated').textContent=data.as_of||'—';
+ const games=document.getElementById('games');games.replaceChildren();
+ (data.matches||[]).forEach(match=>{{
+  const link=document.createElement('a');link.className='game';
+  link.href='/match/'+encodeURIComponent(match.game_id)+tokenQuery;
+  const head=document.createElement('div');head.className='game-head';
+  const round=document.createElement('span');round.textContent=match.round+' · '+match.game_id;
+  const status=document.createElement('span');status.className='status '+(match.status==='CONCLUSA'?'done':(match.status==='DA GIOCARE'?'wait':''));
+  status.textContent=match.status;
+  head.append(round,status);link.append(head);
+  const names=document.createElement('div');names.className='names';
+  const white=document.createElement('span');white.textContent=match.white;
+  const black=document.createElement('span');black.textContent=match.black;
+  names.append(white,black);link.append(names);
+  const score=document.createElement('div');score.className='score';score.textContent=match.result;
+  link.append(score,miniBoard(match.fen));
+  const clock=document.createElement('div');clock.className='clock';
+  const wc=document.createElement('span');wc.textContent='B '+formatTime(match.clock_white);
+  const bc=document.createElement('span');bc.textContent='N '+formatTime(match.clock_black);
+  clock.append(wc,bc);link.append(clock);
+  const moves=document.createElement('div');moves.className='move';moves.textContent=match.move_text;
+  link.append(moves);games.append(link);
+ }});
+ const ranking=document.getElementById('ranking');ranking.replaceChildren();
+ (data.standings||[]).forEach(row=>{{
+  const tr=document.createElement('tr');
+  [row.position,row.player,row.played,row.wins,row.draws,row.losses,Number(row.points).toFixed(1)].forEach((value,index)=>{{
+   const td=document.createElement('td');td.textContent=String(value);tr.append(td);
+  }});
+  ranking.append(tr);
+ }});
+}}
+function formatTime(seconds){{
+ const n=Math.max(0,Math.ceil(Number(seconds)||0));
+ return String(Math.floor(n/60)).padStart(2,'0')+':'+String(n%60).padStart(2,'0');
+}}
+render(INITIAL);
+let busy=false;
+async function poll(){{
+ if(busy||document.hidden)return;busy=true;
+ try{{const response=await fetch(API+'&t='+Date.now(),{{cache:'no-store'}});if(response.ok)render(await response.json());}}
+ catch(error){{}}
+ finally{{busy=false;}}
+}}
+setInterval(poll,1000);
 document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}});
 </script></body></html>"""
 
