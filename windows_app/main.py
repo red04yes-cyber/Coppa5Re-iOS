@@ -16,6 +16,8 @@ try:
         EvalBar, Avatar, PlayerStrip, FormStrip, MatchLine, label as ui_label, pill as ui_pill, set_pill, button as ui_button
     )
     from .c5r_board import BoardWidget
+    from .c5r_analytics_page import TournamentAnalyticsPage
+    from .c5r_analytics import tournament_summary
 except ImportError:
     import c5r_theme as T
     from c5r_widgets import (
@@ -24,6 +26,8 @@ except ImportError:
         EvalBar, Avatar, PlayerStrip, FormStrip, MatchLine, label as ui_label, pill as ui_pill, set_pill, button as ui_button
     )
     from c5r_board import BoardWidget
+    from c5r_analytics_page import TournamentAnalyticsPage
+    from c5r_analytics import tournament_summary
 from PySide6.QtCore import Qt, QSize, Signal, QThread, QTimer, QRect, QUrl, QDateTime, QByteArray, QBuffer, QIODevice, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPdfWriter, QKeySequence, QShortcut, QDesktopServices, QPixmap, QIntValidator, QPainterPath
 from PySide6.QtSvg import QSvgRenderer
@@ -681,7 +685,7 @@ class MainWindow(QMainWindow):
         self._odds_cache_key=None; self._odds_cache=None
         self.time_control="15+3"; self.clocks={}; self.audit_log=[]; self.match_notes={}; self.referee=""
         self.tie_break="Regolamento Art. 8"; self.playoff_results={}; self.eval_history={}; self.clock_ticks=0; self.board_theme=0
-        self.game_terminations={}; self.move_reviews={}; self.withdrawn_players={}
+        self.game_terminations={}; self.move_reviews={}; self.withdrawn_players={}; self.move_times={}
         self.move_annotations={}; self.round_closures={}; self.incident_reports=[]; self.player_bios={}; self.notification_drafts=[]
         self.match_http_server=None; self.match_http_thread=None; self.match_http_host=""; self.match_http_port=0
         self.ui_preferences={"theme":"dark","font_scale":1.0,"density":"comfortable"}; self.ui_profiles={}
@@ -707,7 +711,7 @@ class MainWindow(QMainWindow):
             self.audit_log=data.get("audit_log",[]); self.match_notes=data.get("match_notes",{})
             self.referee=data.get("referee",""); self.tie_break=data.get("tie_break","Nessuno")
             self.playoff_results=data.get("playoff_results",{}); self.playoff_winners=data.get("playoff_winners",{}); self.eval_history=data.get("eval_history",{})
-            self.game_terminations=data.get("game_terminations",{}); self.move_reviews=data.get("move_reviews",{})
+            self.game_terminations=data.get("game_terminations",{}); self.move_reviews=data.get("move_reviews",{}); self.move_times=data.get("move_times",{})
             self.withdrawn_players=data.get("withdrawn_players",{})
             self.move_annotations=data.get("move_annotations",{})
             self.round_closures=data.get("round_closures",{}); self.incident_reports=data.get("incident_reports",[]); self.player_bios=data.get("player_bios",{}); self.notification_drafts=data.get("notification_drafts",[])
@@ -747,7 +751,7 @@ class MainWindow(QMainWindow):
             "clocks":self.clocks,"audit_log":self.audit_log,"match_notes":self.match_notes,
             "referee":self.referee,"tie_break":self.tie_break,"playoff_results":self.playoff_results,
             "eval_history":self.eval_history,"playoff_winners":getattr(self,"playoff_winners",{}),
-            "game_terminations":self.game_terminations,"move_reviews":self.move_reviews,
+            "game_terminations":self.game_terminations,"move_reviews":self.move_reviews,"move_times":self.move_times,
             "withdrawn_players":self.withdrawn_players,
             "move_annotations":self.move_annotations,"round_closures":self.round_closures,
             "ui_preferences":self.ui_preferences,"ui_profiles":self.ui_profiles,"incident_reports":self.incident_reports,"player_bios":self.player_bios,"notification_drafts":self.notification_drafts,
@@ -929,10 +933,15 @@ class MainWindow(QMainWindow):
             player_id=white_player if mover_color else black_player
             mover="white" if mover_color else "black"
             clock=self.clock_data(gid)
+            elapsed=0.0
             if clock.get("started"):
-                side,remaining,_=self._advance_clock(gid)
+                side,remaining,elapsed=self._advance_clock(gid)
                 if remaining<=0:
                     self.tick_clocks(); return
+                self.move_times.setdefault(gid,[]).append({
+                    "ply":len(b.move_stack)+1,"player":player_id,
+                    "seconds":round(elapsed,2),"recorded_at":datetime.now().isoformat(timespec="seconds")
+                })
             b.push(move)
             if clock.get("started"): clock[mover]+=self.increment_seconds(gid)
             self.moves[gid]=[x.uci() for x in b.move_stack]
@@ -953,11 +962,13 @@ class MainWindow(QMainWindow):
         b=self.get_board(gid)
         if b.move_stack and not self.results.get(gid):
             removed=b.pop(); self.moves[gid]=[x.uci() for x in b.move_stack]
+            if self.move_times.get(gid):
+                self.move_times[gid]=[item for item in self.move_times[gid] if int(item.get("ply",0))<=len(b.move_stack)]
             self.log_operation("Mossa annullata",gid,removed.uci(),"")
             self.save(); self.refresh_all()
     def reset_board(self,gid):
         if QMessageBox.question(self,"Reset","Cancellare tutte le mosse di questa partita?")==QMessageBox.StandardButton.Yes:
-            self.boards[gid]=chess.Board(); self.moves[gid]=[]; self.clocks.pop(gid,None)
+            self.boards[gid]=chess.Board(); self.moves[gid]=[]; self.move_times.pop(gid,None); self.clocks.pop(gid,None)
             self.log_operation("Scacchiera resettata",gid,"","posizione iniziale")
             self.save(); self.refresh_all()
     def on_move_review_failed(self,gid,error):
@@ -1376,6 +1387,7 @@ class MainWindow(QMainWindow):
             self.nav.add_item(key, text, icon_name)
         pro_items = [
             ("players", "Giocatori", "user"),
+            ("analytics", "Analisi torneo", "chart"),
             ("compare", "Confronto", "versus"),
             ("openings", "Aperture", "chart"),
             ("health", "Health Check", "info"),
@@ -1404,7 +1416,7 @@ class MainWindow(QMainWindow):
             self.build_dashboard(), self.build_live(), self.build_draw_page(),
             self.build_calendar(), self.build_standings(), self.build_odds(),
             self.build_penalties(), self.build_playoffs(),
-            self.build_players(), self.build_compare(), self.build_openings(), self.build_health(), self.build_communications(),
+            self.build_players(), TournamentAnalyticsPage(self, PLAYERS, ORDER, GAMES, name, T.player_tint), self.build_compare(), self.build_openings(), self.build_health(), self.build_communications(),
             self.build_history(), self.build_archive(), self.build_h2h(), self.build_incidents(),
             self.build_audit(), self.build_settings(),
         ]
@@ -6180,6 +6192,10 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
         self.refresh_standings(); self.refresh_odds(); self.refresh_penalties(); self.refresh_playoffs()
         self.refresh_dashboard(); self.refresh_archive(); self.refresh_h2h(); self.refresh_audit()
         self.refresh_player_profile(); self.refresh_compare(); self.refresh_openings(); self.refresh_snapshot_status(); self.refresh_history(); self.refresh_incidents()
+        if hasattr(self, "tabs") and hasattr(self, "_page_keys"):
+            analytics_index=self._page_keys.index("analytics")
+            analytics_page=self.tabs.widget(analytics_index).widget()
+            if hasattr(analytics_page,"refresh"): analytics_page.refresh()
         self.refresh_communications()
         self.apply_calendar_filters(); self.refresh_notification_badge()
         if self.broadcast and self.broadcast.isVisible(): self.broadcast.refresh_from_app()
