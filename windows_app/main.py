@@ -1470,7 +1470,8 @@ class MainWindow(QMainWindow):
         items = [
             ("ESPORTA PGN TORNEO", self.export_all_pgn),
             ("CLASSIFICA CSV", self.export_standings_csv),
-            ("CLASSIFICA PDF", self.export_standings_pdf),\n            ("REPORT UFFICIALE PDF", self.export_tournament_report_pdf),
+            ("CLASSIFICA PDF", self.export_standings_pdf),
+            ("REPORT UFFICIALE PDF", self.export_tournament_report_pdf),
             ("CREA BACKUP", self.export_backup),
             ("RIPRISTINA BACKUP", self.restore_backup),
         ]
