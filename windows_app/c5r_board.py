@@ -104,7 +104,9 @@ class BoardWidget(QWidget):
         self.setMinimumSize(280,280)
         self.setSizePolicy(QSizePolicy.Policy.Expanding,QSizePolicy.Policy.Expanding)
         self.setMouseTracking(True)
-        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName("Scacchiera degli scacchi")
+        self.setAccessibleDescription("Scacchiera interattiva: seleziona un pezzo e poi una casa evidenziata. Premi Esc per annullare la selezione.")
 
     def sizeHint(self):
         return QSize(520,520)
@@ -202,8 +204,11 @@ class BoardWidget(QWidget):
                 p.fillRect(r,tint)
             if sq==self.selected:
                 tint=QColor(hi)
-                tint.setAlphaF(.78)
+                tint.setAlphaF(.68)
                 p.fillRect(r,tint)
+                p.setPen(QPen(QColor(C.brass_hi),max(1.5,c*.035)))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawRect(r.adjusted(1.5,1.5,-1.5,-1.5))
             if sq==check_sq:
                 g=QRadialGradient(r.center(),c*.72)
                 g.setColorAt(0,QColor(C.check))
@@ -223,17 +228,17 @@ class BoardWidget(QWidget):
         for sq in self.targets:
             r=self._square_rect(sq,x0,y0,c)
             if sq in self.captures:
-                p.setPen(QPen(QColor(20,14,8,105),c*.075))
+                p.setPen(QPen(with_alpha(C.success,.90),max(2.0,c*.065)))
                 p.setBrush(Qt.BrushStyle.NoBrush)
-                p.drawEllipse(r.adjusted(c*.07,c*.07,-c*.07,-c*.07))
+                p.drawEllipse(r.adjusted(c*.09,c*.09,-c*.09,-c*.09))
             else:
                 p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(QColor(20,14,8,88))
-                p.drawEllipse(r.center(),c*.16,c*.16)
+                p.setBrush(with_alpha(C.success,.72))
+                p.drawEllipse(r.center(),c*.17,c*.17)
             if sq==self.hover and not self.dragging:
-                p.setPen(QPen(QColor(20,14,8,130),max(2.0,c*.045)))
+                p.setPen(QPen(QColor(C.brass_hi),max(2.0,c*.045)))
                 p.setBrush(Qt.BrushStyle.NoBrush)
-                p.drawRect(r.adjusted(1,1,-1,-1))
+                p.drawRoundedRect(r.adjusted(2,2,-2,-2),c*.07,c*.07)
         if self.dragging and self.drag_source is not None:
             if self.hover is not None and self.hover in self.targets:
                 p.setPen(QPen(QColor(20,14,8,140),max(2.0,c*.05)))
@@ -248,6 +253,9 @@ class BoardWidget(QWidget):
         p.setPen(QPen(with_alpha("#000000",.35),1))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRoundedRect(QRectF(x0+.5,y0+.5,side-1,side-1),radius,radius)
+        if self.hasFocus():
+            p.setPen(QPen(QColor(C.brass_hi),2.2))
+            p.drawRoundedRect(QRectF(x0+2.5,y0+2.5,side-5,side-5),max(4,radius-1),max(4,radius-1))
 
     def _piece_anchor(self,sq,x0,y0,c):
         r=self._square_rect(sq,x0,y0,c)
