@@ -1986,11 +1986,22 @@ class MainWindow(QMainWindow):
     def refresh_all(self):
         if not hasattr(self,"live_cards"): return
         for c in self.live_cards: c.refresh()
-        for gid,cb in self.calendar_combos.items():
-            g=game(gid)
-            if hasattr(self,"calendar_pairings"):
-                self.calendar_pairings[gid].setText(f"{name(g[2])}  <span style='color:{GOLD}'>vs</span>  {name(g[3])}")
-            cb.blockSignals(True); cb.setCurrentIndex(max(0,cb.findData(self.results.get(gid)))); cb.blockSignals(False)
+        for gid, cb in self.calendar_combos.items():
+            g = game(gid)
+            if hasattr(self, "calendar_pairings"):
+                self.calendar_pairings[gid].setText(f"{name(g[2])}   vs   {name(g[3])}")
+            cb.blockSignals(True)
+            cb.setCurrentIndex(max(0, cb.findData(self.results.get(gid))))
+            cb.blockSignals(False)
+            result = self.results.get(gid)
+            if result == "VOID":
+                set_pill(self.calendar_status_labels[gid], "ANNULLATA", "danger")
+            elif result:
+                set_pill(self.calendar_status_labels[gid], "CONCLUSA", "success")
+            elif self.clock_data(gid).get("started") or self.moves.get(gid):
+                set_pill(self.calendar_status_labels[gid], "IN CORSO", "warning")
+            else:
+                set_pill(self.calendar_status_labels[gid], "DA GIOCARE", "neutral")
         if hasattr(self,"calendar_bye_labels"):
             for rnd,label in self.calendar_bye_labels.items():
                 label.setText(f"ROUND {rnd}  ·  Riposa: {name(BYES[rnd])}  ·  BYE")
