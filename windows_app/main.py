@@ -5926,7 +5926,7 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
             write(f"Rating Chess.com · {rating_text}")
             write("RENDIMENTO PER COLORE", 12, True, 6)
             for color, label in (("white", "Bianco"), ("black", "Nero")):
-                row = colors[color]; total = row["played"]
+                row = colors[color]; total = row["wins"] + row["draws"] + row["losses"]
                 if total:
                     write(f"{label}: {row['wins']} vittorie ({row['wins']/total*100:.1f}%), "
                           f"{row['draws']} patte ({row['draws']/total*100:.1f}%), "
@@ -6065,7 +6065,8 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
                 color_stats = self.player_profile_data(player_id)["colors"]
                 def color_line(key):
                     row = color_stats[key]
-                    return f"{row['wins']}/{row['draws']}/{row['losses']} in {row['played']} partite"
+                    played_color = row["wins"] + row["draws"] + row["losses"]
+                    return f"{row['wins']}/{row['draws']}/{row['losses']} in {played_color} partite"
                 write_line(f"{name(player_id)} · Bianco {color_line('white')} · Nero {color_line('black')}", 8)
             section("Calendario e risultati")
             for gid,rnd,white,black in GAMES:
