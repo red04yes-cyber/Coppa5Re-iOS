@@ -5577,7 +5577,7 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
                 f"{summary['errors']['IMPRECISIONE']} imprecisioni · {summary['errors']['ERRORE']} errori · "
                 f"{summary['errors']['GRAVE ERRORE']} gravi errori"
             )
-            write_line(f"Tempo medio per mossa: {avg_move} · durata media misurata per partita: {avg_game} "
+            write_line(f"Tempo medio per mossa: {avg_move} · tempo di riflessione complessivo medio per partita: {avg_game} "
                        f"({summary['games_with_timing']} partite con tempi disponibili)")
             for player_id in ORDER:
                 color_stats = self.player_profile_data(player_id)["colors"]
