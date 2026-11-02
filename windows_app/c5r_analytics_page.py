@@ -186,7 +186,7 @@ class TournamentAnalyticsPage(QWidget):
             f"{summary['errors']['IMPRECISIONE']} imprecisioni · {summary['errors']['ERRORE']} errori · "
             f"{summary['errors']['GRAVE ERRORE']} gravi errori.\n"
             f"Tempo medio per mossa: {avg_time} ({summary['timed_moves']} mosse cronometrate).\n"
-            f"Durata media misurata delle partite: {avg_game} ({summary['games_with_timing']} partite con tempi disponibili)."
+            f"Tempo medio di riflessione complessivo per partita: {avg_game} ({summary['games_with_timing']} partite con tempi disponibili)."
         )
         self.error_table.setRowCount(len(self.player_order))
         for row_index, pid in enumerate(self.player_order):
