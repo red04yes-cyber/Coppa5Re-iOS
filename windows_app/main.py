@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, os, random, sys, shutil, hashlib, math, csv, time, subprocess, queue, threading, re, uuid, base64, socket, io, html
+import json, os, random, sys, shutil, hashlib, math, csv, time, subprocess, queue, threading, re, uuid, base64, socket, io, html, urllib.parse
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlencode, quote, urlparse, unquote
@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import combinations
 import chess
 import chess.pgn
+import qrcode
 try:
     from . import c5r_theme as T
     from .c5r_widgets import (
@@ -662,7 +663,7 @@ class MainWindow(QMainWindow):
         self.time_control="15+3"; self.clocks={}; self.audit_log=[]; self.match_notes={}; self.referee=""
         self.tie_break="Regolamento Art. 8"; self.playoff_results={}; self.eval_history={}; self.clock_ticks=0; self.board_theme=0
         self.game_terminations={}; self.move_reviews={}; self.withdrawn_players={}
-        self.move_annotations={}; self.round_closures={}; self.incident_reports=[]; self.player_bios={}; self.notification_drafts=[]\n        self.match_http_server=None; self.match_http_thread=None
+        self.move_annotations={}; self.round_closures={}; self.incident_reports=[]; self.player_bios={}; self.notification_drafts=[]\n        self.match_http_server=None; self.match_http_thread=None; self.match_http_host=""; self.match_http_port=0
         self.ui_preferences={"theme":"dark","font_scale":1.0,"density":"comfortable"}; self.ui_profiles={}
         self._clock_runtime={}; self._last_clock_persist=time.monotonic()
         self._undo_stack=[]; self._redo_stack=[]; self._history_restoring=False; self._last_history_state=None
@@ -2776,6 +2777,371 @@ class MainWindow(QMainWindow):
         updated=profile.get("ratings_updated_at","")
         self.profile_rating_date.setText(
             f"Valori aggiornati: {updated[:10]}" if updated else "Rating non ancora verificati")
+
+    def make_qr_pixmap(self,data,size=240):
+        code=qrcode.QRCode(version=None,error_correction=qrcode.constants.ERROR_CORRECT_M,
+                           box_size=6,border=3)
+        code.add_data(str(data))
+        code.make(fit=True)
+        image=code.make_image(fill_color="black",back_color="white").convert("RGB")
+        buffer=io.BytesIO()
+        image.save(buffer,format="PNG")
+        pixmap=QPixmap()
+        pixmap.loadFromData(buffer.getvalue(),"PNG")
+        return pixmap.scaled(size,size,Qt.AspectRatioMode.KeepAspectRatio,
+                             Qt.TransformationMode.SmoothTransformation)
+
+    def local_network_ip(self):
+        probe=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+        try:
+            probe.connect(("192.0.2.1",80))
+            address=probe.getsockname()[0]
+            return address if address and not address.startswith("127.") else ""
+        except OSError:
+            return ""
+        finally:
+            probe.close()
+
+    def match_web_html(self,gid):
+        match=next((item for item in GAMES if item[0]==gid),None)
+        if match:
+            _,rnd,white,black=match
+            round_label=f"Round {rnd}"
+            result=self.results.get(gid) or "Da disputare"
+        elif gid in ("sf1","sf2","third","final"):
+            label={"sf1":"Semifinale 1","sf2":"Semifinale 2","third":"3° / 4° posto","final":"Finale"}[gid]
+            white,black=getattr(self,"playoff_pairs",{}).get(gid,(None,None))
+            round_label="Playoff · "+label
+            result=self.playoff_results.get(gid) or "Da disputare"
+        else:
+            return None
+        def player_box(player_id):
+            if not player_id:
+                return "<div class='player'>Giocatore da definire</div>"
+            profile=self.player_profile_info(player_id)
+            photo=profile.get("photo_data","")
+            avatar=(f"<img class='avatar' src='data:image/jpeg;base64,{photo}'>" if photo
+                    else f"<div class='avatar initials'>{html.escape(name(player_id)[:1])}</div>")
+            ratings=profile.get("ratings",{})
+            rating_text=" · ".join(f"{label} {ratings[kind]}" for label,kind in
+                (("Bullet","bullet"),("Blitz","blitz"),("Rapid","rapid")) if ratings.get(kind) is not None)
+            username=profile.get("chesscom_username") or PLAYERS[player_id][1]
+            chess_link=f"https://www.chess.com/member/{urllib.parse.quote(username,safe='')}"
+            return (f"<div class='player'>{avatar}<div><strong>{html.escape(name(player_id))}</strong>"
+                f"<span>{html.escape(rating_text or 'Rating non inseriti')}</span>"
+                f"<a href='{chess_link}'>Chess.com · {html.escape(username)}</a></div></div>")
+        move_text=[]
+        if gid in GAMES:
+            board=chess.Board()
+            for index,uci in enumerate(self.moves.get(gid,[]),1):
+                try:
+                    move=chess.Move.from_uci(uci)
+                    san=board.san(move)
+                    move_text.append((f"{(index+1)//2}. " if index%2 else "")+san)
+                    board.push(move)
+                except Exception:
+                    break
+        clock=self.clocks.get(gid,{})
+        clock_text=""
+        if clock:
+            clock_text=f"Bianco {math.ceil(float(clock.get('white',0)))}s · Nero {math.ceil(float(clock.get('black',0)))}s"
+        title=f"{html.escape(round_label)} · {html.escape(gid)}"
+        return f"""<!doctype html><html lang='it'><head><meta charset='utf-8'>
+<meta name='viewport' content='width=device-width,initial-scale=1'><meta http-equiv='refresh' content='15'>
+<title>Coppa dei 5 Re · {title}</title><style>
+body{{margin:0;padding:22px;background:#101720;color:#edf1f5;font-family:Segoe UI,Arial,sans-serif}}
+main{{max-width:760px;margin:auto}}.brand{{color:#c9a15b;font-weight:800;letter-spacing:2px}}
+.card{{background:#1b2633;border:1px solid #344252;border-radius:16px;padding:18px;margin:14px 0}}
+.player{{display:flex;gap:14px;align-items:center;margin:14px 0}}.avatar{{width:76px;height:76px;border-radius:50%;object-fit:cover}}
+.initials{{display:grid;place-items:center;background:#40566e;font-size:32px}}
+span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
+.result{{font-size:24px;font-weight:800;color:#e3c07f}}.muted{{color:#aab5c2}}
+</style></head><body><main><div class='brand'>COPPA DEI 5 RE · LIVE</div>
+<div class='card'><div class='muted'>{title}</div>{player_box(white)}<div class='result'>VS · {html.escape(str(result))}</div>{player_box(black)}
+<div class='muted'>{html.escape(clock_text)} · aggiornamento automatico ogni 15 secondi</div></div>
+<div class='card'><strong>Ultime mosse</strong><p>{html.escape(" ".join(move_text[-24:]) or "Nessuna mossa registrata")}</p></div>
+<div class='muted'>Pagina informativa in sola lettura sulla rete locale del torneo.</div></main></body></html>"""
+
+    def start_match_web_server(self):
+        if self.match_http_server is not None:
+            return self.match_http_host,self.match_http_port
+        app=self
+        class MatchHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                parsed=urllib.parse.urlparse(self.path)
+                if parsed.path=="/health":
+                    body=b"C5R local match server OK"
+                    self.send_response(200)
+                    self.send_header("Content-Type","text/plain; charset=utf-8")
+                    self.send_header("Content-Length",str(len(body)))
+                    self.end_headers(); self.wfile.write(body); return
+                if parsed.path.startswith("/match/"):
+                    gid=urllib.parse.unquote(parsed.path[len("/match/"):])
+                    content=app.match_web_html(gid)
+                    if content is None:
+                        self.send_error(404,"Partita non trovata")
+                        return
+                    body=content.encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type","text/html; charset=utf-8")
+                    self.send_header("Content-Length",str(len(body)))
+                    self.send_header("Cache-Control","no-store")
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                self.send_error(404,"Not found")
+            def log_message(self,format,*args):
+                return
+        last_error=None
+        for port in range(8765,8775):
+            try:
+                server=ThreadingHTTPServer(("0.0.0.0",port),MatchHandler)
+                server.daemon_threads=True
+                self.match_http_server=server
+                self.match_http_port=server.server_address[1]
+                self.match_http_host=self.local_network_ip()
+                self.match_http_thread=threading.Thread(target=server.serve_forever,
+                    name="C5R-Match-LAN",daemon=True)
+                self.match_http_thread.start()
+                if not self.match_http_host:
+                    server.shutdown(); server.server_close()
+                    self.match_http_server=None
+                    raise RuntimeError("Non riesco a individuare un indirizzo della rete locale. Collega il PC al Wi-Fi/LAN e riprova.")
+                return self.match_http_host,self.match_http_port
+            except OSError as exc:
+                last_error=exc
+        raise RuntimeError(f"Non è stato possibile avviare il server locale sulle porte 8765–8774: {last_error}")
+
+    def match_web_url(self,gid):
+        host,port=self.start_match_web_server()
+        return f"http://{host}:{port}/match/{urllib.parse.quote(gid,safe='')}"
+
+    def show_match_qr_dialog(self,gid):
+        try:
+            url=self.match_web_url(gid)
+            dialog=QDialog(self)
+            dialog.setWindowTitle(f"QR · {gid}")
+            dialog.resize(420,480)
+            layout=QVBoxLayout(dialog)
+            layout.addWidget(ui_label(f"QR TAVOLO · {gid}","h2",align=Qt.AlignmentFlag.AlignCenter))
+            image=QLabel()
+            image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            image.setPixmap(self.make_qr_pixmap(url,270))
+            layout.addWidget(image)
+            link=QLineEdit(url); link.setReadOnly(True)
+            layout.addWidget(link)
+            layout.addWidget(ui_label(
+                "Scansiona il codice con il telefono collegato alla stessa rete Wi-Fi/LAN. "
+                "La pagina mostra partita e risultati in sola lettura e si aggiorna ogni 15 secondi.",
+                "muted",wrap=True))
+            buttons=QHBoxLayout()
+            copy=QPushButton("COPIA LINK")
+            copy.clicked.connect(lambda:QApplication.clipboard().setText(url))
+            open_local=QPushButton("APRI SUL PC")
+            open_local.clicked.connect(lambda:QDesktopServices.openUrl(QUrl(url)))
+            close=QPushButton("CHIUDI")
+            close.clicked.connect(dialog.accept)
+            buttons.addWidget(copy); buttons.addWidget(open_local); buttons.addWidget(close)
+            layout.addLayout(buttons)
+            dialog.exec()
+        except Exception as exc:
+            QMessageBox.warning(self,"QR non disponibile",str(exc))
+
+    def export_all_match_qr_pdf(self):
+        try:
+            host,port=self.start_match_web_server()
+        except Exception as exc:
+            QMessageBox.warning(self,"QR non disponibili",str(exc)); return
+        path,_=QFileDialog.getSaveFileName(self,"Stampa QR dei tavoli","QR-Tavoli-C5R.pdf","PDF (*.pdf)")
+        if not path:
+            return
+        writer=QPdfWriter(path); writer.setTitle("QR tavoli · Coppa dei 5 Re")
+        writer.setCreator("Coppa dei 5 Re"); writer.setResolution(150)
+        painter=QPainter(writer)
+        try:
+            margin=90; gap=35; columns=2; rows_per_page=3
+            cell_w=(writer.width()-2*margin-gap)//columns
+            cell_h=(writer.height()-2*margin-gap*(rows_per_page-1))//rows_per_page
+            for index,(gid,rnd,white,black) in enumerate(GAMES):
+                if index and index%(columns*rows_per_page)==0:
+                    writer.newPage()
+                local=index%(columns*rows_per_page)
+                col=local%columns; row=local//columns
+                x=margin+col*(cell_w+gap); y=margin+row*(cell_h+gap)
+                painter.setPen(QPen(QColor("#C9A15B"),3))
+                painter.setBrush(QColor("#FFFFFF"))
+                painter.drawRoundedRect(QRect(x,y,cell_w,cell_h),18,18)
+                url=f"http://{host}:{port}/match/{urllib.parse.quote(gid,safe='')}"
+                pix=self.make_qr_pixmap(url,260)
+                qr_size=min(300,cell_h-90)
+                painter.drawPixmap(QRect(x+18,y+22,qr_size,qr_size),pix)
+                tx=x+qr_size+36; tw=cell_w-qr_size-54
+                painter.setPen(QColor("#17212B"))
+                painter.setFont(QFont("Segoe UI",13,QFont.Weight.Bold))
+                painter.drawText(QRect(tx,y+32,tw,50),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,
+                                 f"ROUND {rnd} · {gid}")
+                painter.setFont(QFont("Segoe UI",11))
+                painter.drawText(QRect(tx,y+86,tw,100),Qt.TextFlag.TextWordWrap,
+                                 f"{name(white)} – {name(black)}")
+                painter.setFont(QFont("Segoe UI",8))
+                painter.drawText(QRect(tx,y+cell_h-70,tw,54),Qt.TextFlag.TextWordWrap,
+                                 "Scansiona dalla stessa rete Wi-Fi/LAN per aprire la pagina partita.")
+        finally:
+            painter.end()
+        self.statusBar().showMessage("PDF con i QR dei 10 tavoli esportato.",3000)
+
+    def _pdf_player_card(self,painter,rect,player_id):
+        profile=self.player_profile_info(player_id)
+        painter.setPen(QPen(QColor("#C9A15B"),3))
+        painter.setBrush(QColor("#FFFFFF"))
+        painter.drawRoundedRect(rect,18,18)
+        x,y,w,h=rect.x(),rect.y(),rect.width(),rect.height()
+        painter.setPen(QColor("#9A6A18"))
+        painter.setFont(QFont("Segoe UI",10,QFont.Weight.Bold))
+        painter.drawText(QRect(x+24,y+18,w-48,35),"COPPA DEI 5 RE · PLAYER CARD")
+        photo=self.player_photo_pixmap(player_id,210)
+        painter.drawPixmap(QRect(x+25,y+65,150,150),photo)
+        text_x=x+200
+        painter.setPen(QColor("#17212B"))
+        painter.setFont(QFont("Segoe UI",18,QFont.Weight.Bold))
+        painter.drawText(QRect(text_x,y+65,w-230,42),Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,name(player_id))
+        painter.setFont(QFont("Segoe UI",10))
+        age=f"{profile['age']} anni" if profile.get("age") else "Età non indicata"
+        painter.drawText(QRect(text_x,y+112,w-230,26),age)
+        username=profile.get("chesscom_username") or PLAYERS[player_id][1]
+        painter.drawText(QRect(text_x,y+145,w-230,26),f"Chess.com · {username}")
+        ratings=profile.get("ratings",{})
+        painter.setFont(QFont("Segoe UI",10,QFont.Weight.Bold))
+        rating_text="   ".join(f"{label} {ratings[kind] if ratings.get(kind) is not None else '—'}"
+                              for label,kind in (("BULLET","bullet"),("BLITZ","blitz"),("RAPID","rapid")))
+        painter.drawText(QRect(text_x,y+180,w-230,36),rating_text)
+        bio=profile.get("bio","") or "Giocatore · Coppa dei 5 Re"
+        painter.setFont(QFont("Segoe UI",9))
+        painter.drawText(QRect(x+25,y+235,w-50,65),Qt.TextFlag.TextWordWrap,bio[:220])
+        painter.setPen(QColor("#8793A1"))
+        painter.setFont(QFont("Segoe UI",8))
+        painter.drawText(QRect(x+25,y+h-38,w-50,22),
+                         f"ID giocatore: {player_id} · Edizione: {datetime.now().strftime('%Y')}")
+
+    def export_player_badges_pdf(self,player_ids=None):
+        selected=list(player_ids or ORDER)
+        path,_=QFileDialog.getSaveFileName(self,"Stampa tesserini giocatori","Tesserini-C5R.pdf","PDF (*.pdf)")
+        if not path:
+            return
+        writer=QPdfWriter(path); writer.setTitle("Tesserini giocatori · Coppa dei 5 Re")
+        writer.setCreator("Coppa dei 5 Re"); writer.setResolution(150)
+        painter=QPainter(writer)
+        try:
+            margin=110; gap=45; cols=2; rows=2
+            cell_w=(writer.width()-2*margin-gap)//cols
+            cell_h=(writer.height()-2*margin-gap)//rows
+            for index,player_id in enumerate(selected):
+                if index and index%(cols*rows)==0:
+                    writer.newPage()
+                local=index%(cols*rows)
+                col=local%cols; row=local//cols
+                rect=QRect(margin+col*(cell_w+gap),margin+row*(cell_h+gap),cell_w,cell_h)
+                self._pdf_player_card(painter,rect,player_id)
+        finally:
+            painter.end()
+        self.statusBar().showMessage(f"Tesserini esportati: {len(selected)} giocatori.",3000)
+
+    def export_current_player_badge(self):
+        player_id=self.profile_combo.currentData()
+        if player_id:
+            self.export_player_badges_pdf([player_id])
+
+    def export_match_sheet_pdf(self,gid,path=None,painter=None,writer=None):
+        match=next((item for item in GAMES if item[0]==gid),None)
+        if match:
+            _,rnd,white,black=match
+            round_label=f"Round {rnd}"
+            result=self.results.get(gid) or "Da disputare"
+        elif gid in ("sf1","sf2","third","final"):
+            round_label="Playoff"
+            white,black=getattr(self,"playoff_pairs",{}).get(gid,(None,None))
+            result=self.playoff_results.get(gid) or "Da disputare"
+        else:
+            raise ValueError("Partita non riconosciuta.")
+        own_painter=painter is None
+        if own_painter:
+            path,_=QFileDialog.getSaveFileName(self,"Stampa scheda partita",f"Scheda-{gid}.pdf","PDF (*.pdf)")
+            if not path:
+                return
+            writer=QPdfWriter(path); writer.setTitle(f"Scheda partita {gid}")
+            writer.setCreator("Coppa dei 5 Re"); writer.setResolution(150)
+            painter=QPainter(writer)
+        try:
+            width=writer.width(); height=writer.height(); margin=145
+            painter.setPen(QColor("#9A6A18"))
+            painter.setFont(QFont("Segoe UI",20,QFont.Weight.Bold))
+            painter.drawText(QRect(margin,margin,width-2*margin,55),"COPPA DEI 5 RE · SCHEDA PARTITA")
+            painter.setPen(QColor("#5E6B79"))
+            painter.setFont(QFont("Segoe UI",11))
+            painter.drawText(QRect(margin,margin+60,width-2*margin,32),f"{round_label} · {gid}")
+            player_y=margin+125
+            card_w=(width-2*margin-40)//2
+            for index,(label,player) in enumerate((("BIANCO",white),("NERO",black))):
+                x=margin+index*(card_w+40)
+                painter.setPen(QPen(QColor("#C9A15B"),2))
+                painter.setBrush(QColor("#FFFFFF"))
+                painter.drawRoundedRect(QRect(x,player_y,card_w,260),15,15)
+                if player:
+                    painter.drawPixmap(QRect(x+24,player_y+30,130,130),self.player_photo_pixmap(player,130))
+                    painter.setPen(QColor("#17212B"))
+                    painter.setFont(QFont("Segoe UI",16,QFont.Weight.Bold))
+                    painter.drawText(QRect(x+170,player_y+25,card_w-190,45),name(player))
+                    profile=self.player_profile_info(player); ratings=profile.get("ratings",{})
+                    painter.setFont(QFont("Segoe UI",9))
+                    painter.drawText(QRect(x+170,player_y+76,card_w-190,65),
+                        f"Chess.com · {profile.get('chesscom_username') or PLAYERS[player][1]}\n"
+                        f"Bullet {ratings.get('bullet') or '—'} · Blitz {ratings.get('blitz') or '—'} · Rapid {ratings.get('rapid') or '—'}")
+                else:
+                    painter.setPen(QColor("#8793A1"))
+                    painter.setFont(QFont("Segoe UI",14,QFont.Weight.Bold))
+                    painter.drawText(QRect(x+20,player_y+50,card_w-40,80),"Da definire")
+                painter.setPen(QColor("#9A6A18"))
+                painter.setFont(QFont("Segoe UI",10,QFont.Weight.Bold))
+                painter.drawText(QRect(x+24,player_y+195,card_w-48,32),label)
+            result_y=player_y+295
+            painter.setPen(QColor("#17212B"))
+            painter.setFont(QFont("Segoe UI",14,QFont.Weight.Bold))
+            painter.drawText(QRect(margin,result_y,width-2*margin,38),f"RISULTATO: {result}")
+            painter.setFont(QFont("Segoe UI",10))
+            painter.drawText(QRect(margin,result_y+55,width-2*margin,34),
+                             "Data: __________________________    Ora inizio: __________    Ora fine: __________")
+            painter.drawText(QRect(margin,result_y+112,width-2*margin,34),
+                             "Note / decisioni arbitrali: ________________________________________________")
+            painter.drawText(QRect(margin,result_y+210,width-2*margin,38),
+                             "Firma Bianco: ____________________     Firma Nero: ____________________")
+            painter.drawText(QRect(margin,result_y+270,width-2*margin,38),
+                             "Arbitro: _________________________________________________________________")
+            painter.setPen(QColor("#8793A1"))
+            painter.setFont(QFont("Segoe UI",8))
+            painter.drawText(QRect(margin,height-95,width-2*margin,25),
+                             f"Stampato il {datetime.now().strftime('%d/%m/%Y %H:%M')} · {self.referee or 'Direzione di gara'}")
+        finally:
+            if own_painter:
+                painter.end()
+        if own_painter:
+            self.statusBar().showMessage(f"Scheda partita {gid} esportata.",3000)
+
+    def export_all_match_sheets_pdf(self):
+        path,_=QFileDialog.getSaveFileName(self,"Stampa schede di tutte le partite","Schede-Partita-C5R.pdf","PDF (*.pdf)")
+        if not path:
+            return
+        writer=QPdfWriter(path); writer.setTitle("Schede partite · Coppa dei 5 Re")
+        writer.setCreator("Coppa dei 5 Re"); writer.setResolution(150)
+        painter=QPainter(writer)
+        try:
+            ids=[item[0] for item in GAMES]+["sf1","sf2","third","final"]
+            for index,gid in enumerate(ids):
+                if index:
+                    writer.newPage()
+                self.export_match_sheet_pdf(gid,painter=painter,writer=writer)
+        finally:
+            painter.end()
+        self.statusBar().showMessage("Schede partite e playoff esportate in PDF.",3000)
 
     def build_players(self):
         page = QWidget()
