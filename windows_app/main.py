@@ -3463,7 +3463,14 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
         batch_id=uuid.uuid4().hex[:10]
         created=datetime.now().isoformat(timespec="seconds")
         generated=[]
+        context=self.notification_context(gid)
+        match=next((item for item in GAMES if item[0]==gid),None)
+        playoff_pair=getattr(self,"playoff_pairs",{}).get(gid,(None,None)) if gid in ("sf1","sf2","third","final") else (None,None)
         for player_id in recipients:
+            if template in ("convocation","result") and gid:
+                participants=(match[2],match[3]) if match else playoff_pair
+                if participants and player_id not in participants:
+                    continue
             profile=self.player_profile_info(player_id)
             body=self.notification_message_for(player_id,template,gid,custom if template=="custom" else "")
             if template=="custom" and not body.strip():
