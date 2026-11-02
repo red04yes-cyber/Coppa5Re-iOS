@@ -3404,7 +3404,7 @@ class MainWindow(QMainWindow):
             "clock_running":running,
             "clock_turn":clock_turn,
             "ply":snapshot["ply"],
-            "status":"CONCLUSA" if result!="Da disputare" else ("IN CORSO" if running or valid_uci else "DA GIOCARE"),
+            "status":"CONCLUSA" if result!="Da disputare" else ("IN CORSO" if running or snapshot["ply"] else "DA GIOCARE"),
             "is_playoff":is_playoff,
         }
 
