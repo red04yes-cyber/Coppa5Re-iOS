@@ -1003,6 +1003,9 @@ class MainWindow(QMainWindow):
             removed=b.pop(); self.moves[gid]=[x.uci() for x in b.move_stack]
             if self.move_times.get(gid):
                 self.move_times[gid]=[item for item in self.move_times[gid] if int(item.get("ply",0))<=len(b.move_stack)]
+            clock=self.clock_data(gid)
+            if clock.get("started"):
+                clock["turn_started_at"]=time.time()
             self.log_operation("Mossa annullata",gid,removed.uci(),"")
             self.save(); self.refresh_all()
     def reset_board(self,gid):
