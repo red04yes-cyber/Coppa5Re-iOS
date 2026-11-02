@@ -969,7 +969,7 @@ class MainWindow(QMainWindow):
         workspace.addWidget(self.tabs, 1)
         outer.addLayout(workspace, 1)
 
-        footer = QLabel("COPPA DEI 5 RE   /   STAGIONE 2026   /   DATI LOCALI SU QUESTO PC")
+        footer = QLabel("COPPA DEI 5 RE   /   DATI LOCALI SU QUESTO PC   ·   CTRL+S SALVA   ·   CTRL+E ESPORTA PGN   ·   CTRL+SHIFT+B BACKUP")
         footer.setObjectName("Footnote")
         outer.addWidget(footer)
         self.setCentralWidget(root)
@@ -1002,6 +1002,8 @@ class MainWindow(QMainWindow):
         hero_text.addStretch(1)
         hero_lay.addLayout(hero_text, 1)
         root.addWidget(hero)
+        self.dashboard_detail = ui_label("Arbitro non impostato", "muted")
+        root.addWidget(self.dashboard_detail)
 
         metrics = QHBoxLayout()
         metrics.setSpacing(12)
@@ -2337,6 +2339,16 @@ class MainWindow(QMainWindow):
             card.labels[1].setText(name(pair[0]) if pair[0] else "Da definire")
             card.labels[2].setText(name(pair[1]) if pair[1] else "Da definire")
             result=self.playoff_results.get(key)
+            if result == "1/2-1/2":
+                card.status_label.setText("PATTA · ARMAGEDDON DA REGISTRARE" if not self.playoff_winners.get(key) else "ARMAGEDDON REGISTRATO")
+            elif result in ("1-0", "0-1"):
+                card.status_label.setText("INCONTRO CONCLUSO")
+            elif self.clock_data(key).get("started"):
+                card.status_label.setText("IN CORSO · OROLOGIO ATTIVO")
+            elif all(pair):
+                card.status_label.setText("PRONTO PER IL 30+10")
+            else:
+                card.status_label.setText("IN ATTESA DELLE QUALIFICATE")
             card.result_box.blockSignals(True)
             card.result_box.setCurrentIndex(max(0,card.result_box.findData(result)))
             card.result_box.blockSignals(False)
