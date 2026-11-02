@@ -10,7 +10,7 @@ sys.path.insert(0, str(ROOT))
 os.environ["APPDATA"] = tempfile.mkdtemp(prefix="c5r-analytics-")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QFileDialog
 from windows_app.c5r_analytics import (
     player_performance, player_color_statistics, player_error_statistics,
     player_time_statistics, simulate_standings, tournament_summary,
@@ -70,5 +70,15 @@ window.clock_data("R1-M1")["turn_started_at"] = time.time() - 2.5
 window.record_move("R1-M1", "e2e4")
 record = window.move_times["R1-M1"][0]
 assert record["player"] == "jacopo" and record["seconds"] >= 2.4
+
+# Detailed player PDF includes the newly collected performance/timing sections.
+pdf_path = Path(APPDATA) / "player-report.pdf"
+old_save_dialog = QFileDialog.getSaveFileName
+QFileDialog.getSaveFileName = lambda *args, **kwargs: (str(pdf_path), "PDF (*.pdf)")
+try:
+    window.export_player_report_pdf("jacopo")
+    assert pdf_path.is_file() and pdf_path.stat().st_size > 500
+finally:
+    QFileDialog.getSaveFileName = old_save_dialog
 window.close()
 print("C5R Windows analytics OK: performance, colors, errors, move timing, report summaries, hypothetical standings and PDF page wiring.")
