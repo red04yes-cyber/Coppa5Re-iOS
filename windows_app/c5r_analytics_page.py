@@ -22,11 +22,12 @@ except ImportError:
 
 
 class TournamentAnalyticsPage(QWidget):
-    def __init__(self, app, players, player_order, player_name, player_color):
+    def __init__(self, app, players, player_order, schedule, player_name, player_color):
         super().__init__()
         self.app = app
         self.players = players
         self.player_order = player_order
+        self.schedule = schedule
         self.player_name = player_name
         self.player_color = player_color
         self.simulation_controls = {}
@@ -91,7 +92,7 @@ class TournamentAnalyticsPage(QWidget):
         self.refresh()
 
     def _build_simulation_controls(self):
-        for index, (gid, rnd, white, black) in enumerate(self.app.GAMES):
+        for index, (gid, rnd, white, black) in enumerate(self.schedule):
             if self.app.results.get(gid) is not None:
                 continue
             row = QHBoxLayout()
@@ -117,7 +118,7 @@ class TournamentAnalyticsPage(QWidget):
         if not hasattr(self, "player_combo"):
             return
         player_id = self.player_combo.currentData()
-        performance = player_performance(self.app.GAMES, self.app.results, player_id)
+        performance = player_performance(self.schedule, self.app.results, player_id)
         labels = [item[0] for item in performance]
         values = [item[1] for item in performance]
         color = self.player_color(self.player_order.index(player_id))
@@ -127,13 +128,13 @@ class TournamentAnalyticsPage(QWidget):
             f"{self.player_name(player_id)} · {current['points']:.1f} punti netti · "
             f"{current['wins']} vittorie, {current['draws']} patte, {current['losses']} sconfitte."
         )
-        colors = player_color_statistics(self.app.GAMES, self.app.results, player_id)
+        colors = player_color_statistics(self.schedule, self.app.results, player_id)
         w, b = colors["white"], colors["black"]
         self.color_stats.set(
             f"{w['wins']}/{w['draws']}/{w['losses']} · {b['wins']}/{b['draws']}/{b['losses']}",
             "Bianco e Nero · vittorie / patte / sconfitte"
         )
-        errors = player_error_statistics(self.app.GAMES, self.app.move_reviews, player_id)
+        errors = player_error_statistics(self.schedule, self.app.move_reviews, player_id)
         ec = errors["counts"]
         self.error_stats.set(
             f"{ec['IMPRECISIONE']} · {ec['ERRORE']} · {ec['GRAVE ERRORE']}",
@@ -160,15 +161,15 @@ class TournamentAnalyticsPage(QWidget):
             f"{ec['GRAVE ERRORE']} gravi errori.\n{timing_text}"
         )
         summary = tournament_summary(
-            self.app.GAMES, self.app.results, self.app.moves, self.app.move_reviews,
-            getattr(self.app, "move_times", {}), {gid: self.app.opening_name(gid) for gid, *_ in self.app.GAMES},
+            self.schedule, self.app.results, self.app.moves, self.app.move_reviews,
+            getattr(self.app, "move_times", {}), {gid: self.app.opening_name(gid) for gid, *_ in self.schedule},
             self.app.game_terminations
         )
         openings = ", ".join(f"{label} ({count})" for label, count in summary["openings"][:6]) or "Non ancora disponibili"
         endings = ", ".join(f"{label} ({count})" for label, count in summary["endings"]) or "Non disponibili"
         avg_time = "N/D" if summary["average_move_seconds"] is None else f"{summary['average_move_seconds']:.1f} secondi"
         self.tournament_summary_label.setText(
-            f"Partite concluse: {summary['completed']}/{len(self.app.GAMES)}.\n"
+            f"Partite concluse: {summary['completed']}/{len(self.schedule)}.\n"
             f"Aperture più giocate: {openings}.\n"
             f"Tipi di conclusione: {endings}.\n"
             f"Precisione: {summary['reviewed_moves']} mosse analizzate · "
@@ -187,7 +188,7 @@ class TournamentAnalyticsPage(QWidget):
             else:
                 hypothetical.pop(gid, None)
         rows = simulate_standings(
-            self.app.GAMES, hypothetical, self.app.penalty_points(), self.player_order
+            self.schedule, hypothetical, self.app.penalty_points(), self.player_order
         )
         self.simulation_table.setRowCount(len(rows))
         for index, item in enumerate(rows, 1):
