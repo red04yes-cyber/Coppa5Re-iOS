@@ -367,9 +367,9 @@ try:
     window.profile_combo.setCurrentIndex(window.profile_combo.findData("jacopo"))
     window.refresh_player_profile()
     window.live_cards[0].refresh()
-    assert not window.live_cards[0].white_photo.pixmap().isNull()
-    assert "BL 1580" in window.live_cards[0].white_ratings.text()
-    assert "R 1710" in window.live_cards[0].white_ratings.text()
+    assert window.live_cards[0].white_strip.avatar._pixmap is not None
+    assert "BL 1580" in window.live_cards[0].white_strip.sub.text()
+    assert "R 1710" in window.live_cards[0].white_strip.sub.text()
     assert window.player_profile_info("jacopo")["age"] == 21
 
     # Printable player cards and printable match sheets are generated as PDFs.
