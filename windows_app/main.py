@@ -2828,6 +2828,30 @@ class MainWindow(QMainWindow):
             for ply, annotation in plies.items():
                 if not str(ply).isdigit() or int(ply) < 1 or not isinstance(annotation, dict):
                     add("AVVISO", "Annotazione non valida", f"{gid}: annotazione della mossa {ply} non leggibile.")
+        incident_ids=set()
+        for report in getattr(self,"incident_reports",[]):
+            if not isinstance(report,dict):
+                add("ERRORE","Verbale non valido","È presente un elemento verbale non leggibile.")
+                continue
+            report_id=str(report.get("id",""))
+            if not report_id or report_id in incident_ids:
+                add("ERRORE","Identificativo verbale non valido",f"Identificativo mancante o duplicato: {report_id or '—'}.")
+            incident_ids.add(report_id)
+            for field in ("category","summary","description","status","created_at"):
+                if not str(report.get(field,"")).strip():
+                    add("AVVISO","Verbale incompleto",f"{report_id}: campo obbligatorio '{field}' mancante.")
+            game_id=report.get("game_id","")
+            if game_id and game_id not in valid_ids and game_id not in ("sf1","sf2","final","third"):
+                add("AVVISO","Riferimento verbale non riconosciuto",
+                    f"{report_id}: la partita {game_id} non è nel calendario attuale; il testo storico è comunque conservato.")
+            for attachment in report.get("attachments",[]):
+                try:
+                    evidence=self.incident_attachment_path(attachment.get("path",""))
+                    if not evidence.is_file():
+                        add("AVVISO","Allegato verbale mancante",
+                            f"{report_id}: non è disponibile il file {attachment.get('name',evidence.name)}.")
+                except Exception as exc:
+                    add("ERRORE","Percorso allegato non valido",f"{report_id}: {exc}.")
         try:
             for gid in valid_ids:
                 node = self.build_pgn_game(gid)
@@ -2865,7 +2889,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(14)
         layout.addWidget(ui_label("Tournament Health Check", "h1"))
         layout.addWidget(ui_label(
-            "Verifica coerenza del calendario, risultati, mosse legali, cronometri, ritiri, annotazioni e PGN.",
+            "Verifica coerenza di calendario, risultati, mosse, cronometri, PGN, verbali e relativi allegati.",
             "lead", wrap=True
         ))
         health_card = Card("Integrità del torneo", "Esegui la verifica prima di chiudere un round o esportare il torneo.")
