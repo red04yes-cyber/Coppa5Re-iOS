@@ -3328,7 +3328,7 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
             layout.addWidget(link)
             layout.addWidget(ui_label(
                 "Scansiona il codice con il telefono collegato alla stessa rete Wi-Fi/LAN. "
-                "La pagina mostra partita e risultati in sola lettura e si aggiorna ogni 15 secondi.",
+                "La pagina mostra scacchiera e cronologia mosse in sola lettura; la posizione si aggiorna automaticamente ogni secondo.",
                 "muted",wrap=True))
             buttons=QHBoxLayout()
             copy=QPushButton("COPIA LINK")
