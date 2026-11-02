@@ -39,6 +39,10 @@ try:
     from .c5r_storage import atomic_write_json, read_document, decode_document
 except ImportError:
     from c5r_storage import atomic_write_json, read_document, decode_document
+try:
+    from .c5r_history import archive_edition, import_edition_file, list_editions, career_statistics
+except ImportError:
+    from c5r_history import archive_edition, import_edition_file, list_editions, career_statistics
 
 APP_NAME = "Coppa dei 5 Re"
 PLAYERS = {
@@ -1355,6 +1359,7 @@ class MainWindow(QMainWindow):
             self.nav.add_item(key, text, icon_name)
         self.nav.add_group("ARCHIVIO E CONTROLLO")
         archive_items = [
+            ("history", "Storico edizioni", "trophy"),
             ("archive", "Archivio", "archive"),
             ("h2h", "Testa a testa", "versus"),
             ("incidents", "Verbali incidenti", "file"),
@@ -1371,7 +1376,7 @@ class MainWindow(QMainWindow):
             self.build_calendar(), self.build_standings(), self.build_odds(),
             self.build_penalties(), self.build_playoffs(),
             self.build_players(), self.build_compare(), self.build_openings(), self.build_health(), self.build_communications(),
-            self.build_archive(), self.build_incidents(), self.build_h2h(), self.build_audit(), self.build_settings(),
+            self.build_archive(), self.build_history(), self.build_incidents(), self.build_h2h(), self.build_audit(), self.build_settings(),
         ]
         self._page_keys = [item[0] for item in nav_items + pro_items + archive_items]
         for page in pages:
@@ -1585,6 +1590,203 @@ class MainWindow(QMainWindow):
         analyze=QPushButton("ANALIZZA POSIZIONI CON STOCKFISH")
         analyze.clicked.connect(self.analyze_selected_archive_game); row.addWidget(analyze); row.addStretch()
         layout.addLayout(row); return page
+
+    def history_player_names(self):
+        return {player:name(player) for player in ORDER}
+
+    def archive_edition_state(self,title,state=None):
+        payload=state if state is not None else self.state_payload()
+        schedule=payload.get("schedule",[])
+        if schedule:
+            parsed=[(item["id"],int(item["round"]),item["white"],item["black"]) for item in schedule]
+            validate_schedule(parsed)
+        return archive_edition(storage_path(),payload,title,ORDER,self.history_player_names())
+
+    def archive_current_edition(self):
+        default=f"Coppa dei 5 Re · {datetime.now().strftime('%Y-%m-%d')}"
+        title,ok=QInputDialog.getText(self,"Archivia edizione","Nome dell'edizione:",text=default)
+        if not ok or not title.strip():
+            return
+        try:
+            target=self.archive_edition_state(title)
+            self.log_operation("Edizione archiviata",title,"","Copia storica indipendente",target.name)
+            self.save(automatic_snapshot=False)
+            self.refresh_history()
+            self.statusBar().showMessage(f"Edizione archiviata: {target.name}",4000)
+        except Exception as exc:
+            QMessageBox.warning(self,"Edizione non archiviata",str(exc))
+
+    def import_historical_edition(self):
+        source,_=QFileDialog.getOpenFileName(self,"Importa backup di un'edizione","","Backup torneo (*.json)")
+        if not source:
+            return
+        title,ok=QInputDialog.getText(self,"Nome edizione importata",
+            "Come vuoi identificare questa edizione:",text=Path(source).stem)
+        if not ok or not title.strip():
+            return
+        try:
+            raw=json.loads(Path(source).read_text(encoding="utf-8"))
+            if isinstance(raw,dict) and isinstance(raw.get("state"),dict):
+                state=decode_document(raw["state"])
+            else:
+                state=decode_document(raw)
+            schedule=state.get("schedule",[])
+            if not schedule:
+                raise ValueError("Il backup non contiene un calendario.")
+            parsed=[(item["id"],int(item["round"]),item["white"],item["black"]) for item in schedule]
+            validate_schedule(parsed)
+            target=import_edition_file(storage_path(),source,title,ORDER,self.history_player_names())
+            self.log_operation("Edizione storica importata",title,"","Backup importato",Path(source).name)
+            self.save(automatic_snapshot=False)
+            self.refresh_history()
+            self.statusBar().showMessage(f"Edizione importata: {target.name}",4000)
+        except Exception as exc:
+            QMessageBox.warning(self,"Importazione non riuscita",f"Il backup non è stato aggiunto: {exc}")
+
+    def build_history(self):
+        page=QWidget()
+        layout=QVBoxLayout(page)
+        layout.setContentsMargins(26,24,26,30)
+        layout.setSpacing(14)
+        layout.addWidget(ui_label("Storico delle edizioni","h1"))
+        layout.addWidget(ui_label(
+            "Archivia ogni torneo concluso o importa backup precedenti. L'albo d'oro e le statistiche cumulative "
+            "si aggiornano usando i risultati conservati nelle singole edizioni.",
+            "lead",wrap=True))
+        stats=QHBoxLayout()
+        self.history_stats=[
+            StatTile("EDIZIONI ARCHIVIATE","archive"),
+            StatTile("TITOLI ASSEGNATI","trophy"),
+            StatTile("PIAZZAMENTI SUL PODIO","medal"),
+        ]
+        for tile in self.history_stats:
+            stats.addWidget(tile,1)
+        layout.addLayout(stats)
+
+        archive=Card("Archivio delle edizioni",
+            "Ogni edizione viene salvata in un file separato e non modifica il torneo attualmente aperto.")
+        toolbar=QHBoxLayout()
+        archive_btn=QPushButton("ARCHIVIA TORNEO CORRENTE")
+        archive_btn.setObjectName("PrimaryButton")
+        archive_btn.clicked.connect(self.archive_current_edition)
+        import_btn=QPushButton("IMPORTA BACKUP PRECEDENTE")
+        import_btn.clicked.connect(self.import_historical_edition)
+        refresh_btn=QPushButton("AGGIORNA")
+        refresh_btn.clicked.connect(self.refresh_history)
+        toolbar.addWidget(archive_btn); toolbar.addWidget(import_btn)
+        toolbar.addStretch(1); toolbar.addWidget(refresh_btn)
+        archive.body.addLayout(toolbar)
+        self.history_edition_table=QTableWidget(0,6)
+        self.history_edition_table.setHorizontalHeaderLabels(
+            ["DATA","EDIZIONE","CAMPIONE","PARTITE","GIOCATORI","STATO"])
+        self.history_edition_table.verticalHeader().setVisible(False)
+        self.history_edition_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.history_edition_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.history_edition_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.history_edition_table.horizontalHeader().setSectionResizeMode(1,QHeaderView.ResizeMode.Stretch)
+        for col in (0,2,3,4,5):
+            self.history_edition_table.horizontalHeader().setSectionResizeMode(col,QHeaderView.ResizeMode.ResizeToContents)
+        style_table(self.history_edition_table,row_height=44,selectable=True)
+        self.history_edition_table.cellClicked.connect(self.show_historical_edition)
+        archive.body.addWidget(table_card(self.history_edition_table))
+        self.history_detail=ui_label(
+            "Seleziona un'edizione per vedere classifica, podio e risultati.",
+            "muted",wrap=True)
+        archive.body.addWidget(self.history_detail)
+        layout.addWidget(archive,2)
+
+        career=Card("Albo d'oro e statistiche cumulative",
+            "Ordinamento per titoli, podi, partecipazioni e punti netti accumulati.")
+        export=QPushButton("ESPORTA STATISTICHE CSV")
+        export.clicked.connect(self.export_career_stats_csv)
+        career.body.addWidget(export,0,Qt.AlignmentFlag.AlignRight)
+        self.history_career_table=QTableWidget(0,10)
+        self.history_career_table.setHorizontalHeaderLabels(
+            ["GIOCATORE","EDIZIONI","TITOLI","PODI","MIGLIOR","G","V","X","P","PUNTI NETTI"])
+        self.history_career_table.verticalHeader().setVisible(False)
+        self.history_career_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.history_career_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.history_career_table.horizontalHeader().setSectionResizeMode(0,QHeaderView.ResizeMode.Stretch)
+        for col in range(1,10):
+            self.history_career_table.horizontalHeader().setSectionResizeMode(col,QHeaderView.ResizeMode.ResizeToContents)
+        style_table(self.history_career_table,row_height=42,selectable=True)
+        career.body.addWidget(table_card(self.history_career_table))
+        layout.addWidget(career,2)
+        return page
+
+    def refresh_history(self):
+        if not hasattr(self,"history_edition_table"):
+            return
+        editions=list_editions(storage_path(),ORDER)
+        self._history_cache=editions
+        self.history_edition_table.setRowCount(len(editions))
+        for row,edition in enumerate(editions):
+            champion=edition.get("champion")
+            status="COMPLETA" if edition.get("is_complete") else "PARZIALE"
+            date=str(edition.get("created_at","")).replace("T"," ")
+            values=[date,edition.get("title",""),
+                    name(champion) if champion else "Non assegnato",
+                    f"{edition.get('completed',0)}/10",
+                    str(edition.get("players",0)),status]
+            for col,value in enumerate(values):
+                cell=QTableWidgetItem(str(value))
+                cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                cell.setData(Qt.ItemDataRole.UserRole,edition.get("id"))
+                self.history_edition_table.setItem(row,col,cell)
+        career=career_statistics(editions,ORDER,self.history_player_names())
+        self.history_career_table.setRowCount(len(career))
+        for row,item in enumerate(career):
+            values=[item["name"],item["editions"],item["titles"],item["podiums"],
+                    f"{item['best']}°" if item["best"] else "—",
+                    item["played"],item["wins"],item["draws"],item["losses"],f"{item['points']:.1f}"]
+            for col,value in enumerate(values):
+                cell=QTableWidgetItem(str(value))
+                cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.history_career_table.setItem(row,col,cell)
+        titles=sum(1 for edition in editions if edition.get("champion"))
+        podiums=sum(sum(1 for player in edition.get("podium",[])[:3] if player) for edition in editions)
+        self.history_stats[0].set(str(len(editions)),"Edizioni conservate")
+        self.history_stats[1].set(str(titles),"Vincitori ufficiali")
+        self.history_stats[2].set(str(podiums),"Podi assegnati")
+        if not editions:
+            self.history_detail.setText(
+                "Nessuna edizione archiviata. Puoi archiviare il torneo corrente o importare un backup JSON.")
+        elif self.history_edition_table.currentRow()<0:
+            self.history_detail.setText("Seleziona un'edizione per visualizzare il dettaglio.")
+
+    def show_historical_edition(self,row,column=0):
+        if not 0<=row<len(getattr(self,"_history_cache",[])):
+            return
+        edition=self._history_cache[row]
+        date=str(edition.get("created_at","")).replace("T"," ")
+        lines=[f"{edition.get('title','Edizione')} · {date}",
+               f"Partite valide: {edition.get('completed',0)} · annullate: {edition.get('voided',0)}"]
+        podium=edition.get("podium",[])
+        if podium[0]:
+            lines.append("Podio ufficiale: "+" · ".join(
+                f"{index+1}° {name(player)}" for index,player in enumerate(podium[:3]) if player))
+        else:
+            lines.append("Podio ufficiale non assegnato: i playoff non risultano conclusi.")
+        lines.append("Classifica del girone:")
+        for position,item in enumerate(edition.get("standings",[]),1):
+            player_name=edition.get("player_rows",{}).get(item["id"],{}).get("name",name(item["id"]))
+            lines.append(f"{position}° {player_name} · {item['points']:.1f} punti "
+                         f"({item['wins']}V {item['draws']}X {item['losses']}P)")
+        self.history_detail.setText("\n".join(lines))
+
+    def export_career_stats_csv(self):
+        path,_=QFileDialog.getSaveFileName(self,"Esporta statistiche storiche","Statistiche-Storiche-C5R.csv","CSV (*.csv)")
+        if not path:
+            return
+        editions=list_editions(storage_path(),ORDER)
+        rows=career_statistics(editions,ORDER,self.history_player_names())
+        with open(path,"w",newline="",encoding="utf-8-sig") as stream:
+            writer=csv.writer(stream,delimiter=";")
+            writer.writerow(["Giocatore","Edizioni","Titoli","Podi","Miglior piazzamento","Partite","Vittorie","Patte","Sconfitte","Punti netti"])
+            for item in rows:
+                writer.writerow([item["name"],item["editions"],item["titles"],item["podiums"],item["best"] or "",
+                                 item["played"],item["wins"],item["draws"],item["losses"],item["points"]])
+        self.statusBar().showMessage("Statistiche storiche esportate in CSV.",3000)
 
     def build_incidents(self):
         page=QWidget()
@@ -5688,7 +5890,7 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
         self.refresh_draw_page()
         self.refresh_standings(); self.refresh_odds(); self.refresh_penalties(); self.refresh_playoffs()
         self.refresh_dashboard(); self.refresh_archive(); self.refresh_h2h(); self.refresh_audit()
-        self.refresh_player_profile(); self.refresh_compare(); self.refresh_openings(); self.refresh_snapshot_status(); self.refresh_incidents()
+        self.refresh_player_profile(); self.refresh_compare(); self.refresh_openings(); self.refresh_snapshot_status(); self.refresh_history(); self.refresh_incidents()
         self.refresh_communications()
         self.apply_calendar_filters(); self.refresh_notification_badge()
         if self.broadcast and self.broadcast.isVisible(): self.broadcast.refresh_from_app()
