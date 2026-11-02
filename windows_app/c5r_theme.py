@@ -202,7 +202,7 @@ QLabel[role="caption"] { font-size: 12px; color: @text3@; }
 QLabel[role="field"] { font-size: 12px; font-weight: 600; color: @text2@; }
 QLabel[role="num"] { font-family: @serif@; font-size: 34px; font-weight: 600; color: @text@; }
 QLabel[role="mono"] { font-family: @mono@; font-size: 14px; }
-QFrame#Card, QFrame#CardRaised, QFrame#CardAccent, QFrame#CardPlain { border-radius: 14px; }
+QFrame#Sidebar { background: @sidebar@; border: 1px solid @line_soft@; border-radius: 14px; }\nQFrame#Card, QFrame#CardRaised, QFrame#CardAccent, QFrame#CardPlain { border-radius: 14px; }
 QFrame#Card { background: @surface@; border: 1px solid @line_soft@; }
 QFrame#CardRaised { background: @surface2@; border: 1px solid @line@; }
 QFrame#CardAccent { background: rgba(201,161,91,0.07); border: 1px solid rgba(201,161,91,0.38); }
