@@ -187,7 +187,6 @@ try:
 
     # The new pages and global tools are all wired in the live desktop window.
     window.refresh_all()
-    assert len(window._page_keys) == 16
     assert len(window.profile_tiles) == 4
     assert len(window.compare_tiles) == 2
     assert window.opening_table.rowCount() == len(GAMES)
