@@ -8,7 +8,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .c5r_storage import atomic_write_json, decode_document
+try:
+    from .c5r_storage import atomic_write_json, decode_document
+except ImportError:
+    from c5r_storage import atomic_write_json, decode_document
 
 
 def _score(result: str, player: str, white: str, black: str) -> float:
