@@ -5,6 +5,8 @@ from pathlib import Path
 from itertools import combinations
 import chess
 import chess.pgn
+import c5r_theme as T
+from c5r_widgets import SideNav, ToastStatusBar
 from PySide6.QtCore import Qt, QSize, Signal, QThread, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPdfWriter, QKeySequence, QShortcut
 from PySide6.QtSvg import QSvgRenderer
@@ -180,360 +182,7 @@ def storage_path():
     folder.mkdir(parents=True, exist_ok=True)
     return folder / "tournament.json"
 
-class BoardWidget(QWidget):
-    moveRequested = Signal(str)
-    def __init__(self, interactive=True):
-        super().__init__()
-        self.interactive=interactive; self.board=chess.Board()
-        self.selected=None; self.targets=set(); self.locked=False; self.flipped=False; self.theme_index=0; self.drag_source=None
-        self.move_flash=0.0; self.flash_timer=QTimer(self); self.flash_timer.setInterval(45); self.flash_timer.timeout.connect(self.fade_move_flash)
-        self.setMinimumSize(320,320); self.setSizePolicy(QSizePolicy.Policy.Expanding,QSizePolicy.Policy.Expanding)
-    def sizeHint(self): return QSize(420,420)
-    def set_position(self, board, locked=False):
-        previous_len=len(self.board.move_stack)
-        previous_last=self.board.peek() if self.board.move_stack else None
-        self.board=board.copy(stack=True); self.locked=locked
-        new_last=self.board.peek() if self.board.move_stack else None
-        if len(self.board.move_stack)>previous_len or (new_last and new_last!=previous_last):
-            self.move_flash=1.0; self.flash_timer.start()
-        self.selected=None; self.targets=set(); self.update()
-    def fade_move_flash(self):
-        self.move_flash=max(0.0,self.move_flash-0.075)
-        self.update()
-        if self.move_flash<=0: self.flash_timer.stop()
-    def board_geometry(self):
-        side=max(8,min(self.width()-38,self.height()-38))
-        cell=side/8
-        return (self.width()-side)/2,(self.height()-side)/2,cell,side
-    def paintEvent(self, event):
-        p=QPainter(self); p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.fillRect(self.rect(),QColor(PANEL))
-        x0,y0,c,side=self.board_geometry()
-        last=self.board.peek() if self.board.move_stack else None
-        checked=self.board.king(self.board.turn) if self.board.is_check() else None
-        for row in range(8):
-            for file in range(8):
-                board_file=7-file if self.flipped else file
-                board_rank=row if self.flipped else 7-row
-                sq=chess.square(board_file,board_rank); x=x0+file*c; y=y0+row*c
-                themes=[("#C7B894","#273545"),("#E8D8B8","#8A6748"),("#E9EDF2","#68849C"),("#C6D2B3","#566E4A")]
-                light,dark=themes[self.theme_index%len(themes)]
-                col=QColor(light) if (board_file+board_rank)%2==1 else QColor(dark)
-                if last and sq in (last.from_square,last.to_square):
-                    col=QColor("#758D68") if (file+7-row)%2==0 else QColor("#536F51")
-                if sq==self.selected: col=QColor("#D1A653")
-                if sq==checked: col=QColor("#A84949")
-                p.fillRect(int(x),int(y),int(c+1),int(c+1),col)
-                if sq in self.targets:
-                    p.setPen(Qt.PenStyle.NoPen); p.setBrush(QColor(18,26,34,130))
-                    r=c*.16; p.drawEllipse(int(x+c/2-r),int(y+c/2-r),int(r*2),int(r*2))
-                piece=self.board.piece_at(sq)
-                if piece:
-                    f=QFont("Segoe UI Symbol"); f.setPixelSize(max(20,int(c*.72))); p.setFont(f)
-                    p.setPen(QColor("#FAF7F0") if piece.color else QColor("#111923"))
-                    p.drawText(int(x),int(y),int(c),int(c),Qt.AlignmentFlag.AlignCenter,piece.unicode_symbol())
-        p.setPen(QColor(MUTED)); p.setFont(QFont("Segoe UI",9))
-        for f in range(8):
-            label_file=7-f if self.flipped else f
-            p.drawText(int(x0+f*c),int(y0+side+3),int(c),14,Qt.AlignmentFlag.AlignHCenter,chess.FILE_NAMES[label_file])
-        for r in range(8):
-            label_rank=r+1 if self.flipped else 8-r
-            p.drawText(int(x0-17),int(y0+r*c+c/2-7),14,14,Qt.AlignmentFlag.AlignCenter,str(label_rank))
-        p.setPen(QPen(QColor(LINE),1)); p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawRect(int(x0),int(y0),int(side),int(side))
-        if last and self.move_flash>0:
-            pulse=QColor(216,179,106,int(190*self.move_flash))
-            p.setPen(QPen(pulse,max(1,int(7*self.move_flash))))
-            for square in (last.from_square,last.to_square):
-                file=chess.square_file(square); rank=chess.square_rank(square)
-                display_file=7-file if self.flipped else file
-                display_row=rank if self.flipped else 7-rank
-                p.drawRect(int(x0+display_file*c+2),int(y0+display_row*c+2),int(c-4),int(c-4))
-    def mousePressEvent(self,event):
-        if not self.interactive or self.locked or event.button()!=Qt.MouseButton.LeftButton: return
-        x0,y0,c,side=self.board_geometry(); x=event.position().x(); y=event.position().y()
-        f=int((x-x0)/c); r=int((y-y0)/c)
-        if not(0<=f<8 and 0<=r<8):
-            self.selected=None; self.targets=set(); self.update(); return
-        board_file=7-f if self.flipped else f
-        board_rank=r if self.flipped else 7-r
-        sq=chess.square(board_file,board_rank)
-        piece_at=self.board.piece_at(sq)
-        self.drag_source=sq if piece_at and piece_at.color==self.board.turn else None
-        if self.selected is not None and sq in self.targets:
-            moves=[m for m in self.board.legal_moves if m.from_square==self.selected and m.to_square==sq]
-            if moves:
-                mv=moves[0]
-                if mv.promotion:
-                    opts=["Donna","Torre","Alfiere","Cavallo"]
-                    pieces={"Donna":chess.QUEEN,"Torre":chess.ROOK,"Alfiere":chess.BISHOP,"Cavallo":chess.KNIGHT}
-                    choice,ok=QInputDialog.getItem(self,"Promozione","Promuovi il pedone a:",opts,0,False)
-                    if not ok: return
-                    mv=chess.Move(mv.from_square,mv.to_square,promotion=pieces[choice])
-                self.selected=None; self.targets=set(); self.moveRequested.emit(mv.uci()); self.update(); return
-        piece=self.board.piece_at(sq)
-        if piece and piece.color==self.board.turn:
-            self.selected=sq; self.targets={m.to_square for m in self.board.legal_moves if m.from_square==sq}
-        else:
-            self.selected=None; self.targets=set()
-        self.update()
-    def mouseReleaseEvent(self,event):
-        if not self.interactive or self.locked or event.button()!=Qt.MouseButton.LeftButton:
-            return
-        source=self.drag_source
-        self.drag_source=None
-        if source is None:
-            return
-        x0,y0,c,side=self.board_geometry()
-        col=int((event.position().x()-x0)/c); row=int((event.position().y()-y0)/c)
-        if not(0<=col<8 and 0<=row<8):
-            return
-        board_file=7-col if self.flipped else col
-        board_rank=row if self.flipped else 7-row
-        target=chess.square(board_file,board_rank)
-        if target==source:
-            return
-        moves=[m for m in self.board.legal_moves if m.from_square==source and m.to_square==target]
-        if moves:
-            move=moves[0]
-            if move.promotion:
-                opts=["Donna","Torre","Alfiere","Cavallo"]
-                pieces={"Donna":chess.QUEEN,"Torre":chess.ROOK,"Alfiere":chess.BISHOP,"Cavallo":chess.KNIGHT}
-                choice,ok=QInputDialog.getItem(self,"Promozione","Promuovi il pedone a:",opts,0,False)
-                if not ok: return
-                move=chess.Move(move.from_square,move.to_square,promotion=pieces[choice])
-            self.selected=None; self.targets=set(); self.moveRequested.emit(move.uci()); self.update()
-    def toggle_orientation(self):
-        self.flipped=not self.flipped; self.selected=None; self.targets=set(); self.update()
-    def cycle_theme(self):
-        self.theme_index=(self.theme_index+1)%4; self.update()
-
-class LogoWidget(QWidget):
-    def __init__(self,width=100,height=110,parent=None):
-        super().__init__(parent)
-        self.setFixedSize(width,height)
-        base=Path(getattr(sys,"_MEIPASS",Path(__file__).resolve().parent))
-        logo=base/"assets"/"c5r-logo.svg"
-        if not logo.exists():
-            logo=Path(__file__).resolve().parent/"assets"/"c5r-logo.svg"
-        self.renderer=QSvgRenderer(str(logo))
-    def paintEvent(self,event):
-        painter=QPainter(self)
-        self.renderer.render(painter,self.rect())
-        painter.end()
-
-
-class StockfishService(QThread):
-    """Un solo processo Stockfish persistente per tutta la sessione dell'app."""
-    positionReady = Signal(str, int)
-    moveReady = Signal(str, dict)
-    gameReady = Signal(str, list)
-    analysisFailed = Signal(str, str)
-    moveFailed = Signal(str, str)
-
-    def __init__(self, engine_path, parent=None):
-        super().__init__(parent)
-        self.engine_path = engine_path
-        self.jobs = queue.Queue()
-        self.pending_positions = {}
-        self.scheduled_positions = set()
-        self.pending_lock = threading.Lock()
-        self.stop_event = threading.Event()
-
-    def request_position(self, game_id, board):
-        with self.pending_lock:
-            self.pending_positions[game_id] = board.copy(stack=True)
-            if game_id not in self.scheduled_positions:
-                self.scheduled_positions.add(game_id)
-                self.jobs.put(("position", game_id))
-
-    def request_move(self, game_id, board_before, move_uci, player_id, ply):
-        self.jobs.put(("move", game_id, board_before.copy(stack=True), move_uci, player_id, ply))
-
-    def request_game(self, game_id, moves):
-        self.jobs.put(("game", game_id, list(moves)))
-
-    def stop(self):
-        self.stop_event.set()
-        self.jobs.put(None)
-
-    def run(self):
-        engine = None
-        try:
-            import chess.engine
-            popen_args = {}
-            if os.name == "nt":
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                startupinfo.wShowWindow = subprocess.SW_HIDE
-                popen_args = {
-                    "creationflags": subprocess.CREATE_NO_WINDOW,
-                    "startupinfo": startupinfo,
-                }
-            engine = chess.engine.SimpleEngine.popen_uci(
-                self.engine_path,
-                timeout=12,
-                cwd=str(Path(self.engine_path).parent),
-                **popen_args,
-            )
-            try:
-                engine.configure({"Threads": 2, "Hash": 96})
-            except Exception:
-                pass
-
-            while not self.stop_event.is_set():
-                try:
-                    job = self.jobs.get(timeout=0.25)
-                except queue.Empty:
-                    continue
-                if job is None:
-                    break
-
-                kind, game_id = job[0], job[1]
-                try:
-                    if kind == "position":
-                        with self.pending_lock:
-                            board = self.pending_positions.pop(game_id, None)
-                            self.scheduled_positions.discard(game_id)
-                        if board is None:
-                            continue
-                        info = engine.analyse(
-                            board,
-                            chess.engine.Limit(depth=12, time=1.0),
-                        )
-                        score = info["score"].white().score(mate_score=10000)
-                        if score is not None:
-                            self.positionReady.emit(game_id, int(score))
-
-                    elif kind == "move":
-                        board_before, move_uci, player_id, ply = job[2], job[3], job[4], job[5]
-                        move = chess.Move.from_uci(move_uci)
-                        if move not in board_before.legal_moves:
-                            raise ValueError(f"Mossa non valida: {move_uci}")
-                        mover_color = board_before.turn
-                        before_info = engine.analyse(
-                            board_before,
-                            chess.engine.Limit(time=0.30),
-                        )
-                        before_score = before_info["score"].pov(mover_color).score(mate_score=10000)
-                        best_move = before_info.get("pv", [None])[0]
-                        board_after = board_before.copy(stack=True)
-                        board_after.push(move)
-                        after_info = engine.analyse(
-                            board_after,
-                            chess.engine.Limit(time=0.30),
-                        )
-                        after_score = after_info["score"].pov(mover_color).score(mate_score=10000)
-                        before_ep = 1.0 / (1.0 + math.exp(-max(-4000, min(4000, before_score or 0)) / 400.0))
-                        after_ep = 1.0 / (1.0 + math.exp(-max(-4000, min(4000, after_score or 0)) / 400.0))
-                        ep_loss = max(0.0, before_ep - after_ep)
-                        mover_material_before = sum(
-                            len(board_before.pieces(piece_type, mover_color)) * value
-                            for piece_type, value in ((chess.PAWN, 1), (chess.KNIGHT, 3), (chess.BISHOP, 3),
-                                (chess.ROOK, 5), (chess.QUEEN, 9))
-                        ) - sum(
-                            len(board_before.pieces(piece_type, not mover_color)) * value
-                            for piece_type, value in ((chess.PAWN, 1), (chess.KNIGHT, 3), (chess.BISHOP, 3),
-                                (chess.ROOK, 5), (chess.QUEEN, 9))
-                        )
-                        mover_material_after = sum(
-                            len(board_after.pieces(piece_type, mover_color)) * value
-                            for piece_type, value in ((chess.PAWN, 1), (chess.KNIGHT, 3), (chess.BISHOP, 3),
-                                (chess.ROOK, 5), (chess.QUEEN, 9))
-                        ) - sum(
-                            len(board_after.pieces(piece_type, not mover_color)) * value
-                            for piece_type, value in ((chess.PAWN, 1), (chess.KNIGHT, 3), (chess.BISHOP, 3),
-                                (chess.ROOK, 5), (chess.QUEEN, 9))
-                        )
-                        sacrificed = mover_material_after - mover_material_before <= -3
-                        if sacrificed and best_move == move and after_score is not None and after_score > -100 and ep_loss <= 0.02:
-                            label = "BRILLANTE"
-                        elif best_move == move:
-                            label = "MIGLIORE"
-                        elif ep_loss <= 0.01:
-                            label = "OTTIMA"
-                        elif ep_loss <= 0.03:
-                            label = "BUONA"
-                        elif ep_loss <= 0.08:
-                            label = "IMPRECISIONE"
-                        elif ep_loss <= 0.20:
-                            label = "ERRORE"
-                        else:
-                            label = "GRAVE ERRORE"
-                        review = {
-                            "ply": ply, "player": player_id, "uci": move_uci,
-                            "label": label, "expected_points_loss": round(ep_loss, 4),
-                            "before_cp": int(before_score or 0), "after_cp": int(after_score or 0),
-                            "best_uci": best_move.uci() if best_move else "",
-                        }
-                        self.moveReady.emit(game_id, review)
-
-                    elif kind == "game":
-                        moves = job[2]
-                        board = chess.Board()
-                        positions = []
-                        _, _, white_player, black_player = game(game_id)
-                        for ply, uci in enumerate(moves, 1):
-                            if self.stop_event.is_set():
-                                break
-                            move = chess.Move.from_uci(uci)
-                            if move not in board.legal_moves:
-                                raise ValueError(f"Mossa PGN non valida al ply {ply}: {uci}")
-                            mover_color = board.turn
-                            player_id = white_player if mover_color else black_player
-                            before_info = engine.analyse(board, chess.engine.Limit(time=0.25))
-                            before_score = before_info["score"].pov(mover_color).score(mate_score=10000)
-                            best_move = before_info.get("pv", [None])[0]
-                            san = board.san(move)
-                            piece_values={chess.PAWN:1,chess.KNIGHT:3,chess.BISHOP:3,chess.ROOK:5,chess.QUEEN:9}
-                            material_before=sum(len(board.pieces(pt,mover_color))*val for pt,val in piece_values.items())-sum(len(board.pieces(pt,not mover_color))*val for pt,val in piece_values.items())
-                            board.push(move)
-                            after_info = engine.analyse(board, chess.engine.Limit(time=0.25))
-                            after_score = after_info["score"].pov(mover_color).score(mate_score=10000)
-                            before_ep = 1.0 / (1.0 + math.exp(-max(-4000, min(4000, before_score or 0)) / 400.0))
-                            after_ep = 1.0 / (1.0 + math.exp(-max(-4000, min(4000, after_score or 0)) / 400.0))
-                            ep_loss = max(0.0, before_ep-after_ep)
-                            material_after=sum(len(board.pieces(pt,mover_color))*val for pt,val in piece_values.items())-sum(len(board.pieces(pt,not mover_color))*val for pt,val in piece_values.items())
-                            apparent_sacrifice=(material_after-material_before)<=-3
-                            if apparent_sacrifice and best_move==move and after_score is not None and after_score>-100 and ep_loss<=0.02:
-                                label = "BRILLANTE"
-                            elif best_move == move:
-                                label = "MIGLIORE"
-                            elif ep_loss <= 0.01:
-                                label = "OTTIMA"
-                            elif ep_loss <= 0.03:
-                                label = "BUONA"
-                            elif ep_loss <= 0.08:
-                                label = "IMPRECISIONE"
-                            elif ep_loss <= 0.20:
-                                label = "ERRORE"
-                            else:
-                                label = "GRAVE ERRORE"
-                            positions.append({
-                                "ply": ply, "san": san, "score": int(after_score or 0),
-                                "fen": board.fen(), "player": player_id, "uci": uci,
-                                "label": label, "expected_points_loss": round(ep_loss, 4),
-                                "before_cp": int(before_score or 0), "after_cp": int(after_score or 0),
-                                "best_uci": best_move.uci() if best_move else "",
-                            })
-                        if not self.stop_event.is_set():
-                            self.gameReady.emit(game_id, positions)
-
-                except Exception as exc:
-                    if kind=="move":
-                        self.moveFailed.emit(game_id,str(exc))
-                    else:
-                        self.analysisFailed.emit(game_id, str(exc))
-
-        except Exception as exc:
-            self.analysisFailed.emit("", str(exc))
-        finally:
-            if engine is not None:
-                try:
-                    engine.quit()
-                except Exception:
-                    pass
-
+from c5r_board import BoardWidget
 
 class BoardCard(QFrame):
     def __init__(self,app,slot,initial):
@@ -1231,34 +880,103 @@ class MainWindow(QMainWindow):
         self._odds_cache=output
         return output.copy()
     def build_ui(self):
-        root=QWidget(); outer=QVBoxLayout(root); outer.setContentsMargins(22,18,22,16); outer.setSpacing(14)
-        header=QHBoxLayout(); logo=LogoWidget(76,82)
-        header.addWidget(logo); texts=QVBoxLayout()
-        title=QLabel("COPPA DEI 5 RE"); title.setObjectName("BrandTitle")
-        sub=QLabel("CONTROL ROOM  ·  TOURNAMENT EDITION"); sub.setObjectName("Eyebrow")
-        texts.addWidget(title); texts.addWidget(sub); header.addLayout(texts); header.addStretch()
-        saved=QLabel("●  OFFLINE  ·  SALVATAGGIO AUTOMATICO"); saved.setObjectName("SavedBadge"); header.addWidget(saved)
-        time_label=QLabel("QUALIFICAZIONE · 15+3   |   PLAYOFF · 30+10"); time_label.setObjectName("Eyebrow"); header.addWidget(time_label)
-        stream=QPushButton("◉  VISTA STREAMING"); stream.setObjectName("PrimaryButton"); stream.clicked.connect(self.open_broadcast); header.addWidget(stream)
+        root = QWidget()
+        root.setObjectName("AppRoot")
+        outer = QVBoxLayout(root)
+        outer.setContentsMargins(18, 16, 18, 12)
+        outer.setSpacing(12)
+
+        header = QHBoxLayout()
+        header.setSpacing(14)
+        logo = LogoWidget(48, 52)
+        header.addWidget(logo, 0, Qt.AlignmentFlag.AlignVCenter)
+        brand = QVBoxLayout()
+        brand.setSpacing(1)
+        title = QLabel("COPPA DEI 5 RE")
+        title.setObjectName("BrandTitle")
+        eyebrow = QLabel("TOURNAMENT CONTROL ROOM")
+        eyebrow.setObjectName("Eyebrow")
+        brand.addWidget(title)
+        brand.addWidget(eyebrow)
+        header.addLayout(brand)
+        header.addStretch(1)
+
+        saved = QLabel("●  OFFLINE  ·  SALVATAGGIO AUTOMATICO")
+        saved.setObjectName("SavedBadge")
+        header.addWidget(saved)
+        timing = QLabel("QUALIFICAZIONE 15+3   ·   PLAYOFF 30+10")
+        timing.setObjectName("Muted")
+        header.addWidget(timing)
+        stream = QPushButton("◉  VISTA STREAMING")
+        stream.setObjectName("PrimaryButton")
+        stream.clicked.connect(self.open_broadcast)
+        header.addWidget(stream)
         outer.addLayout(header)
-        workspace=QHBoxLayout(); workspace.setSpacing(12)
-        self.nav=QListWidget(); self.nav.setObjectName("Sidebar"); self.nav.setFixedWidth(190)
-        nav_items=["◈  DASHBOARD","♟  LIVE ARENA","♜  ESTRAZIONE","▦  CALENDARIO","☷  CLASSIFICA",
-                   "◉  QUOTE","⚑  PENALITÀ","♛  PLAYOFF","▤  ARCHIVIO","⇄  TESTA A TESTA",
-                   "☷  REGISTRO","⚙  IMPOSTAZIONI"]
-        self.nav.addItems(nav_items)
-        self.tabs=QStackedWidget()
-        pages=[self.build_dashboard(),self.build_live(),self.build_draw_page(),self.build_calendar(),
-               self.build_standings(),self.build_odds(),self.build_penalties(),self.build_playoffs(),
-               self.build_archive(),self.build_h2h(),self.build_audit(),self.build_settings()]
-        for page in pages: self.tabs.addWidget(page)
-        self.nav.currentRowChanged.connect(self.tabs.setCurrentIndex)
-        self.nav.setCurrentRow(0)
-        workspace.addWidget(self.nav); workspace.addWidget(self.tabs,1)
-        outer.addLayout(workspace,1)
-        foot=QLabel("COPPA DEI 5 RE  /  DAL 15 NOVEMBRE 2026  /  DATI LOCALI SU QUESTO PC"); foot.setObjectName("Footnote")
-        outer.addWidget(foot); self.setCentralWidget(root)
-        self.statusBar().showMessage("Pronto · seleziona un pezzo e poi la casa di destinazione.")
+
+        workspace = QHBoxLayout()
+        workspace.setSpacing(14)
+        self.nav = SideNav(LogoWidget(42, 46), "Coppa dei 5 Re", "CONTROL ROOM")
+        self.nav.add_group("TORNEO")
+        nav_items = [
+            ("dashboard", "Dashboard", "dashboard"),
+            ("live", "Live arena", "board"),
+            ("draw", "Estrazione", "shuffle"),
+            ("calendar", "Calendario", "calendar"),
+            ("standings", "Classifica", "standings"),
+            ("odds", "Quote e statistiche", "chart"),
+            ("penalties", "Penalità", "flag"),
+            ("playoffs", "Playoff", "trophy"),
+        ]
+        for key, text, icon_name in nav_items:
+            self.nav.add_item(key, text, icon_name)
+        self.nav.add_group("ARCHIVIO E CONTROLLO")
+        for key, text, icon_name in [
+            ("archive", "Archivio", "archive"),
+            ("h2h", "Testa a testa", "versus"),
+            ("audit", "Registro operazioni", "log"),
+            ("settings", "Impostazioni", "settings"),
+        ]:
+            self.nav.add_item(key, text, icon_name)
+        self.nav.finish()
+
+        self.tabs = QStackedWidget()
+        pages = [
+            self.build_dashboard(), self.build_live(), self.build_draw_page(),
+            self.build_calendar(), self.build_standings(), self.build_odds(),
+            self.build_penalties(), self.build_playoffs(), self.build_archive(),
+            self.build_h2h(), self.build_audit(), self.build_settings(),
+        ]
+        self._page_keys = [item[0] for item in nav_items] + [
+            "archive", "h2h", "audit", "settings"
+        ]
+        for page in pages:
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.Shape.NoFrame)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            page.setMinimumWidth(0)
+            scroll.setWidget(page)
+            self.tabs.addWidget(scroll)
+
+        self.nav.currentChanged.connect(self._navigate_to)
+        self.nav.set_current("dashboard")
+        workspace.addWidget(self.nav)
+        workspace.addWidget(self.tabs, 1)
+        outer.addLayout(workspace, 1)
+
+        footer = QLabel("COPPA DEI 5 RE   /   STAGIONE 2026   /   DATI LOCALI SU QUESTO PC")
+        footer.setObjectName("Footnote")
+        outer.addWidget(footer)
+        self.setCentralWidget(root)
+        self.setMinimumSize(1180, 760)
+        self.statusBar().showMessage("Pronto · seleziona una sezione per iniziare.")
+        self._nav_keys = self._page_keys
+
+    def _navigate_to(self, key):
+        if key in self._nav_keys:
+            self.tabs.setCurrentIndex(self._nav_keys.index(key))
+
     def build_dashboard(self):
         page=QWidget(); root=QVBoxLayout(page)
         hero=QFrame(); hero.setObjectName("Card"); hl=QHBoxLayout(hero)
@@ -2190,7 +1908,7 @@ def main():
         report=Path(os.environ.get("TEMP",str(Path.home())))/"c5r-bundle-smoke.txt"
         win=None
         try:
-            app=QApplication(["Coppa5Re"]); app.setApplicationName(APP_NAME); app.setStyle("Fusion"); app.setStyleSheet(STYLE)
+            app=QApplication(["Coppa5Re"]); app.setApplicationName(APP_NAME); T.apply_theme(app)
             win=MainWindow()
             engine_path=win.find_engine()
             logo_widgets=win.findChildren(LogoWidget)
