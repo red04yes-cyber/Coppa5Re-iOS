@@ -2887,8 +2887,8 @@ class MainWindow(QMainWindow):
         self.playoff_pairs = {"sf1": pair1, "sf2": pair2}
         winner1 = self.playoff_pair_winner("sf1", pair1)
         winner2 = self.playoff_pair_winner("sf2", pair2)
-        loser1 = next((player for player in pair1 if player and player != winner1), None)
-        loser2 = next((player for player in pair2 if player and player != winner2), None)
+        loser1 = next((player for player in pair1 if player and player != winner1), None) if winner1 else None
+        loser2 = next((player for player in pair2 if player and player != winner2), None) if winner2 else None
         final_pair = (winner1, winner2)
         third_pair = (loser1, loser2)
         self.playoff_pairs.update({"final": final_pair, "third": third_pair})
