@@ -23,7 +23,7 @@ schedule = [
     ("g3", 3, "a", "b"),
 ]
 results = {"g1": "1-0", "g2": "0-1", "g3": "1/2-1/2"}
-assert player_performance(schedule, results, "a") == [("R1", 1.0), ("R2", 1.0), ("R3", 1.5)]
+assert player_performance(schedule, results, "a") == [("R1", 1.0), ("R2", 2.0), ("R3", 2.5)]
 colors = player_color_statistics(schedule, results, "a")
 assert colors["white"]["wins"] == 1 and colors["white"]["draws"] == 1
 assert colors["black"]["wins"] == 1 and colors["black"]["win_pct"] == 100.0
@@ -41,7 +41,7 @@ timing = player_time_statistics(times, "a")
 assert timing["moves"] == 2 and timing["average_seconds"] == 6 and timing["median_seconds"] == 6
 
 ranking = simulate_standings(schedule, results, {"a": 0, "b": 0}, ["a", "b"])
-assert ranking[0]["id"] == "a" and ranking[0]["points"] == 1.5
+assert ranking[0]["id"] == "a" and ranking[0]["points"] == 2.5
 summary = tournament_summary(
     schedule, results, {"g1": ["e2e4"], "g2": ["e2e4"], "g3": ["d2d4"]},
     reviews, times, {"g1": "Italiana", "g2": "Siciliana", "g3": "Francese"}, {}
