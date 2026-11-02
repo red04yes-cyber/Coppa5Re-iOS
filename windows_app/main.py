@@ -1034,11 +1034,22 @@ class MainWindow(QMainWindow):
             player_id=white_player if mover_color else black_player
             mover="white" if mover_color else "black"
             clock=self.clock_data(gid)
-            if clock.get("started"):
+            clock_was_running=bool(clock.get("started"))
+            if clock_was_running:
                 side,remaining,_=self._advance_clock(gid)
                 if remaining<=0:
                     self.tick_clocks(); return
             b.push(move)
+            if not clock_was_running:
+                # The first player is not charged for time before making the opening move.
+                # Start the opponent's clock immediately after the first legal move.
+                now_wall=time.time()
+                clock["started"]=True
+                clock["started_at"]=clock.get("started_at") or now_wall
+                clock["overlong_alerted"]=False
+                clock["last_wall"]=now_wall
+                self._clock_runtime[gid]=time.monotonic()
+            # Fischer increment is awarded for every completed move, including the first.
             if clock.get("started"): clock[mover]+=self.increment_seconds(gid)
             self.moves[gid]=[x.uci() for x in b.move_stack]
             self.log_operation("Mossa",gid,"",uci)
@@ -1624,6 +1635,8 @@ class MainWindow(QMainWindow):
         if key in self._nav_keys:
             index = self._nav_keys.index(key)
             self.tabs.setCurrentIndex(index)
+            if key == "audit":
+                self.refresh_audit()
             page = self.tabs.widget(index)
             effect = self._page_fades.get(page)
             if effect is None:
@@ -5426,6 +5439,13 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
     def refresh_audit(self):
         if not hasattr(self, "audit_events_layout"):
             return
+        # Recreating every audit card for each chess move caused avoidable UI stalls,
+        # even while the operator was on the Live Arena. Render lazily on page entry.
+        if hasattr(self, "tabs") and hasattr(self, "_page_keys") and "audit" in self._page_keys:
+            if self.tabs.currentIndex() != self._page_keys.index("audit"):
+                self._audit_dirty = True
+                return
+        self._audit_dirty = False
         while self.audit_events_layout.count():
             item = self.audit_events_layout.takeAt(0)
             widget = item.widget()
