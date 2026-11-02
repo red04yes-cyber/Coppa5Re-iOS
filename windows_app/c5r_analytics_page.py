@@ -168,6 +168,7 @@ class TournamentAnalyticsPage(QWidget):
         openings = ", ".join(f"{label} ({count})" for label, count in summary["openings"][:6]) or "Non ancora disponibili"
         endings = ", ".join(f"{label} ({count})" for label, count in summary["endings"]) or "Non disponibili"
         avg_time = "N/D" if summary["average_move_seconds"] is None else f"{summary['average_move_seconds']:.1f} secondi"
+        avg_game = "N/D" if summary["average_game_duration_seconds"] is None else f"{summary['average_game_duration_seconds']/60:.1f} minuti"
         self.tournament_summary_label.setText(
             f"Partite concluse: {summary['completed']}/{len(self.schedule)}.\n"
             f"Aperture più giocate: {openings}.\n"
@@ -175,7 +176,8 @@ class TournamentAnalyticsPage(QWidget):
             f"Precisione: {summary['reviewed_moves']} mosse analizzate · "
             f"{summary['errors']['IMPRECISIONE']} imprecisioni · {summary['errors']['ERRORE']} errori · "
             f"{summary['errors']['GRAVE ERRORE']} gravi errori.\n"
-            f"Tempo medio per mossa: {avg_time} ({summary['timed_moves']} mosse cronometrate)."
+            f"Tempo medio per mossa: {avg_time} ({summary['timed_moves']} mosse cronometrate).\\n"
+            f"Durata media misurata delle partite: {avg_game} ({summary['games_with_timing']} partite con tempi disponibili)."
         )
         self.refresh_simulation()
 
