@@ -7,7 +7,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-os.environ["APPDATA"] = tempfile.mkdtemp(prefix="c5r-analytics-")
+APPDATA = tempfile.mkdtemp(prefix="c5r-analytics-")
+os.environ["APPDATA"] = APPDATA
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication, QFileDialog
