@@ -661,6 +661,23 @@ class BroadcastWindow(QWidget):
         if event.key()==Qt.Key.Key_Escape: self.close()
         else: super().keyPressEvent(event)
 
+class PublicReachabilityProbe(QThread):
+    probeFinished=Signal(bool,str)
+    def __init__(self,url,parent=None):
+        super().__init__(parent)
+        self.url=url
+    def run(self):
+        try:
+            request=urllib.request.Request(self.url,headers={"Cache-Control":"no-cache","User-Agent":"Coppa5Re-Windows"})
+            with urllib.request.urlopen(request,timeout=5) as response:
+                body=response.read(256).decode("utf-8","replace")
+                if response.status!=200 or "C5R local match server OK" not in body:
+                    raise RuntimeError(f"Risposta HTTP inattesa ({response.status}).")
+            self.probeFinished.emit(True,"Connessione pubblica raggiungibile.")
+        except Exception as exc:
+            self.probeFinished.emit(False,str(exc))
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__(); self.setWindowTitle("Coppa dei 5 Re · Control Room")
@@ -688,6 +705,11 @@ class MainWindow(QMainWindow):
         self.load_state(); self._last_history_state=self._history_snapshot(self.state_payload()); self.build_ui(); self.apply_ui_preferences(); self.refresh_all()
         self.clock_timer=QTimer(self); self.clock_timer.timeout.connect(self.tick_clocks); self.clock_timer.start(1000)
         self.notification_timer=QTimer(self); self.notification_timer.timeout.connect(self.refresh_notification_badge); self.notification_timer.start(30000)
+        self.refresh_spectator_config_hint()
+        if self.public_base_url:
+            try:self.start_match_web_server()
+            except Exception as exc:
+                self.record_operational_alert("Server spettatori non avviato",str(exc),"danger","settings","local-server-start")
         self.install_shortcuts()
         self.refresh_notification_badge()
     def load_state(self):
@@ -1065,6 +1087,13 @@ class MainWindow(QMainWindow):
             self.log_operation("Turno riaperto", f"Round {round_key}", previous_closure, "Riaperto",
                                "Un risultato del turno è stato modificato.")
         self.log_operation("Risultato",gid,old or "In corso",value or "In corso",detail)
+        if value not in (None,"VOID"):
+            timed_out=termination=="time forfeit" or "bandierina" in detail.lower() or "tempo esaurito" in detail.lower()
+            title="Tempo esaurito · risultato da validare" if timed_out else "Risultato da verificare"
+            self.record_operational_alert(
+                title,f"{gid} · esito {value} · {detail}",
+                "danger" if timed_out else "warning","calendar",f"result:{gid}:{len(self.audit_log)}"
+            )
         self.save(); self.save_recovery(); self.refresh_all()
         if value not in (None,"VOID") and self.moves.get(gid):
             service=self.get_engine_service()
@@ -2511,52 +2540,119 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Ripristino non riuscito", str(exc))
             return False
 
+    def record_operational_alert(self,title,detail,severity="warning",target="calendar",source_key=""):
+        alerts=getattr(self,"operational_alerts",[])
+        if source_key and any(item.get("source_key")==source_key and not item.get("acknowledged") for item in alerts):
+            return
+        alerts.append({
+            "id":uuid.uuid4().hex,
+            "time":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "title":str(title),"detail":str(detail),"severity":str(severity),
+            "target":str(target),"source_key":str(source_key),"acknowledged":False,
+        })
+        self.operational_alerts=alerts[-150:]
+        if hasattr(self,"notification_button"):
+            self.refresh_notification_badge()
+
+    def acknowledge_operational_alert(self,alert_id):
+        changed=False
+        for item in self.operational_alerts:
+            if item.get("id")==alert_id and not item.get("acknowledged"):
+                item["acknowledged"]=True
+                item["acknowledged_at"]=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                changed=True
+        if changed:
+            self.log_operation("Avviso arbitrale verificato",alert_id,"Da verificare","Verificato")
+            self.save()
+            self.refresh_notification_badge()
+
+    def maybe_probe_public_connection(self):
+        if not self.public_base_url or self.match_http_server is None:
+            return
+        worker=getattr(self,"_public_probe_thread",None)
+        if worker is not None and worker.isRunning():
+            return
+        if time.monotonic()-self._last_public_probe<60:
+            return
+        self._last_public_probe=time.monotonic()
+        worker=PublicReachabilityProbe(self.public_base_url+"/health",self)
+        worker.probeFinished.connect(self.on_public_connection_probe)
+        self._public_probe_thread=worker
+        worker.start()
+
+    def on_public_connection_probe(self,ok,detail):
+        previous=self._public_connection_state
+        self._public_connection_state=bool(ok)
+        if not ok and previous is not False:
+            self.record_operational_alert(
+                "Connessione al portale pubblico non disponibile",
+                f"{self.public_base_url} · {detail}. Verifica tunnel HTTPS, rete e porta locale.",
+                "danger","settings","public-connection-down"
+            )
+            self.statusBar().showMessage("Portale pubblico non raggiungibile: controlla tunnel e rete.",6000)
+        elif ok and previous is False:
+            self.record_operational_alert(
+                "Connessione al portale pubblico ripristinata",
+                f"{self.public_base_url} risponde correttamente.",
+                "success","settings","public-connection-restored"
+            )
+            self.statusBar().showMessage("Portale pubblico nuovamente raggiungibile.",4000)
+        self.refresh_notification_badge()
+
     def collect_notifications(self):
-        notices = []
-        for gid, _, white, black in GAMES:
-            clock = self.clock_data(gid)
+        notices=[]
+        self.maybe_probe_public_connection()
+        for alert in reversed(getattr(self,"operational_alerts",[])):
+            if alert.get("acknowledged"):
+                continue
+            notices.append((
+                alert.get("severity","warning"),alert.get("title","Avviso"),
+                alert.get("detail",""),alert.get("target","calendar"),alert.get("id")
+            ))
+        for gid,_,white,black in GAMES:
+            clock=self.clock_data(gid)
             if clock.get("started") and self.results.get(gid) is None:
-                low = min(int(clock.get("white", 0)), int(clock.get("black", 0)))
-                if low <= 60:
+                low=min(int(clock.get("white",0)),int(clock.get("black",0)))
+                if low<=60:
                     notices.append((
-                        "warning", f"Tempo quasi esaurito · {gid}",
-                        f"{name(white)} vs {name(black)} · almeno un orologio è a {max(0, low)} secondi.",
-                        "live"
+                        "warning",f"Tempo quasi esaurito · {gid}",
+                        f"{name(white)} vs {name(black)} · almeno un orologio è a {max(0,low)} secondi.",
+                        "live",None
                     ))
-        for key in ("sf1", "sf2", "final", "third"):
-            if self.playoff_results.get(key) == "1/2-1/2" and not self.playoff_winners.get(key):
+        for key in ("sf1","sf2","final","third"):
+            if self.playoff_results.get(key)=="1/2-1/2" and not self.playoff_winners.get(key):
                 notices.append((
-                    "warning", f"Armageddon da registrare · {key.upper()}",
+                    "warning",f"Armageddon da registrare · {key.upper()}",
                     "La partita playoff è patta: seleziona il vincitore dell'Armageddon.",
-                    "playoffs"
+                    "playoffs",None
                 ))
-        for round_key, closed_at in self.round_closures.items():
+        for round_key,closed_at in self.round_closures.items():
             try:
-                rnd = int(round_key)
-                pending = [gid for gid, game_round, _, _ in GAMES if game_round == rnd and self.results.get(gid) is None]
+                rnd=int(round_key)
+                pending=[gid for gid,game_round,_,_ in GAMES if game_round==rnd and self.results.get(gid) is None]
                 if pending:
                     notices.append((
-                        "danger", f"Round {rnd} da riaprire",
-                        "Sono stati rilevati risultati mancanti dopo la chiusura: " + ", ".join(pending),
-                        "calendar"
+                        "danger",f"Round {rnd} da riaprire",
+                        "Sono stati rilevati risultati mancanti dopo la chiusura: "+", ".join(pending),
+                        "calendar",None
                     ))
-            except (TypeError, ValueError):
-                notices.append(("danger", "Chiusura round non valida", str(round_key), "health"))
-        findings = getattr(self, "_health_findings", None)
+            except (TypeError,ValueError):
+                notices.append(("danger","Chiusura round non valida",str(round_key),"health",None))
+        findings=getattr(self,"_health_findings",None)
         if findings:
-            errors = sum(1 for severity, _, _ in findings if severity == "ERRORE")
+            errors=sum(1 for severity,_,_ in findings if severity=="ERRORE")
             if errors:
                 notices.append((
-                    "danger", "Health Check: anomalie da risolvere",
+                    "danger","Health Check: anomalie da risolvere",
                     f"L'ultimo controllo ha rilevato {errors} errori. Apri Tournament Health Check.",
-                    "health"
+                    "health",None
                 ))
         return notices
 
     def refresh_notification_badge(self):
-        if not hasattr(self, "notification_button"):
+        if not hasattr(self,"notification_button"):
             return
-        notices = self.collect_notifications()
+        notices=self.collect_notifications()
         self.notification_button.setText(f"AVVISI · {len(notices)}")
         self.notification_button.setToolTip(
             "Nessuna notifica operativa." if not notices else
@@ -2564,32 +2660,49 @@ class MainWindow(QMainWindow):
         )
 
     def open_notifications(self):
-        notices = self.collect_notifications()
-        dialog = QDialog(self)
+        notices=self.collect_notifications()
+        dialog=QDialog(self)
         dialog.setWindowTitle("Centro notifiche C5R")
-        dialog.resize(700, 480)
-        root = QVBoxLayout(dialog)
-        root.addWidget(ui_label("Centro notifiche", "h1"))
+        dialog.resize(760,520)
+        root=QVBoxLayout(dialog)
+        root.addWidget(ui_label("Centro notifiche arbitri","h1"))
         root.addWidget(ui_label(
-            "Avvisi operativi generati dallo stato corrente del torneo. Doppio clic per aprire la sezione collegata.",
-            "muted", wrap=True
+            "Eventi registrati e controlli operativi. Gli avvisi persistenti restano in elenco finché non vengono verificati.",
+            "muted",wrap=True
         ))
-        items = QListWidget()
-        for severity, title, detail, target in notices:
+        items=QListWidget()
+        for severity,title,detail,target,alert_id in notices:
             items.addItem(f"[{severity.upper()}]  {title}\n{detail}")
-            items.item(items.count() - 1).setData(Qt.ItemDataRole.UserRole, target)
+            items.item(items.count()-1).setData(Qt.ItemDataRole.UserRole,{"target":target,"alert_id":alert_id})
         if not notices:
             items.addItem("Tutto regolare · nessun avviso operativo.")
-        root.addWidget(items, 1)
-        def open_target(item):
-            target = item.data(Qt.ItemDataRole.UserRole)
-            if target:
-                self.navigate_to_page(target)
+        root.addWidget(items,1)
+        actions=QHBoxLayout()
+        verify=QPushButton("SEGNA COME VERIFICATO")
+        verify.setObjectName("PrimaryButton")
+        open_section=QPushButton("APRI SEZIONE COLLEGATA")
+        close=QPushButton("CHIUDI")
+        def selected_payload():
+            selected=items.selectedItems()
+            return selected[0].data(Qt.ItemDataRole.UserRole) if selected else None
+        def mark_verified():
+            payload=selected_payload()
+            if payload and payload.get("alert_id"):
+                self.acknowledge_operational_alert(payload["alert_id"])
                 dialog.accept()
-        items.itemDoubleClicked.connect(open_target)
-        close = QPushButton("CHIUDI")
+                self.open_notifications()
+            else:
+                self.statusBar().showMessage("Seleziona prima un avviso persistente da verificare.",2500)
+        def navigate_selected():
+            payload=selected_payload()
+            if payload and payload.get("target"):
+                self.navigate_to_page(payload["target"])
+                dialog.accept()
+        verify.clicked.connect(mark_verified)
+        open_section.clicked.connect(navigate_selected)
         close.clicked.connect(dialog.accept)
-        root.addWidget(close, 0, Qt.AlignmentFlag.AlignRight)
+        actions.addWidget(verify);actions.addWidget(open_section);actions.addStretch(1);actions.addWidget(close)
+        root.addLayout(actions)
         dialog.exec()
 
     def open_command_palette(self):
@@ -6221,6 +6334,13 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
             if value!="1/2-1/2":
                 self.playoff_winners.pop(key,None)
         self.log_operation("Risultato playoff",key,old or "In corso",value or "In corso",detail)
+        if value not in (None,"VOID"):
+            timed_out="bandierina" in detail.lower() or "tempo" in detail.lower()
+            self.record_operational_alert(
+                "Tempo playoff esaurito · risultato da validare" if timed_out else "Risultato playoff da verificare",
+                f"{key.upper()} · esito {value} · {detail}",
+                "danger" if timed_out else "warning","playoffs",f"playoff:{key}:{len(self.audit_log)}"
+            )
         if key in ("sf1","sf2") and old is not None and old!=value:
             for downstream in ("final","third"):
                 previous=self.playoff_results.pop(downstream,None)
