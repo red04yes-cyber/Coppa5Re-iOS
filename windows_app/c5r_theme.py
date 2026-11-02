@@ -217,7 +217,9 @@ QLabel[pill="true"][tone="info"] { background: rgba(127,174,221,0.16); color: @i
 QPushButton { background: @surface2@; color: @text@; border: 1px solid @line@; border-radius: 8px; padding: 0 14px; min-height: 34px; font-weight: 600; }
 QPushButton:hover { background: @surface3@; border-color: #35485D; }
 QPushButton:pressed { background: #26364A; }
-QPushButton:focus { border-color: @brass@; }
+QPushButton:focus { border: 2px solid @brass_hi@; }
+QComboBox:focus, QLineEdit:focus, QDoubleSpinBox:focus, QSpinBox:focus { border: 2px solid @brass_hi@; }
+QTableWidget:focus, QTableView:focus { border: 2px solid @brass_hi@; }
 QPushButton:disabled { color: @text3@; background: @surface@; border-color: @line_soft@; }
 QPushButton[kind="primary"], QPushButton#PrimaryButton { background: @brass@; color: @on_brass@; border: 1px solid @brass_hi@; font-weight: 800; }
 QPushButton[kind="primary"]:hover, QPushButton#PrimaryButton:hover { background: @brass_hi@; }
