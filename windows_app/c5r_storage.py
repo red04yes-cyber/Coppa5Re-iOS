@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import shutil
@@ -47,7 +48,7 @@ def decode_document(raw: Any) -> dict[str, Any]:
             )
         expected = str(meta.get("sha256", ""))
         actual = hashlib.sha256(_canonical(payload)).hexdigest()
-        if not expected or not hashlib.compare_digest(expected, actual):
+        if not expected or not hmac.compare_digest(expected, actual):
             raise StorageIntegrityError("Il controllo SHA-256 non corrisponde: il file potrebbe essere danneggiato.")
     # Migrazioni additive: i file delle versioni precedenti restano leggibili.
     defaults = {
