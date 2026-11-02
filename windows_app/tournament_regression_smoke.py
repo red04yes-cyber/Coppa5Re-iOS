@@ -268,6 +268,7 @@ try:
     evidence_two.write_text("Descrizione del documento allegato.", encoding="utf-8")
     incident = window.save_incident_report({
         "category": "Contestazione",
+        "event_at": "2026-11-02T14:35:00",
         "game_id": "R1-M1",
         "participants": "Jacopo, Roberto",
         "summary": "Contestazione su una decisione durante la partita",
@@ -278,6 +279,7 @@ try:
     }, [{"source": str(evidence_one)}])
     assert incident["id"].startswith("INC-")
     assert incident["game_label"].startswith("Round 1 · R1-M1")
+    assert incident["event_at"] == "2026-11-02T14:35:00"
     first_attachment = incident["attachments"][0]
     first_attachment_path = window.incident_attachment_path(first_attachment["path"])
     assert first_attachment_path.is_file()
