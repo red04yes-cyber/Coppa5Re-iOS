@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, os, random, sys, shutil, hashlib, math, csv, time, subprocess, queue, threading, re
+import json, os, random, sys, shutil, hashlib, math, csv, time, subprocess, queue, threading, re, uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from itertools import combinations
@@ -21,15 +21,15 @@ except ImportError:
         EvalBar, Avatar, label as ui_label, pill as ui_pill, set_pill, button as ui_button
     )
     from c5r_board import BoardWidget
-from PySide6.QtCore import Qt, QSize, Signal, QThread, QTimer, QRect
-from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPdfWriter, QKeySequence, QShortcut
+from PySide6.QtCore import Qt, QSize, Signal, QThread, QTimer, QRect, QUrl
+from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPdfWriter, QKeySequence, QShortcut, QDesktopServices
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QComboBox,
     QDoubleSpinBox, QLineEdit, QVBoxLayout, QHBoxLayout, QGridLayout, QTabWidget,
     QTableWidget, QTableWidgetItem, QHeaderView, QScrollArea, QMessageBox,
     QListWidget, QInputDialog, QFileDialog, QAbstractItemView, QSizePolicy,
-    QDialog, QDialogButtonBox, QProgressBar, QStackedWidget
+    QDialog, QDialogButtonBox, QProgressBar, QStackedWidget, QPlainTextEdit
 )
 
 try:
@@ -630,7 +630,7 @@ class MainWindow(QMainWindow):
         self.time_control="15+3"; self.clocks={}; self.audit_log=[]; self.match_notes={}; self.referee=""
         self.tie_break="Regolamento Art. 8"; self.playoff_results={}; self.eval_history={}; self.clock_ticks=0; self.board_theme=0
         self.game_terminations={}; self.move_reviews={}; self.withdrawn_players={}
-        self.move_annotations={}; self.round_closures={}
+        self.move_annotations={}; self.round_closures={}; self.incident_reports=[]
         self.ui_preferences={"theme":"dark","font_scale":1.0,"density":"comfortable"}; self.ui_profiles={}
         self._clock_runtime={}; self._last_clock_persist=time.monotonic()
         self._undo_stack=[]; self._redo_stack=[]; self._history_restoring=False; self._last_history_state=None
@@ -656,7 +656,7 @@ class MainWindow(QMainWindow):
             self.game_terminations=data.get("game_terminations",{}); self.move_reviews=data.get("move_reviews",{})
             self.withdrawn_players=data.get("withdrawn_players",{})
             self.move_annotations=data.get("move_annotations",{})
-            self.round_closures=data.get("round_closures",{})
+            self.round_closures=data.get("round_closures",{}); self.incident_reports=data.get("incident_reports",[])
             self.ui_preferences=data.get("ui_preferences",getattr(self,"ui_preferences",{}))
             self.ui_profiles=data.get("ui_profiles",getattr(self,"ui_profiles",{}))
             saved_schedule=data.get("schedule")
@@ -695,7 +695,7 @@ class MainWindow(QMainWindow):
             "game_terminations":self.game_terminations,"move_reviews":self.move_reviews,
             "withdrawn_players":self.withdrawn_players,
             "move_annotations":self.move_annotations,"round_closures":self.round_closures,
-            "ui_preferences":self.ui_preferences,"ui_profiles":self.ui_profiles,
+            "ui_preferences":self.ui_preferences,"ui_profiles":self.ui_profiles,"incident_reports":self.incident_reports,
             "saved_at":datetime.now().isoformat(timespec="seconds"),
         }
 
@@ -1319,6 +1319,7 @@ class MainWindow(QMainWindow):
         archive_items = [
             ("archive", "Archivio", "archive"),
             ("h2h", "Testa a testa", "versus"),
+            ("incidents", "Verbali incidenti", "file-text"),
             ("audit", "Registro operazioni", "log"),
             ("settings", "Impostazioni", "settings"),
         ]
@@ -1332,7 +1333,7 @@ class MainWindow(QMainWindow):
             self.build_calendar(), self.build_standings(), self.build_odds(),
             self.build_penalties(), self.build_playoffs(),
             self.build_players(), self.build_compare(), self.build_openings(), self.build_health(),
-            self.build_archive(), self.build_h2h(), self.build_audit(), self.build_settings(),
+            self.build_archive(), self.build_incidents(), self.build_h2h(), self.build_audit(), self.build_settings(),
         ]
         self._page_keys = [item[0] for item in nav_items + pro_items + archive_items]
         for page in pages:
@@ -4142,7 +4143,7 @@ class MainWindow(QMainWindow):
         self.refresh_draw_page()
         self.refresh_standings(); self.refresh_odds(); self.refresh_penalties(); self.refresh_playoffs()
         self.refresh_dashboard(); self.refresh_archive(); self.refresh_h2h(); self.refresh_audit()
-        self.refresh_player_profile(); self.refresh_compare(); self.refresh_openings(); self.refresh_snapshot_status()
+        self.refresh_player_profile(); self.refresh_compare(); self.refresh_openings(); self.refresh_snapshot_status(); self.refresh_incidents()
         self.apply_calendar_filters(); self.refresh_notification_badge()
         if self.broadcast and self.broadcast.isVisible(): self.broadcast.refresh_from_app()
     def refresh_standings(self):
