@@ -2,6 +2,8 @@ from pathlib import Path
 import os
 import sys
 import tempfile
+import json
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -10,10 +12,11 @@ APPDATA = tempfile.mkdtemp(prefix="c5r-regression-")
 os.environ["APPDATA"] = APPDATA
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QMessageBox, QInputDialog
+from PySide6.QtWidgets import QApplication, QMessageBox, QInputDialog, QFileDialog
 import chess
 
 from windows_app.main import MainWindow, PLAYERS, GAMES
+from windows_app.c5r_storage import atomic_write_json, read_document, decode_document, StorageIntegrityError
 
 app = QApplication([])
 window = MainWindow()
@@ -192,6 +195,72 @@ try:
     assert isinstance(window.collect_notifications(), list)
     window.run_health_check()
     assert window.health_list.count() >= 1
+
+    # Storage: schema migration, checksum verification and fallback to the last valid copy.
+    storage_test = Path(APPDATA) / "integrity-test.json"
+    atomic_write_json(storage_test, {"results": {}, "schedule": []})
+    atomic_write_json(storage_test, {"results": {"R1-M1": "1-0"}, "schedule": []})
+    raw = json.loads(storage_test.read_text(encoding="utf-8"))
+    raw["results"]["R1-M1"] = "0-1"  # Deliberate corruption without updating SHA-256.
+    storage_test.write_text(json.dumps(raw), encoding="utf-8")
+    recovered, backup_used = read_document(storage_test)
+    assert backup_used is not None and recovered["results"] == {}
+    try:
+        decode_document(raw)
+        raise AssertionError("The checksum validator accepted a corrupted file.")
+    except StorageIntegrityError:
+        pass
+
+    # Elapsed-time clock accounting survives a stalled UI/suspended Windows session.
+    window.results = {}
+    window.clocks = {}
+    window._clock_runtime = {}
+    window.start_clock("R1-M1")
+    clock = window.clock_data("R1-M1")
+    before = float(clock["white"])
+    clock["last_wall"] = time.time() - 1.4
+    window._clock_runtime["R1-M1"] = time.monotonic() - 1.4
+    _, after, elapsed = window._advance_clock("R1-M1")
+    assert elapsed >= 1.2 and before - after >= 1.2
+
+    # Global undo/redo restores tournament actions while leaving active clock runtime alone.
+    window._undo_stack.clear()
+    window._redo_stack.clear()
+    window.results = {}
+    window._last_history_state = window._history_snapshot(window.state_payload())
+    window.results["R1-M1"] = "1-0"
+    window.save(automatic_snapshot=False)
+    assert window._undo_stack
+    window.undo_history()
+    assert window.results.get("R1-M1") is None
+    window.redo_history()
+    assert window.results.get("R1-M1") == "1-0"
+
+    # Advanced forecasts expose three sensitivity scenarios and calibration diagnostics.
+    forecast, brier, sample, current, form = window.advanced_forecast(500)
+    assert set(forecast) == {"Prudente", "Base", "Sensibilità alta"}
+    assert all(0.0 <= value[0] <= 1.0 for scenario in forecast.values() for value in scenario.values())
+    assert sample >= 0 and (brier is None or 0.0 <= brier <= 1.0)
+
+    # Theme, type scale, table density and named UI profiles persist through tournament saves.
+    window.ui_preferences = {"theme": "light", "font_scale": 1.1, "density": "compact"}
+    window.apply_ui_preferences()
+    assert window.ui_theme_combo.currentData() == "light"
+    assert window.ui_density_combo.currentData() == "compact"
+    window.ui_preferences = {"theme": "dark", "font_scale": 1.0, "density": "comfortable"}
+    window.ui_profiles["Test arbitro"] = dict(window.ui_preferences)
+    window.apply_ui_preferences()
+    assert window.ui_profile_combo.findData("Test arbitro") >= 0
+
+    # The official PDF report is a real multi-page-capable PDF export, not only a standings sheet.
+    report_path = str(Path(APPDATA) / "official-report.pdf")
+    old_save_dialog = QFileDialog.getSaveFileName
+    QFileDialog.getSaveFileName = lambda *args, **kwargs: (report_path, "PDF (*.pdf)")
+    try:
+        window.export_tournament_report_pdf()
+        assert Path(report_path).is_file() and Path(report_path).stat().st_size > 500
+    finally:
+        QFileDialog.getSaveFileName = old_save_dialog
 
     print("C5R Windows regression OK: tournament rules, PGN, recovery, profiles, opening explorer, health check, move annotations, snapshots and UI tools.")
 finally:
