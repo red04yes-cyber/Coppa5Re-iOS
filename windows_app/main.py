@@ -992,6 +992,9 @@ class MainWindow(QMainWindow):
             "referee":self.referee,"action":action,"entity":str(entity),
             "before":str(before),"after":str(after),"detail":str(detail)})
         self._odds_cache_key=None
+        if hasattr(self, "audit_events_layout"):
+            self.refresh_audit()
+
     def add_match_note(self,gid,text,kind="Nota"):
         text=text.strip()
         if not text: return
