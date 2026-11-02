@@ -8,7 +8,7 @@ import chess.pgn
 from PySide6.QtCore import Qt, QSize, Signal, QThread, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPdfWriter, QKeySequence, QShortcut
 from PySide6.QtSvg import QSvgRenderer
-from PySide6.QtWidgets (
+from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QComboBox,
     QDoubleSpinBox, QLineEdit, QVBoxLayout, QHBoxLayout, QGridLayout, QTabWidget,
     QTableWidget, QTableWidgetItem, QHeaderView, QScrollArea, QMessageBox,
