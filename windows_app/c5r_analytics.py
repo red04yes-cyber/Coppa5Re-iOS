@@ -195,6 +195,18 @@ def tournament_summary(schedule, results, moves, move_reviews, move_times, openi
                     pass
     reviews = [item for entries in move_reviews.values() if isinstance(entries, list) for item in entries]
     error_counts = Counter(str(item.get("label", "")).upper() for item in reviews)
+    game_durations = []
+    for gid, _rnd, _white, _black, _result in completed:
+        game_samples = []
+        for item in move_times.get(gid, []) if isinstance(move_times.get(gid, []), list) else []:
+            try:
+                value = float(item.get("seconds"))
+                if value >= 0:
+                    game_samples.append(value)
+            except (TypeError, ValueError):
+                pass
+        if game_samples:
+            game_durations.append(sum(game_samples))
     return {
         "completed": len(completed),
         "openings": opening_counts.most_common(),
@@ -203,5 +215,7 @@ def tournament_summary(schedule, results, moves, move_reviews, move_times, openi
         "errors": {key: error_counts.get(key, 0) for key in ("IMPRECISIONE", "ERRORE", "GRAVE ERRORE")},
         "timed_moves": len(durations),
         "average_move_seconds": sum(durations) / len(durations) if durations else None,
+        "average_game_duration_seconds": sum(game_durations) / len(game_durations) if game_durations else None,
+        "games_with_timing": len(game_durations),
         "average_game_moves": (sum(len(moves.get(gid, [])) for gid, *_ in completed) / len(completed)) if completed else None,
     }
