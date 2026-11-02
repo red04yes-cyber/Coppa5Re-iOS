@@ -1209,6 +1209,7 @@ class MainWindow(QMainWindow):
         outer.addWidget(footer)
         self.setCentralWidget(root)
         self.setMinimumSize(1180, 760)
+        self.setStatusBar(ToastStatusBar())
         self.statusBar().showMessage("Pronto · seleziona una sezione per iniziare.")
         self._nav_keys = self._page_keys
 
