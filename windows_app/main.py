@@ -3192,34 +3192,31 @@ function renderBoard(state){{
   const board=document.getElementById('board');
   const fragment=document.createDocumentFragment();
   ranks.forEach((rank,row)=>{{
-    let file=0;
+    const cells=[];
     for(const token of rank){{
-      if(/[1-8]/.test(token)){{file+=Number(token);continue;}}
-      if(file>=8)break;
+      if(/[1-8]/.test(token)){{
+        for(let n=0;n<Number(token);n++)cells.push('');
+      }}else{{
+        cells.push(token);
+      }}
+    }}
+    while(cells.length<8)cells.push('');
+    cells.slice(0,8).forEach((token,file)=>{{
       const squareName=files[file]+String(8-row);
       const square=document.createElement('div');
       square.className='square '+(((row+file)%2===1)?'dark':'light');
       if(squareName===from)square.classList.add('last-from');
       if(squareName===to)square.classList.add('last-to');
-      const piece=document.createElement('span');
-      piece.className='piece '+(token===token.toUpperCase()?'white':'black');
-      piece.textContent=GLYPHS[token]||'';
-      square.appendChild(piece);
+      if(token){{
+        const piece=document.createElement('span');
+        piece.className='piece '+(token===token.toUpperCase()?'white':'black');
+        piece.textContent=GLYPHS[token]||'';
+        square.appendChild(piece);
+      }}
       if(file===0){{const coord=document.createElement('span');coord.className='coord rank';coord.textContent=String(8-row);square.appendChild(coord);}}
       if(row===7){{const coord=document.createElement('span');coord.className='coord file';coord.textContent=files[file];square.appendChild(coord);}}
       fragment.appendChild(square);
-      file+=1;
-    }}
-    while(file<8){{
-      const squareName=files[file]+String(8-row);
-      const square=document.createElement('div');
-      square.className='square '+(((row+file)%2===1)?'dark':'light');
-      if(squareName===from)square.classList.add('last-from');
-      if(squareName===to)square.classList.add('last-to');
-      if(file===0){{const coord=document.createElement('span');coord.className='coord rank';coord.textContent=String(8-row);square.appendChild(coord);}}
-      if(row===7){{const coord=document.createElement('span');coord.className='coord file';coord.textContent=files[file];square.appendChild(coord);}}
-      fragment.appendChild(square);file+=1;
-    }}
+    }});
   }});
   board.replaceChildren(fragment);
 }}
