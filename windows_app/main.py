@@ -198,6 +198,13 @@ class ScheduleEditorDialog(QDialog):
         self.accept()
 
 RESULT_OPTIONS = [(None,"In corso"),("1-0","1–0"),("1/2-1/2","½–½"),("0-1","0–1"),("VOID","Annullata / esclusa")]
+ACCENT_PALETTES = {
+    "Gold": {"dark": ("#C9A15B","#E3C07F","#8F7240","#1A1307"), "light": ("#9A6A18","#80520D","#A77A2B","#FFFFFF")},
+    "Blue": {"dark": ("#65A9E8","#A4CCF2","#3B78B6","#0A1725"), "light": ("#2369A8","#174F84","#367EB6","#FFFFFF")},
+    "Mint": {"dark": ("#65C69A","#A0E2C1","#368A68","#092017"), "light": ("#217B55","#155C3D","#318A64","#FFFFFF")},
+    "Violet": {"dark": ("#B39AFF","#D2C5FF","#8068CB","#1B1430"), "light": ("#6850B5","#51408D","#7962C2","#FFFFFF")},
+    "Coral": {"dark": ("#F08C79","#FFC0B4","#B85D50","#2A1210"), "light": ("#B64D42","#943B33","#C86A5E","#FFFFFF")},
+}
 GOLD="#D8B36A"; BG="#090D12"; PANEL="#111923"; PANEL2="#151F2B"
 LINE="#283444"; TEXT="#EEF1F5"; MUTED="#8F9BAA"; GREEN="#65C69A"
 
@@ -675,6 +682,7 @@ class MainWindow(QMainWindow):
         self.ui_preferences={"theme":"dark","font_scale":1.0,"density":"comfortable"}; self.ui_profiles={}
         self._clock_runtime={}; self._last_clock_persist=time.monotonic()
         self._undo_stack=[]; self._redo_stack=[]; self._history_restoring=False; self._last_history_state=None
+        self.state_load_blocked=False
         self.recovery_path=storage_path().with_name("recovery.json")
         self.offer_recovery()
         self.load_state(); self._last_history_state=self._history_snapshot(self.state_payload()); self.build_ui(); self.apply_ui_preferences(); self.refresh_all()
@@ -721,9 +729,10 @@ class MainWindow(QMainWindow):
                     f"Il file principale non era integro. Sono stati recuperati i dati dalla copia {fallback.name}. "
                     "Salva il torneo per rigenerare l'archivio principale.")
         except Exception as exc:
+            self.state_load_blocked=True
             QMessageBox.critical(self,"Archivio non leggibile",
                 f"Non è stato possibile leggere i dati del torneo in modo sicuro.\n\n{exc}\n\n"
-                "I dati originali non sono stati sovrascritti.")
+                "I dati originali non sono stati sovrascritti. Ripristina un backup valido prima di registrare nuovi risultati.")
 
     def state_payload(self):
         stored_schedule=[{"id":gid,"round":rnd,"white":white,"black":black} for gid,rnd,white,black in GAMES]
@@ -748,6 +757,9 @@ class MainWindow(QMainWindow):
         return json.loads(json.dumps(data,ensure_ascii=False,sort_keys=True,default=str))
 
     def save(self, automatic_snapshot=True):
+        if getattr(self,"state_load_blocked",False):
+            self.statusBar().showMessage("Salvataggio bloccato: archivio locale non leggibile. Ripristina un backup valido prima di modificare i risultati.",7000)
+            return False
         payload=self.state_payload()
         current_history=self._history_snapshot(payload)
         if not self._history_restoring and self._last_history_state is not None and current_history!=self._last_history_state:
@@ -759,6 +771,7 @@ class MainWindow(QMainWindow):
         atomic_write_json(storage_path(),payload)
         if automatic_snapshot:
             self._maybe_create_auto_snapshot()
+        return True
 
     def _restore_history_snapshot(self,snapshot,action_label):
         current=self.state_payload()
@@ -823,6 +836,7 @@ class MainWindow(QMainWindow):
             path.unlink(missing_ok=True)
 
     def save_recovery(self):
+        if getattr(self,"state_load_blocked",False): return
         active=any(
             (self.moves.get(gid) and not self.results.get(gid)) or self.clock_data(gid).get("started")
             for gid,_,_,_ in GAMES
@@ -1015,6 +1029,9 @@ class MainWindow(QMainWindow):
         self.save(); self.refresh_all()
         self.statusBar().showMessage(f"Ritiro di {name(player_id)} registrato secondo l'Art. 11.",4500)
     def set_result(self,gid,value,confirm=True,detail="inserimento manuale",termination=None):
+        if getattr(self,"state_load_blocked",False):
+            QMessageBox.warning(self,"Archivio non disponibile","Ripristina un backup JSON valido prima di registrare risultati.")
+            return
         old=self.results.get(gid)
         if old==value: return
         if old is not None and confirm:
@@ -1503,6 +1520,25 @@ class MainWindow(QMainWindow):
         progress_card.body.addWidget(self.dashboard_progress_detail)
         root.addWidget(progress_card)
 
+        results_card = Card("Ultimi risultati", "I punteggi registrati vengono mostrati qui e restano disponibili nell'archivio.")
+        self.dashboard_results_table = QTableWidget(0, 5)
+        self.dashboard_results_table.setHorizontalHeaderLabels(["TURNO", "PARTITA", "BIANCO", "NERO", "RISULTATO"])
+        self.dashboard_results_table.verticalHeader().setVisible(False)
+        self.dashboard_results_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.dashboard_results_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.dashboard_results_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        for column in (1,2,3):
+            self.dashboard_results_table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
+        self.dashboard_results_table.setMaximumHeight(246)
+        style_table(self.dashboard_results_table, row_height=38, selectable=False)
+        results_card.body.addWidget(self.dashboard_results_table)
+        self.dashboard_results_empty = EmptyState(
+            "board", "Nessun risultato registrato",
+            "Quando inserisci il risultato di una partita dal Calendario o dalla Live Arena, il punteggio apparirà qui."
+        )
+        results_card.body.addWidget(self.dashboard_results_empty)
+        root.addWidget(results_card)
+
         snapshot = QHBoxLayout()
         snapshot.setSpacing(12)
         upcoming = Card("Prossimi incontri", "Partite attive e prossime da disputare.")
@@ -1575,14 +1611,44 @@ class MainWindow(QMainWindow):
     def build_archive(self):
         page=QWidget(); layout=QVBoxLayout(page)
         title=QLabel("ARCHIVIO PARTITE"); title.setObjectName("SectionTitle"); layout.addWidget(title)
+        filter_card=Card("Ricerca e filtri", "Cerca per partita, turno, giocatore o nota e combina i filtri per tipo ed esito.")
+        filter_row=QHBoxLayout()
+        self.archive_search=QLineEdit(); self.archive_search.setPlaceholderText("Cerca partita, turno o giocatore…")
+        self.archive_search.setClearButtonEnabled(True)
+        self.archive_filter_type=QComboBox()
+        self.archive_filter_type.addItem("Tutti i tabelloni", "all")
+        self.archive_filter_type.addItem("Qualificazione", "qualification")
+        self.archive_filter_type.addItem("Playoff", "playoff")
+        self.archive_filter_result=QComboBox()
+        self.archive_filter_result.addItem("Tutti gli esiti", None)
+        for result_value,result_label in RESULT_OPTIONS[1:]:
+            self.archive_filter_result.addItem(result_label, result_value)
+        for control in (self.archive_search,self.archive_filter_type,self.archive_filter_result):
+            signal=control.textChanged if control is self.archive_search else control.currentIndexChanged
+            signal.connect(self.apply_archive_filters)
+            filter_row.addWidget(control, 2 if control is self.archive_search else 1)
+        clear_archive=QPushButton("AZZERA FILTRI")
+        clear_archive.clicked.connect(self.reset_archive_filters)
+        filter_row.addWidget(clear_archive)
+        filter_card.body.addLayout(filter_row)
+        layout.addWidget(filter_card)
+        self.archive_results_label=ui_label("0 partite visualizzate","caption")
+        layout.addWidget(self.archive_results_label)
         self.archive_table=QTableWidget(0,6)
         self.archive_table.setHorizontalHeaderLabels(["TURNO","PARTITA","BIANCO","NERO","RISULTATO","MOSSE / NOTE"])
         self.archive_table.verticalHeader().setVisible(False)
         self.archive_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.archive_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.archive_table.horizontalHeader().setSectionResizeMode(1,QHeaderView.ResizeMode.Stretch)
+        self.archive_table.setSortingEnabled(True)
         style_table(self.archive_table, row_height=46, selectable=True)
-        layout.addWidget(table_card(self.archive_table),1)
+        self.archive_table_container=table_card(self.archive_table)
+        layout.addWidget(self.archive_table_container,1)
+        self.archive_empty=EmptyState("search","Nessuna partita in archivio","I risultati conclusi appariranno qui. Registra il primo punteggio dal calendario.")
+        layout.addWidget(self.archive_empty)
+        self.archive_empty_action=QPushButton("AZZERA FILTRI")
+        self.archive_empty_action.clicked.connect(self.reset_archive_filters)
+        layout.addWidget(self.archive_empty_action,0,Qt.AlignmentFlag.AlignHCenter)
         row=QHBoxLayout(); allpgn=QPushButton("ESPORTA TUTTO IL TORNEO IN PGN")
         allpgn.setObjectName("PrimaryButton"); allpgn.clicked.connect(self.export_all_pgn); row.addWidget(allpgn)
         one=QPushButton("ESPORTA PARTITA SELEZIONATA")
@@ -4179,6 +4245,9 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
         self.ui_theme_combo = QComboBox()
         self.ui_theme_combo.addItem("Scuro", "dark")
         self.ui_theme_combo.addItem("Chiaro", "light")
+        self.ui_accent_combo = QComboBox()
+        for accent_name in ACCENT_PALETTES:
+            self.ui_accent_combo.addItem(accent_name, accent_name)
         self.ui_font_combo = QComboBox()
         for scale, label in [(0.9,"90%"),(1.0,"100%"),(1.1,"110%"),(1.2,"120%")]:
             self.ui_font_combo.addItem(label, scale)
@@ -4188,10 +4257,12 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
         self.ui_density_combo.addItem("Ampia", "spacious")
         appearance_grid.addWidget(ui_label("TEMA", "field"),0,0)
         appearance_grid.addWidget(self.ui_theme_combo,0,1)
-        appearance_grid.addWidget(ui_label("DIMENSIONE TESTO", "field"),0,2)
-        appearance_grid.addWidget(self.ui_font_combo,0,3)
-        appearance_grid.addWidget(ui_label("DENSITÀ TABELLE", "field"),1,0)
-        appearance_grid.addWidget(self.ui_density_combo,1,1)
+        appearance_grid.addWidget(ui_label("COLORE ACCENT", "field"),0,2)
+        appearance_grid.addWidget(self.ui_accent_combo,0,3)
+        appearance_grid.addWidget(ui_label("DIMENSIONE TESTO", "field"),1,0)
+        appearance_grid.addWidget(self.ui_font_combo,1,1)
+        appearance_grid.addWidget(ui_label("DENSITÀ TABELLE", "field"),1,2)
+        appearance_grid.addWidget(self.ui_density_combo,1,3)
         appearance.body.addLayout(appearance_grid)
         profile_row=QHBoxLayout()
         self.ui_profile_combo=QComboBox()
@@ -4312,6 +4383,7 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
             return
         self.ui_preferences={
             "theme":self.ui_theme_combo.currentData() or "dark",
+            "accent":self.ui_accent_combo.currentData() or "Gold",
             "font_scale":float(self.ui_font_combo.currentData() or 1.0),
             "density":self.ui_density_combo.currentData() or "comfortable",
         }
@@ -4319,6 +4391,9 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
     def apply_ui_preferences(self):
         prefs=getattr(self,"ui_preferences",{}) or {}
         theme=prefs.get("theme","dark")
+        accent=prefs.get("accent","Gold")
+        colors=ACCENT_PALETTES.get(accent,ACCENT_PALETTES["Gold"])["light" if theme=="light" else "dark"]
+        T.C.brass,T.C.brass_hi,T.C.brass_lo,T.C.on_brass=colors
         scale=max(0.85,min(1.25,float(prefs.get("font_scale",1.0))))
         density=prefs.get("density","comfortable")
         app=QApplication.instance()
@@ -4329,8 +4404,7 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
                     "#0A0F15":"#F2F5F8","#0D131A":"#FFFFFF","#121A23":"#FFFFFF",
                     "#18222D":"#EDF1F5","#202D3B":"#E2E8EE","#0C1219":"#F7F9FB",
                     "#263444":"#CFD8E1","#1A2530":"#E1E7ED","#EDE7DA":"#17212B",
-                    "#AAB2BD":"#526170","#7C8899":"#738190","#C9A15B":"#9A6A18",
-                    "#E3C07F":"#80520D","#8F7240":"#A77A2B",
+                    "#AAB2BD":"#526170","#7C8899":"#738190",
                 }
                 for old,new in substitutions.items():
                     qss=qss.replace(old,new)
@@ -4348,6 +4422,10 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
         if theme_widget is not None:
             idx=theme_widget.findData(theme)
             if idx>=0: theme_widget.setCurrentIndex(idx)
+        accent_widget=getattr(self,"ui_accent_combo",None)
+        if accent_widget is not None:
+            idx=accent_widget.findData(accent)
+            if idx>=0: accent_widget.setCurrentIndex(idx)
         font_widget=getattr(self,"ui_font_combo",None)
         if font_widget is not None:
             idx=font_widget.findData(scale)
@@ -4509,6 +4587,25 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
             [f"R{rnd}" for rnd in range(1, 6)],
             [(name(player), T.player_tint(ORDER.index(player)), cumulative[player]) for player in ORDER]
         )
+        result_entries = [
+            (gid, rnd, white, black, self.results.get(gid))
+            for gid, rnd, white, black in GAMES
+            if self.results.get(gid) is not None
+        ]
+        result_entries = list(reversed(result_entries[-5:]))
+        self.dashboard_results_table.setSortingEnabled(False)
+        self.dashboard_results_table.setRowCount(len(result_entries))
+        for row, (gid, rnd, white, black, result) in enumerate(result_entries):
+            shown = {"1-0":"1  –  0","1/2-1/2":"½  –  ½","0-1":"0  –  1","VOID":"ANNULLATA"}.get(result,str(result))
+            values = (f"ROUND {rnd}", gid, name(white), name(black), shown)
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                item.setData(Qt.ItemDataRole.UserRole, gid)
+                self.dashboard_results_table.setItem(row, column, item)
+        has_results = bool(result_entries)
+        self.dashboard_results_table.setVisible(has_results)
+        self.dashboard_results_empty.setVisible(not has_results)
 
     def archive_entries(self):
         entries=[("qualification",g[0],g[1],g[2],g[3]) for g in GAMES if self.results.get(g[0])]
@@ -4523,6 +4620,8 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
     def refresh_archive(self):
         if not hasattr(self,"archive_table"): return
         entries=self.archive_entries()
+        sorting=self.archive_table.isSortingEnabled()
+        self.archive_table.setSortingEnabled(False)
         self.archive_table.setRowCount(len(entries))
         for row,(kind,gid,round_label,white,black) in enumerate(entries):
             if kind=="qualification":
@@ -4544,6 +4643,53 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
                 item=QTableWidgetItem(str(value)); item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 item.setData(Qt.ItemDataRole.UserRole,(kind,gid))
                 self.archive_table.setItem(row,col,item)
+        self.archive_table.setSortingEnabled(sorting)
+        self.apply_archive_filters()
+
+    def apply_archive_filters(self):
+        if not hasattr(self,"archive_table"): return
+        tokens=[token for token in self.archive_search.text().strip().casefold().split() if token]
+        type_filter=self.archive_filter_type.currentData()
+        result_filter=self.archive_filter_result.currentData()
+        visible=0
+        total=self.archive_table.rowCount()
+        for row in range(total):
+            key_item=self.archive_table.item(row,0)
+            key=key_item.data(Qt.ItemDataRole.UserRole) if key_item else None
+            kind,gid=key if isinstance(key,tuple) and len(key)==2 else (None,None)
+            result=self.results.get(gid) if kind=="qualification" else self.playoff_results.get(gid)
+            row_text=" ".join(
+                self.archive_table.item(row,column).text()
+                for column in range(self.archive_table.columnCount())
+                if self.archive_table.item(row,column)
+            ).casefold()
+            matches_type=(type_filter=="all" or kind==type_filter)
+            matches_result=(result_filter is None or result==result_filter)
+            matches_query=all(token in row_text for token in tokens)
+            show=matches_type and matches_result and matches_query
+            self.archive_table.setRowHidden(row,not show)
+            visible+=int(show)
+        self.archive_results_label.setText(f"{visible} / {total} partite visualizzate")
+        self.archive_table_container.setVisible(visible>0)
+        self.archive_empty.setVisible(visible==0)
+        self.archive_empty_action.setVisible(visible==0 and total>0)
+
+    def reset_archive_filters(self):
+        controls=(self.archive_search,self.archive_filter_type,self.archive_filter_result)
+        for control in controls: control.blockSignals(True)
+        self.archive_search.clear()
+        self.archive_filter_type.setCurrentIndex(0)
+        self.archive_filter_result.setCurrentIndex(0)
+        for control in controls: control.blockSignals(False)
+        self.apply_archive_filters()
+
+    def selected_archive_entry(self):
+        row=self.archive_table.currentRow()
+        if row<0: return None
+        item=self.archive_table.item(row,0)
+        key=item.data(Qt.ItemDataRole.UserRole) if item else None
+        if not isinstance(key,tuple) or len(key)!=2: return None
+        return next((entry for entry in self.archive_entries() if entry[0]==key[0] and entry[1]==key[1]),None)
 
     def refresh_h2h(self):
         if not hasattr(self,"h2h_table"): return
@@ -4739,14 +4885,11 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
         self.statusBar().showMessage("Archivio PGN esportato con risultati, terminazioni e annotazioni C5R disponibili.",3500)
 
     def analyze_selected_archive_game(self):
-        row = self.archive_table.currentRow()
-        if row < 0:
+        entry=self.selected_archive_entry()
+        if entry is None:
             QMessageBox.information(self, "Analisi partita", "Seleziona una partita conclusa nell'archivio.")
             return
-        entries=self.archive_entries()
-        if row>=len(entries):
-            return
-        kind,gid,_,_,_=entries[row]
+        kind,gid,_,_,_=entry
         if kind=="playoff":
             QMessageBox.information(self,"Analisi playoff","Il tabellone salva risultati, terminazioni e vincitore Armageddon. Le mosse delle partite playoff non sono ancora registrate su una scacchiera nell'app.")
             return
@@ -5042,11 +5185,9 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
         dialog.exec()
 
     def export_selected_archive_game(self):
-        row=self.archive_table.currentRow()
-        if row<0: return
-        entries=self.archive_entries()
-        if row>=len(entries): return
-        kind,gid,_,_,_=entries[row]
+        entry=self.selected_archive_entry()
+        if entry is None: return
+        kind,gid,_,_,_=entry
         if kind=="qualification":
             self.export_pgn(gid)
         else:
@@ -5208,7 +5349,7 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
         self.statusBar().showMessage("Registro operazioni esportato.",2500)
 
     def export_backup(self):
-        self.save()
+        if not self.save(): return
         path,_=QFileDialog.getSaveFileName(self,"Backup torneo","Backup-C5R.json","JSON (*.json)")
         if path:
             shutil.copy2(storage_path(),path)
@@ -5227,6 +5368,7 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
                 QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,QMessageBox.StandardButton.No)
             if answer!=QMessageBox.StandardButton.Yes: return
             atomic_write_json(storage_path(),data)
+            self.state_load_blocked=False
             self.boards.clear(); self._odds_cache_key=None; self._odds_cache=None
             self.results={}; self.penalties=[]; self.moves={}; self.clocks={}; self.audit_log=[]; self.match_notes={}
             self.load_state(); self.refresh_all()
@@ -5350,6 +5492,9 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
         for control in (self.calendar_search, self.filter_round, self.filter_player, self.filter_status):
             filters.addWidget(control, 2 if control is self.calendar_search else 1)
         filters_card.body.addLayout(filters)
+        reset_filters = QPushButton("AZZERA FILTRI")
+        reset_filters.clicked.connect(self.reset_calendar_filters)
+        filters_card.body.addWidget(reset_filters, 0, Qt.AlignmentFlag.AlignRight)
         wizard_row = QHBoxLayout()
         wizard_row.addStretch(1)
         round_wizard = QPushButton("ASSISTENTE OPERATIVO ROUND")
@@ -5436,6 +5581,18 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
         layout.addWidget(scroll, 1)
         self.apply_calendar_filters()
         return page
+
+    def reset_calendar_filters(self):
+        controls = (self.calendar_search, self.filter_round, self.filter_player, self.filter_status)
+        for control in controls:
+            control.blockSignals(True)
+        self.calendar_search.clear()
+        self.filter_round.setCurrentIndex(0)
+        self.filter_player.setCurrentIndex(0)
+        self.filter_status.setCurrentIndex(0)
+        for control in controls:
+            control.blockSignals(False)
+        self.apply_calendar_filters()
 
     def apply_calendar_filters(self):
         if not hasattr(self, "calendar_cards"):
@@ -5749,6 +5906,9 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
         return page
 
     def set_playoff_result(self,key,value,detail="Inserimento manuale"):
+        if getattr(self,"state_load_blocked",False):
+            QMessageBox.warning(self,"Archivio non disponibile","Ripristina un backup JSON valido prima di registrare risultati playoff.")
+            return
         old=self.playoff_results.get(key)
         if old==value: return
         if old is not None:
