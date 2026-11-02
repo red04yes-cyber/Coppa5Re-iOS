@@ -1527,6 +1527,513 @@ class MainWindow(QMainWindow):
         analyze.clicked.connect(self.analyze_selected_archive_game); row.addWidget(analyze); row.addStretch()
         layout.addLayout(row); return page
 
+    def build_incidents(self):
+        page=QWidget()
+        layout=QVBoxLayout(page)
+        layout.setContentsMargins(26,24,26,30)
+        layout.setSpacing(14)
+        layout.addWidget(ui_label("Verbali degli incidenti", "h1"))
+        layout.addWidget(ui_label(
+            "Registra contestazioni, ritardi, irregolarità, problemi tecnici e decisioni arbitrali. "
+            "Ogni verbale conserva autore, cronologia, stato, descrizione, provvedimento e documenti allegati.",
+            "lead", wrap=True
+        ))
+
+        overview=QHBoxLayout()
+        self.incident_stat_open=StatTile("APERTE","alert")
+        self.incident_stat_review=StatTile("IN ESAME","clock")
+        self.incident_stat_closed=StatTile("RISOLTE / ARCHIVIATE","check")
+        for tile in (self.incident_stat_open,self.incident_stat_review,self.incident_stat_closed):
+            overview.addWidget(tile,1)
+        layout.addLayout(overview)
+
+        filter_card=Card("Ricerca e filtri",padding=14,spacing=10)
+        filter_row=QHBoxLayout()
+        self.incident_search=QLineEdit()
+        self.incident_search.setPlaceholderText("Cerca numero, partita, soggetto, oggetto o descrizione…")
+        self.incident_category_filter=QComboBox()
+        self.incident_category_filter.addItem("Tutte le categorie",None)
+        for value in ("Contestazione","Ritardo","Irregolarità","Decisione arbitrale",
+                      "Problema tecnico","Sicurezza / organizzazione","Altro"):
+            self.incident_category_filter.addItem(value,value)
+        self.incident_status_filter=QComboBox()
+        self.incident_status_filter.addItem("Tutti gli stati",None)
+        for value in ("Aperto","In esame","Risolto","Archiviato"):
+            self.incident_status_filter.addItem(value,value)
+        filter_row.addWidget(self.incident_search,2)
+        filter_row.addWidget(self.incident_category_filter,1)
+        filter_row.addWidget(self.incident_status_filter,1)
+        filter_card.body.addLayout(filter_row)
+        self.incident_search.textChanged.connect(self.refresh_incidents)
+        self.incident_category_filter.currentIndexChanged.connect(self.refresh_incidents)
+        self.incident_status_filter.currentIndexChanged.connect(self.refresh_incidents)
+        layout.addWidget(filter_card)
+
+        records=Card("Registro verbali","Seleziona una riga per aprire o modificare il verbale completo.")
+        toolbar=QHBoxLayout()
+        self.incident_count_label=ui_label("0 verbali", "caption")
+        toolbar.addWidget(self.incident_count_label)
+        toolbar.addStretch(1)
+        create=QPushButton("NUOVO VERBALE")
+        create.setObjectName("PrimaryButton")
+        create.clicked.connect(self.create_incident_report)
+        open_report=QPushButton("APRI / MODIFICA")
+        open_report.clicked.connect(self.edit_selected_incident)
+        export_pdf=QPushButton("ESPORTA VERBALE PDF")
+        export_pdf.clicked.connect(self.export_selected_incident_pdf)
+        export_csv=QPushButton("ESPORTA REGISTRO CSV")
+        export_csv.clicked.connect(self.export_incidents_csv)
+        toolbar.addWidget(create)
+        toolbar.addWidget(open_report)
+        toolbar.addWidget(export_pdf)
+        toolbar.addWidget(export_csv)
+        records.body.addLayout(toolbar)
+
+        self.incident_table=QTableWidget(0,7)
+        self.incident_table.setHorizontalHeaderLabels(
+            ["N. / DATA","CATEGORIA","PARTITA / TURNO","SOGGETTI","OGGETTO","STATO","ALLEGATI"])
+        self.incident_table.verticalHeader().setVisible(False)
+        self.incident_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.incident_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.incident_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.incident_table.horizontalHeader().setSectionResizeMode(4,QHeaderView.ResizeMode.Stretch)
+        for col in (0,1,2,3,5,6):
+            self.incident_table.horizontalHeader().setSectionResizeMode(col,QHeaderView.ResizeMode.ResizeToContents)
+        style_table(self.incident_table,row_height=44,selectable=True)
+        self.incident_table.cellDoubleClicked.connect(lambda row,column:self.edit_incident_report(self._incident_id_at_row(row)))
+        self.incident_table.itemSelectionChanged.connect(self.refresh_incident_detail)
+        records.body.addWidget(table_card(self.incident_table))
+        self.incident_detail=ui_label("Seleziona un verbale per visualizzarne il riepilogo.", "muted", wrap=True)
+        records.body.addWidget(self.incident_detail)
+        layout.addWidget(records,1)
+        layout.addWidget(ui_label(
+            f"Gli allegati sono copiati in {storage_path().parent / 'incidents'} e restano sul PC. "
+            "Per trasferire i documenti su un altro computer, copia anche la cartella incidents insieme al backup.",
+            "caption", wrap=True
+        ))
+        return page
+
+    def incident_directory(self,report_id=None):
+        root=storage_path().parent/"incidents"
+        if report_id is None:
+            root.mkdir(parents=True,exist_ok=True)
+            return root
+        safe_id=re.sub(r"[^A-Za-z0-9_-]","",str(report_id))
+        if not safe_id or safe_id!=str(report_id):
+            raise ValueError("Identificativo verbale non valido.")
+        folder=root/safe_id
+        folder.mkdir(parents=True,exist_ok=True)
+        return folder
+
+    def incident_attachment_path(self,relative_path):
+        root=self.incident_directory().resolve()
+        candidate=(storage_path().parent/str(relative_path)).resolve()
+        if root not in candidate.parents:
+            raise ValueError("Percorso allegato non valido.")
+        return candidate
+
+    def _incident_record(self,report_id):
+        return next((item for item in self.incident_reports if item.get("id")==report_id),None)
+
+    def _incident_id_at_row(self,row):
+        if not hasattr(self,"incident_table") or row<0 or row>=self.incident_table.rowCount():
+            return None
+        item=self.incident_table.item(row,0)
+        return item.data(Qt.ItemDataRole.UserRole) if item else None
+
+    def selected_incident_id(self):
+        if not hasattr(self,"incident_table"):
+            return None
+        rows=self.incident_table.selectionModel().selectedRows()
+        return self._incident_id_at_row(rows[0].row()) if rows else None
+
+    def create_incident_report(self):
+        self.edit_incident_report(None)
+
+    def edit_selected_incident(self):
+        report_id=self.selected_incident_id()
+        if not report_id:
+            QMessageBox.information(self,"Nessun verbale selezionato","Seleziona prima un verbale dal registro.")
+            return
+        self.edit_incident_report(report_id)
+
+    def save_incident_report(self,data,attachment_entries):
+        report_id=data.get("id") or f"INC-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}"
+        old=self._incident_record(report_id)
+        created_at=old.get("created_at") if old else datetime.now().isoformat(timespec="seconds")
+        copied=[]
+        final_attachments=[]
+        folder=self.incident_directory(report_id)
+        try:
+            for entry in attachment_entries:
+                source=entry.get("source")
+                if source:
+                    source_path=Path(source)
+                    if not source_path.exists() or not source_path.is_file():
+                        raise ValueError(f"Allegato non disponibile: {source_path}")
+                    size=source_path.stat().st_size
+                    if size>25*1024*1024:
+                        raise ValueError(f"Il file {source_path.name} supera il limite di 25 MB per singolo allegato.")
+                    base_name=re.sub(r'[<>:"/\\|?*\x00-\x1f]',"_",source_path.name).strip(" .") or "allegato"
+                    dest=folder/base_name
+                    counter=2
+                    while dest.exists():
+                        dest=folder/f"{Path(base_name).stem}_{counter}{Path(base_name).suffix}"
+                        counter+=1
+                    shutil.copy2(source_path,dest)
+                    copied.append(dest)
+                    relative=Path("incidents")/report_id/dest.name
+                    final_attachments.append({"path":relative.as_posix(),"name":dest.name,"size":size})
+                else:
+                    relative=str(entry.get("path",""))
+                    resolved=self.incident_attachment_path(relative)
+                    final_attachments.append({
+                        "path":relative,
+                        "name":entry.get("name") or resolved.name,
+                        "size":int(entry.get("size",resolved.stat().st_size if resolved.exists() else 0)),
+                    })
+            record={
+                "id":report_id,
+                "created_at":created_at,
+                "updated_at":datetime.now().isoformat(timespec="seconds"),
+                "category":str(data.get("category","Altro")),
+                "game_id":str(data.get("game_id","")),
+                "participants":str(data.get("participants","")).strip(),
+                "summary":str(data.get("summary","")).strip(),
+                "description":str(data.get("description","")).strip(),
+                "decision":str(data.get("decision","")).strip(),
+                "status":str(data.get("status","Aperto")),
+                "referee":str(data.get("referee") or self.referee or "Non indicato"),
+                "attachments":final_attachments,
+            }
+            if not record["summary"]:
+                raise ValueError("Inserisci un oggetto breve per il verbale.")
+            if not record["description"]:
+                raise ValueError("Inserisci una descrizione dei fatti.")
+            if old:
+                index=self.incident_reports.index(old)
+                self.incident_reports[index]=record
+                action="Verbale incidente aggiornato"
+                before=f"{old.get('status','')} · {old.get('summary','')}"
+            else:
+                self.incident_reports.append(record)
+                action="Verbale incidente creato"
+                before="—"
+            keep={item["path"] for item in final_attachments}
+            if old:
+                for old_attachment in old.get("attachments",[]):
+                    old_path=old_attachment.get("path")
+                    if old_path and old_path not in keep:
+                        try:
+                            resolved=self.incident_attachment_path(old_path)
+                            resolved.unlink(missing_ok=True)
+                        except (ValueError,OSError):
+                            pass
+            self.log_operation(action,report_id,before,
+                f"{record['status']} · {record['summary']}",
+                f"{record['category']} · {record['game_id'] or 'Generale'} · {record['participants']}")
+            self.save()
+            self.refresh_incidents()
+            return record
+        except Exception:
+            for path in copied:
+                path.unlink(missing_ok=True)
+            if not old:
+                try:
+                    if folder.exists() and not any(folder.iterdir()):
+                        folder.rmdir()
+                except OSError:
+                    pass
+            raise
+
+    def edit_incident_report(self,report_id=None):
+        existing=self._incident_record(report_id) if report_id else None
+        dialog=QDialog(self)
+        dialog.setWindowTitle("Modifica verbale incidente" if existing else "Nuovo verbale incidente")
+        dialog.resize(780,820)
+        root=QVBoxLayout(dialog)
+        root.setContentsMargins(22,20,22,18)
+        root.setSpacing(12)
+        header=ui_label(
+            f"{existing.get('id')} · creato {existing.get('created_at','').replace('T',' ')}" if existing
+            else f"Nuovo verbale · {datetime.now().strftime('%d/%m/%Y %H:%M')}",
+            "caption")
+        root.addWidget(header)
+
+        grid=QGridLayout()
+        category=QComboBox()
+        categories=["Contestazione","Ritardo","Irregolarità","Decisione arbitrale",
+                    "Problema tecnico","Sicurezza / organizzazione","Altro"]
+        category.addItems(categories)
+        if existing and existing.get("category") in categories:
+            category.setCurrentText(existing["category"])
+        game_combo=QComboBox()
+        game_combo.addItem("Generale / non associato","")
+        for gid,rnd,white,black in GAMES:
+            game_combo.addItem(f"Round {rnd} · {gid} · {name(white)} – {name(black)}",gid)
+        for key,label in (("sf1","Semifinale 1"),("sf2","Semifinale 2"),("third","3° / 4° posto"),("final","Finale")):
+            game_combo.addItem(f"Playoff · {label}",key)
+        if existing:
+            idx=game_combo.findData(existing.get("game_id",""))
+            if idx>=0: game_combo.setCurrentIndex(idx)
+        status=QComboBox()
+        status.addItems(["Aperto","In esame","Risolto","Archiviato"])
+        if existing:
+            status.setCurrentText(existing.get("status","Aperto"))
+        participants=QLineEdit(existing.get("participants","") if existing else "")
+        participants.setPlaceholderText("Nomi delle persone coinvolte")
+        summary=QLineEdit(existing.get("summary","") if existing else "")
+        summary.setPlaceholderText("Es. Contestazione sul risultato della partita")
+        grid.addWidget(ui_label("CATEGORIA","field"),0,0)
+        grid.addWidget(category,0,1)
+        grid.addWidget(ui_label("STATO","field"),0,2)
+        grid.addWidget(status,0,3)
+        grid.addWidget(ui_label("PARTITA / TURNO","field"),1,0)
+        grid.addWidget(game_combo,1,1,1,3)
+        grid.addWidget(ui_label("PERSONE COINVOLTE","field"),2,0)
+        grid.addWidget(participants,2,1,1,3)
+        grid.addWidget(ui_label("OGGETTO","field"),3,0)
+        grid.addWidget(summary,3,1,1,3)
+        root.addLayout(grid)
+
+        description=QPlainTextEdit()
+        description.setPlaceholderText("Descrivi i fatti in ordine cronologico: luogo, orari, persone presenti, elementi oggettivi e dichiarazioni.")
+        description.setPlainText(existing.get("description","") if existing else "")
+        description.setMinimumHeight(130)
+        root.addWidget(ui_label("DESCRIZIONE DEI FATTI","field"))
+        root.addWidget(description)
+        decision=QPlainTextEdit()
+        decision.setPlaceholderText("Decisione del direttore di gara, motivazione, eventuali sanzioni e azioni successive.")
+        decision.setPlainText(existing.get("decision","") if existing else "")
+        decision.setMinimumHeight(100)
+        root.addWidget(ui_label("DECISIONE / PROVVEDIMENTO ARBITRALE","field"))
+        root.addWidget(decision)
+
+        root.addWidget(ui_label("ALLEGATI (PDF, FOTO, DOCUMENTI, FILE)","field"))
+        attachments=QListWidget()
+        pending=existing.get("attachments",[])[:] if existing else []
+        for item in pending:
+            try:
+                file_path=self.incident_attachment_path(item.get("path",""))
+                label=f"{item.get('name',file_path.name)} · {item.get('size',0)/1024:.0f} KB"
+                if not file_path.exists(): label+=" · FILE NON TROVATO"
+            except Exception:
+                label=f"{item.get('name','Allegato')} · PERCORSO NON VALIDO"
+            widget_item=QListWidgetItem(label)
+            widget_item.setData(Qt.ItemDataRole.UserRole,{"path":item.get("path",""),"name":item.get("name",""),"size":item.get("size",0)})
+            attachments.addItem(widget_item)
+        root.addWidget(attachments,1)
+        attachment_buttons=QHBoxLayout()
+        add_file=QPushButton("AGGIUNGI ALLEGATI")
+        remove_file=QPushButton("RIMUOVI SELEZIONATO")
+        open_file=QPushButton("APRI ALLEGATO")
+        attachment_buttons.addWidget(add_file)
+        attachment_buttons.addWidget(remove_file)
+        attachment_buttons.addWidget(open_file)
+        attachment_buttons.addStretch(1)
+        root.addLayout(attachment_buttons)
+
+        def add_attachments():
+            paths,_=QFileDialog.getOpenFileNames(dialog,"Seleziona allegati","",
+                "Tutti i file (*);;PDF (*.pdf);;Immagini (*.png *.jpg *.jpeg)")
+            for source in paths:
+                path=Path(source)
+                if not path.is_file():
+                    continue
+                if path.stat().st_size>25*1024*1024:
+                    QMessageBox.warning(dialog,"Allegato troppo grande",f"{path.name} supera il limite di 25 MB.")
+                    continue
+                entry={"source":str(path),"name":path.name,"size":path.stat().st_size}
+                item=QListWidgetItem(f"{path.name} · {path.stat().st_size/1024:.0f} KB · DA ALLEGARE")
+                item.setData(Qt.ItemDataRole.UserRole,entry)
+                attachments.addItem(item)
+        def remove_attachment():
+            row=attachments.currentRow()
+            if row>=0:
+                attachments.takeItem(row)
+        def open_attachment():
+            item=attachments.currentItem()
+            if item is None:
+                return
+            entry=item.data(Qt.ItemDataRole.UserRole) or {}
+            try:
+                path=Path(entry["source"]) if entry.get("source") else self.incident_attachment_path(entry.get("path",""))
+                if path.exists():
+                    QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+                else:
+                    QMessageBox.warning(dialog,"Allegato non trovato",f"File non trovato: {path}")
+            except Exception as exc:
+                QMessageBox.warning(dialog,"Impossibile aprire l'allegato",str(exc))
+        add_file.clicked.connect(add_attachments)
+        remove_file.clicked.connect(remove_attachment)
+        open_file.clicked.connect(open_attachment)
+
+        root.addWidget(ui_label(
+            "Dimensione massima: 25 MB per file. I documenti vengono copiati nella cartella locale del verbale.",
+            "caption", wrap=True))
+        buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Save|QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Save).setText("SALVA VERBALE")
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        root.addWidget(buttons)
+        if dialog.exec()!=QDialog.DialogCode.Accepted:
+            return
+        entries=[]
+        for index in range(attachments.count()):
+            entries.append(attachments.item(index).data(Qt.ItemDataRole.UserRole) or {})
+        data={
+            "id":report_id,
+            "category":category.currentText(),
+            "game_id":game_combo.currentData() or "",
+            "participants":participants.text(),
+            "summary":summary.text(),
+            "description":description.toPlainText(),
+            "decision":decision.toPlainText(),
+            "status":status.currentText(),
+            "referee":self.referee or (existing or {}).get("referee",""),
+        }
+        try:
+            self.save_incident_report(data,entries)
+            self.statusBar().showMessage("Verbale incidente salvato.",3000)
+        except Exception as exc:
+            QMessageBox.warning(self,"Verbale non salvato",str(exc))
+
+    def open_incident_attachment(self,attachment):
+        try:
+            path=self.incident_attachment_path(attachment.get("path",""))
+            if not path.is_file():
+                raise FileNotFoundError(path)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+        except Exception as exc:
+            QMessageBox.warning(self,"Allegato non disponibile",str(exc))
+
+    def refresh_incidents(self):
+        if not hasattr(self,"incident_table"):
+            return
+        reports=sorted(self.incident_reports,key=lambda item:item.get("updated_at",item.get("created_at","")),reverse=True)
+        query=self.incident_search.text().strip().casefold() if hasattr(self,"incident_search") else ""
+        category=self.incident_category_filter.currentData() if hasattr(self,"incident_category_filter") else None
+        status=self.incident_status_filter.currentData() if hasattr(self,"incident_status_filter") else None
+        visible=[]
+        for report in reports:
+            haystack=" ".join(str(report.get(key,"")) for key in
+                ("id","category","game_id","participants","summary","description","decision","referee")).casefold()
+            if query and query not in haystack: continue
+            if category and report.get("category")!=category: continue
+            if status and report.get("status")!=status: continue
+            visible.append(report)
+        self.incident_table.setRowCount(len(visible))
+        for row,report in enumerate(visible):
+            gid=report.get("game_id","")
+            if gid in ("sf1","sf2","final","third"):
+                game_label={"sf1":"Semifinale 1","sf2":"Semifinale 2","final":"Finale","third":"3° / 4° posto"}[gid]
+            else:
+                match=next((item for item in GAMES if item[0]==gid),None)
+                game_label=f"Round {match[1]} · {gid}" if match else "Generale"
+            date=str(report.get("created_at","")).replace("T"," ")
+            if len(date)>16: date=date[:16]
+            values=[f"{report.get('id','')}\n{date}",report.get("category",""),game_label,
+                    report.get("participants",""),report.get("summary",""),report.get("status",""),
+                    str(len(report.get("attachments",[])))]
+            for col,value in enumerate(values):
+                item=QTableWidgetItem(str(value))
+                item.setData(Qt.ItemDataRole.UserRole,report.get("id"))
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter if col in (0,1,2,5,6) else Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignLeft)
+                self.incident_table.setItem(row,col,item)
+        open_count=sum(1 for item in self.incident_reports if item.get("status")=="Aperto")
+        review_count=sum(1 for item in self.incident_reports if item.get("status")=="In esame")
+        closed_count=sum(1 for item in self.incident_reports if item.get("status") in ("Risolto","Archiviato"))
+        self.incident_stat_open.set(str(open_count),"Da gestire")
+        self.incident_stat_review.set(str(review_count),"In valutazione")
+        self.incident_stat_closed.set(str(closed_count),"Conclusi")
+        self.incident_count_label.setText(f"{len(visible)} verbali visualizzati · {len(self.incident_reports)} totali")
+        self.refresh_incident_detail()
+
+    def refresh_incident_detail(self):
+        if not hasattr(self,"incident_detail"):
+            return
+        report=self._incident_record(self.selected_incident_id())
+        if report is None:
+            self.incident_detail.setText("Seleziona un verbale per visualizzarne il riepilogo.")
+            return
+        files=", ".join(item.get("name","Allegato") for item in report.get("attachments",[])) or "Nessun allegato"
+        self.incident_detail.setText(
+            f"{report.get('id')} · {report.get('category')} · {report.get('status')} · "
+            f"Arbitro: {report.get('referee','Non indicato')}\n"
+            f"{report.get('summary','')}\n"
+            f"Fatti: {report.get('description','')}\n"
+            f"Decisione: {report.get('decision','Non ancora registrata') or 'Non ancora registrata'}\n"
+            f"Allegati: {files}"
+        )
+
+    def export_incidents_csv(self):
+        path,_=QFileDialog.getSaveFileName(self,"Esporta verbali","Verbali-Incidenti-C5R.csv","CSV (*.csv)")
+        if not path:
+            return
+        with open(path,"w",newline="",encoding="utf-8-sig") as stream:
+            writer=csv.writer(stream,delimiter=";")
+            writer.writerow(["ID","Creato il","Aggiornato il","Categoria","Partita","Soggetti","Oggetto",
+                             "Descrizione","Decisione","Stato","Arbitro","Allegati"])
+            for item in self.incident_reports:
+                writer.writerow([item.get(key,"") for key in
+                    ("id","created_at","updated_at","category","game_id","participants","summary",
+                     "description","decision","status","referee")]
+                    +[", ".join(a.get("name","") for a in item.get("attachments",[]))])
+        self.statusBar().showMessage("Registro verbali esportato in CSV.",3000)
+
+    def export_selected_incident_pdf(self):
+        report=self._incident_record(self.selected_incident_id())
+        if report is None:
+            QMessageBox.information(self,"Nessun verbale selezionato","Seleziona il verbale da esportare.")
+            return
+        path,_=QFileDialog.getSaveFileName(self,"Esporta verbale PDF",
+            f"{report['id']}.pdf","PDF (*.pdf)")
+        if not path:
+            return
+        writer=QPdfWriter(path)
+        writer.setTitle(f"Verbale incidente {report['id']}")
+        writer.setCreator("Coppa dei 5 Re · Control Room")
+        writer.setResolution(150)
+        painter=QPainter(writer)
+        try:
+            margin=170
+            width=writer.width()-2*margin
+            y=margin
+            painter.setPen(QColor(GOLD))
+            painter.setFont(QFont("Segoe UI",18,QFont.Weight.Bold))
+            painter.drawText(margin,y+30,"COPPA DEI 5 RE · VERBALE ARBITRALE")
+            y+=85
+            def write_block(label,value):
+                nonlocal y
+                painter.setPen(QColor("#9A6A18"))
+                painter.setFont(QFont("Segoe UI",9,QFont.Weight.Bold))
+                painter.drawText(margin,y,label.upper())
+                y+=28
+                painter.setPen(QColor("#202A35"))
+                painter.setFont(QFont("Segoe UI",10))
+                rect=painter.fontMetrics().boundingRect(0,0,width,2500,Qt.TextFlag.TextWordWrap,str(value or "—"))
+                height=max(28,rect.height()+10)
+                if y+height>writer.height()-margin:
+                    writer.newPage()
+                    y=margin
+                painter.drawText(QRect(margin,y,width,height),Qt.TextFlag.TextWordWrap,str(value or "—"))
+                y+=height+25
+            write_block("Numero e data",f"{report.get('id')} · {report.get('created_at','')}")
+            write_block("Categoria / stato",f"{report.get('category')} · {report.get('status')}")
+            write_block("Partita / turno",report.get("game_id") or "Generale / non associato")
+            write_block("Persone coinvolte",report.get("participants"))
+            write_block("Oggetto",report.get("summary"))
+            write_block("Descrizione dei fatti",report.get("description"))
+            write_block("Decisione / provvedimento",report.get("decision"))
+            write_block("Direzione di gara",report.get("referee"))
+            names=[item.get("name","Allegato") for item in report.get("attachments",[])]
+            write_block("Allegati conservati separatamente",", ".join(names) if names else "Nessun allegato")
+            write_block("Aggiornato il",report.get("updated_at",""))
+            write_block("Firma del direttore di gara","______________________________________________")
+        finally:
+            painter.end()
+        self.statusBar().showMessage("Verbale esportato in PDF.",3000)
+
     def build_h2h(self):
         page=QWidget(); layout=QVBoxLayout(page)
         title=QLabel("STATISTICHE TESTA A TESTA"); title.setObjectName("SectionTitle"); layout.addWidget(title)
