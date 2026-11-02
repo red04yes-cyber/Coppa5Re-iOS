@@ -775,7 +775,7 @@ class MainWindow(QMainWindow):
         self.game_terminations={}; self.move_reviews={}; self.withdrawn_players={}; self.recovery_path=storage_path().with_name("recovery.json")
         self.ui_preferences=dict(UI_DEFAULTS)
         self.offer_recovery()
-        self.load_state(); self.apply_ui_preferences(); self.build_ui(); self.refresh_all()
+        self.load_state(); self.apply_ui_preferences(); self.build_ui(); self.apply_ui_preferences(); self.refresh_all()
         self.clock_timer=QTimer(self); self.clock_timer.timeout.connect(self.tick_clocks); self.clock_timer.start(1000)
         self.install_shortcuts()
     def load_state(self):
