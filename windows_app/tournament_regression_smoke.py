@@ -323,7 +323,7 @@ try:
     assert persisted["incident_reports"][0]["attachments"][0]["name"] == "foto-tavolo.txt"
     # UI registration and CSV/PDF export are reachable from the incident register.
     window.refresh_all()
-    assert len(window._page_keys) == 18 and "communications" in window._page_keys
+    assert len(window._page_keys) == 19 and "communications" in window._page_keys and "history" in window._page_keys
     assert window.incident_table.rowCount() == 1
     window.incident_table.selectRow(0)
     incident_pdf = str(Path(APPDATA) / "verbale-incidente.pdf")
@@ -427,7 +427,17 @@ try:
         window.match_http_server.server_close()
         window.match_http_server = None
 
-    print("C5R Windows regression OK: tournament rules, PGN, clocks, undo/redo, predictions, player profiles, badges, match sheets, LAN QR pages, incident reports and player notifications.")
+    # Historical edition archive and cumulative player statistics.
+    archived_path = window.archive_edition_state("Coppa di prova · 2026")
+    assert archived_path.is_file()
+    window.refresh_history()
+    assert window.history_edition_table.rowCount() == 1
+    assert window.history_career_table.rowCount() == 5
+    career_names = [window.history_career_table.item(row,0).text() for row in range(5)]
+    assert "Jacopo" in career_names
+    assert "Coppa di prova · 2026" in window._history_cache[0]["title"]
+
+    print("C5R Windows regression OK: tournament rules, PGN, clocks, undo/redo, predictions, player profiles, edition history, badges, match sheets, LAN QR pages, incident reports and notifications.")
 finally:
     QMessageBox.question = old_question
     window.close()
