@@ -5,14 +5,14 @@ from pathlib import Path
 from itertools import combinations
 import chess
 import chess.pgn
-from PySide6.QtCore import Qt, QSize, Signal, QThread, QTimer
-from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPdfWriter, QKeySequence, QShortcut
+from PySide6.QtCore import Qt, QSize, Signal, QThread, QTimer, QByteArray
+from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPdfWriter, QKeySequence, QShortcut, QIcon, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QComboBox,
     QDoubleSpinBox, QLineEdit, QVBoxLayout, QHBoxLayout, QGridLayout, QTabWidget,
     QTableWidget, QTableWidgetItem, QHeaderView, QScrollArea, QMessageBox,
-    QListWidget, QInputDialog, QFileDialog, QAbstractItemView, QSizePolicy,
+    QListWidget, QListWidgetItem, QInputDialog, QFileDialog, QAbstractItemView, QSizePolicy,
     QDialog, QDialogButtonBox, QProgressBar, QStackedWidget
 )
 
@@ -544,14 +544,22 @@ class BoardCard(QFrame):
         self.refresh_selector()
         self.selector.currentIndexChanged.connect(self.select_game)
         self.selector.setMinimumWidth(220); top.addWidget(self.selector); lay.addLayout(top)
-        self.match=QLabel(); self.match.setObjectName("MatchTitle"); lay.addWidget(self.match)
-        self.state_label=QLabel(); self.state_label.setObjectName("Eyebrow"); lay.addWidget(self.state_label)
+        self.match=QLabel(); self.match.setObjectName("Eyebrow"); lay.addWidget(self.match)
+        players=QHBoxLayout(); players.setSpacing(7)
+        self.white_avatar=QLabel("B"); self.white_avatar.setObjectName("PlayerAvatar"); self.white_avatar.setFixedSize(30,30)
+        self.white_name=QLabel("Bianco"); self.white_name.setObjectName("MatchPlayer")
+        self.match_score=QLabel("VS"); self.match_score.setObjectName("MatchScore")
+        self.black_name=QLabel("Nero"); self.black_name.setObjectName("MatchPlayer")
+        self.black_avatar=QLabel("N"); self.black_avatar.setObjectName("PlayerAvatar"); self.black_avatar.setFixedSize(30,30)
+        players.addWidget(self.white_avatar); players.addWidget(self.white_name,1); players.addWidget(self.match_score)
+        players.addWidget(self.black_name,1); players.addWidget(self.black_avatar); lay.addLayout(players)
+        self.state_label=QLabel(); self.state_label.setObjectName("StatusPill"); lay.addWidget(self.state_label)
         self.clock_label=QLabel(); self.clock_label.setObjectName("Muted"); lay.addWidget(self.clock_label)
         self.history_index=None
         self.board=BoardWidget(True); self.board.moveRequested.connect(self.move); lay.addWidget(self.board,1)
         nav=QHBoxLayout()
-        self.prev_move_btn=QPushButton("◀  Mossa precedente"); self.prev_move_btn.clicked.connect(self.previous_move)
-        self.next_move_btn=QPushButton("Mossa successiva  ▶"); self.next_move_btn.clicked.connect(self.next_move)
+        self.prev_move_btn=QPushButton("Mossa precedente"); self.prev_move_btn.setIcon(self.app.line_icon("left",15)); self.prev_move_btn.clicked.connect(self.previous_move)
+        self.next_move_btn=QPushButton("Mossa successiva"); self.next_move_btn.setIcon(self.app.line_icon("right",15)); self.next_move_btn.clicked.connect(self.next_move)
         self.view_ply=QLabel("0 / 0"); self.view_ply.setObjectName("Muted")
         nav.addWidget(self.prev_move_btn); nav.addWidget(self.view_ply,1); nav.addWidget(self.next_move_btn); lay.addLayout(nav)
         self.history=QLabel("MOSSE  ·  Nessuna mossa"); self.history.setObjectName("Muted"); self.history.setWordWrap(True); self.history.setMaximumHeight(48); lay.addWidget(self.history)
@@ -568,18 +576,18 @@ class BoardCard(QFrame):
         bottom.addWidget(self.result); lay.addLayout(bottom)
         controls=QVBoxLayout()
         control_top=QHBoxLayout(); control_bottom=QHBoxLayout()
-        self.undo=QPushButton("↶  Annulla"); self.undo.clicked.connect(lambda:self.app.undo(self.game_id))
-        pgn=QPushButton("PGN"); pgn.clicked.connect(lambda:self.app.export_pgn(self.game_id))
-        reset=QPushButton("Reset"); reset.clicked.connect(lambda:self.app.reset_board(self.game_id))
+        self.undo=QPushButton("Annulla"); self.undo.setIcon(self.app.line_icon("undo",15)); self.undo.clicked.connect(lambda:self.app.undo(self.game_id))
+        pgn=QPushButton("PGN"); pgn.setIcon(self.app.line_icon("file",15)); pgn.clicked.connect(lambda:self.app.export_pgn(self.game_id))
+        reset=QPushButton("Reset"); reset.setIcon(self.app.line_icon("refresh",15)); reset.clicked.connect(lambda:self.app.reset_board(self.game_id))
         self.engine_btn=QPushButton("STOCKFISH · ON" if self.app.engine_enabled else "STOCKFISH · OFF"); self.engine_btn.clicked.connect(self.app.toggle_engine); self.engine_btn.setEnabled(bool(self.app.find_engine()))
-        self.clock_btn=QPushButton("AVVIA OROLOGIO"); self.clock_btn.clicked.connect(lambda:self.app.start_clock(self.game_id))
-        self.rotate_btn=QPushButton("RUOTA"); self.rotate_btn.clicked.connect(self.board.toggle_orientation)
-        self.theme_btn=QPushButton("TEMA"); self.theme_btn.clicked.connect(self.board.cycle_theme)
-        notes=QPushButton("NOTA"); notes.clicked.connect(lambda:self.app.prompt_match_note(self.game_id))
-        view_notes=QPushButton("VEDI NOTE"); view_notes.clicked.connect(lambda:self.app.show_match_notes(self.game_id))
-        draw_offer=QPushButton("PATTA CONCORDATA"); draw_offer.clicked.connect(lambda:self.app.offer_draw(self.game_id))
-        resign=QPushButton("ABBANDONO"); resign.clicked.connect(lambda:self.app.resign_game(self.game_id))
-        force=QPushButton("FORZA RISULTATO"); force.clicked.connect(lambda:self.app.force_game_result(self.game_id))
+        self.clock_btn=QPushButton("AVVIA OROLOGIO"); self.clock_btn.setIcon(self.app.line_icon("clock",15)); self.clock_btn.clicked.connect(lambda:self.app.start_clock(self.game_id))
+        self.rotate_btn=QPushButton("RUOTA"); self.rotate_btn.setIcon(self.app.line_icon("rotate",15)); self.rotate_btn.clicked.connect(self.board.toggle_orientation)
+        self.theme_btn=QPushButton("TEMA"); self.theme_btn.setIcon(self.app.line_icon("sliders",15)); self.theme_btn.clicked.connect(self.board.cycle_theme)
+        notes=QPushButton("NOTA"); notes.setIcon(self.app.line_icon("edit",15)); notes.clicked.connect(lambda:self.app.prompt_match_note(self.game_id))
+        view_notes=QPushButton("VEDI NOTE"); view_notes.setIcon(self.app.line_icon("eye",15)); view_notes.clicked.connect(lambda:self.app.show_match_notes(self.game_id))
+        draw_offer=QPushButton("PATTA CONCORDATA"); draw_offer.setIcon(self.app.line_icon("handshake",15)); draw_offer.clicked.connect(lambda:self.app.offer_draw(self.game_id))
+        resign=QPushButton("ABBANDONO"); resign.setIcon(self.app.line_icon("flag",15)); resign.clicked.connect(lambda:self.app.resign_game(self.game_id))
+        force=QPushButton("FORZA RISULTATO"); force.setIcon(self.app.line_icon("shield",15)); force.clicked.connect(lambda:self.app.force_game_result(self.game_id))
         control_top.addWidget(self.undo); control_top.addWidget(self.clock_btn); control_top.addStretch()
         control_top.addWidget(self.rotate_btn); control_top.addWidget(self.theme_btn)
         control_bottom.addWidget(notes); control_bottom.addWidget(view_notes)
@@ -671,7 +679,12 @@ class BoardCard(QFrame):
         self.known_ply=len(board.move_stack)
         visible=chess.Board()
         for move in board.move_stack[:self.history_index]: visible.push(move)
-        self.match.setText(f"{name(w)}  <span style='color:{GOLD}'>vs</span>  {name(b)}")
+        self.match.setText(f"ROUND {r}  ·  {gid}")
+        self.white_name.setText(name(w)); self.black_name.setText(name(b))
+        self.white_avatar.setText(name(w)[:1].upper()); self.black_avatar.setText(name(b)[:1].upper())
+        self.white_avatar.setToolTip(name(w)); self.black_avatar.setToolTip(name(b))
+        result=self.app.results.get(gid)
+        self.match_score.setText({"1-0":"1 : 0","1/2-1/2":"½ : ½","0-1":"0 : 1"}.get(result,"VS"))
         self.engine_btn.setText("STOCKFISH · ON" if self.app.engine_enabled else "STOCKFISH · OFF")
         clock_state=self.app.clock_data(gid)
         self.state_label.setText("CONCLUSA" if self.app.results.get(gid) else ("IN CORSO" if clock_state.get("started") or board.move_stack else "LIVE"))
@@ -731,7 +744,7 @@ class BroadcastWindow(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__(); self.setWindowTitle("Coppa dei 5 Re · Control Room")
-        self.resize(1500,950); self.setMinimumSize(980,680)
+        self.resize(1500,950); self.setMinimumSize(980,680); self._icon_cache={}
         self.results={}; self.penalties=[]; self.moves={}; self.boards={}; self.broadcast=None; self.engine_path=None; self.engine_enabled=True; self.engine_service=None; self.analysis_running_gid=None
         self._odds_cache_key=None; self._odds_cache=None
         self.time_control="15+3"; self.clocks={}; self.audit_log=[]; self.match_notes={}; self.referee=""
@@ -1230,6 +1243,126 @@ class MainWindow(QMainWindow):
         self._odds_cache_key=cache_key
         self._odds_cache=output
         return output.copy()
+
+    def line_icon(self, name, size=18, color="#9AA8B8"):
+        key=(name,size,color)
+        if key in self._icon_cache: return self._icon_cache[key]
+        paths={
+            "dashboard":'<rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="5" rx="1"/><rect x="13" y="10" width="8" height="11" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/>',
+            "live":'<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4M10 8l5 3-5 3z"/>',
+            "shuffle":'<path d="m16 3 4 4-4 4M4 7h3c5 0 5 10 10 10h3m-4-4 4 4-4 4M4 17h3c2 0 3-2 4-4M13 9c1-2 2-2 4-2"/>',
+            "calendar":'<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18M8 14h3M8 17h3M15 14h2"/>',
+            "trophy":'<path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0zM7 6H4v2a4 4 0 0 0 4 4M17 6h3v2a4 4 0 0 1-4 4"/>',
+            "chart":'<path d="M4 19V5M4 19h17m-14-4 4-4 3 2 5-7m-3 0h3v3"/>',
+            "flag":'<path d="M5 21V4m0 1c5-3 8 3 14 0v10c-6 3-9-3-14 0"/>',
+            "bracket":'<path d="M5 4v5a3 3 0 0 0 3 3h2M5 20v-5a3 3 0 0 1 3-3h2M12 12h4m0-4h3v8h-3"/>',
+            "archive":'<path d="M4 7h16v14H4zM3 3h18v4H3zM9 11h6"/>',
+            "compare":'<path d="M4 8h15l-3-3M20 16H5l3 3"/>',
+            "clipboard":'<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V2h6v2M8 9h8M8 13h8M8 17h5"/>',
+            "settings":'<circle cx="12" cy="12" r="3"/><path d="M19 15a2 2 0 0 0 1 2l-2 3-2-1-2 1h-4l-2-1-2 1-2-3 1-2v-4l-1-2 2-3 2 1 2-1h4l2 1 2-1 2 3-1 2z"/>',
+            "left":'<path d="m15 18-6-6 6-6"/>',"right":'<path d="m9 18 6-6-6-6"/>',
+            "undo":'<path d="M9 14 4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3"/>',
+            "file":'<path d="M6 3h8l5 5v13H6zM14 3v5h5M9 13h7M9 17h7"/>',
+            "refresh":'<path d="M20 7v5h-5M4 17v-5h5M5 9a7 7 0 0 1 13-3l2 6M4 12l2 6a7 7 0 0 0 12-3"/>',
+            "clock":'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',"rotate":'<path d="M4 7V3m0 4h4m-3 0a8 8 0 1 1-1 7"/>',
+            "sliders":'<path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="8" cy="18" r="2"/>',
+            "edit":'<path d="m4 16-.8 4.8L8 20l11-11-4-4zM13.5 6.5l4 4"/>',"eye":'<path d="M2.5 12s3.3-6 9.5-6 9.5 6 9.5 6-3.3 6-9.5 6-9.5-6-9.5-6z"/><circle cx="12" cy="12" r="2.5"/>',
+            "handshake":'<path d="m3 10 4-4 4 2 3-1 7 4-4 6-4-2-3 2zM7 6l3-2 4 2 3-1 4 3M10 8l4 4M8 13l4 3"/>',
+            "shield":'<path d="M12 3 20 6v5c0 5-3.5 8-8 10-4.5-2-8-5-8-10V6zM9 12l2 2 4-5"/>',"monitor":'<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>',"download":'<path d="M12 3v12m-5-5 5 5 5-5M4 17v4h16v-4"/>'
+        }
+        svg=f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 24 24"><g fill="none" stroke="{color}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">{paths.get(name,paths["dashboard"])}</g></svg>'
+        renderer=QSvgRenderer(QByteArray(svg.encode("utf-8")))
+        pixmap=QPixmap(size,size); pixmap.fill(Qt.GlobalColor.transparent)
+        painter=QPainter(pixmap); renderer.render(painter); painter.end()
+        icon=QIcon(pixmap); self._icon_cache[key]=icon; return icon
+
+    def open_game_in_live(self,gid):
+        self.nav.setCurrentRow(1)
+        if self.live_cards:
+            idx=self.live_cards[0].selector.findData(gid)
+            if idx>=0: self.live_cards[0].selector.setCurrentIndex(idx)
+        self.statusBar().showMessage(f"Partita {gid} aperta in LIVE ARENA.",2500)
+
+    def filter_calendar_player(self,pid):
+        self.nav.setCurrentRow(3)
+        idx=self.filter_player.findData(pid)
+        if idx>=0: self.filter_player.setCurrentIndex(idx)
+
+    def command_set_result(self,gid):
+        labels=[label for value,label in RESULT_OPTIONS]
+        choice,ok=QInputDialog.getItem(self,"Registra risultato",f"{gid} · nuovo stato:",labels,0,False)
+        if ok:
+            value=next((value for value,label in RESULT_OPTIONS if label==choice),None)
+            self.set_result(gid,value)
+
+    def open_command_palette(self):
+        dialog=QDialog(self); dialog.setWindowTitle("Command palette · Coppa dei 5 Re")
+        dialog.setModal(True); dialog.resize(680,560); dialog.setMinimumWidth(620)
+        root=QVBoxLayout(dialog); root.setContentsMargins(18,18,18,14); root.setSpacing(10)
+        search=QLineEdit(); search.setPlaceholderText("Cerca schermate, giocatori, partite e azioni…")
+        search.setClearButtonEnabled(True); root.addWidget(search)
+        results=QListWidget(); results.setObjectName("CommandResults"); results.setIconSize(QSize(17,17)); root.addWidget(results,1)
+        callbacks={}; counter=[0]
+        def add(label,category,callback,icon="dashboard"):
+            i=counter[0]; counter[0]+=1
+            item=QListWidgetItem(self.line_icon(icon,17),label)
+            item.setData(Qt.ItemDataRole.UserRole,i); item.setToolTip(category)
+            results.addItem(item); callbacks[i]=callback
+        pages=[("Dashboard",0,"dashboard"),("Live Arena",1,"live"),("Estrazione",2,"shuffle"),
+            ("Calendario",3,"calendar"),("Classifica",4,"trophy"),("Quote",5,"chart"),("Penalità",6,"flag"),
+            ("Playoff",7,"bracket"),("Archivio",8,"archive"),("Testa a testa",9,"compare"),
+            ("Registro",10,"clipboard"),("Impostazioni",11,"settings")]
+        for label,index,icon in pages: add("Apri "+label,"Navigazione",lambda i=index:self.nav.setCurrentRow(i),icon)
+        for pid in ORDER:
+            add("Filtra calendario · "+name(pid),"Giocatori · calendario",lambda p=pid:self.filter_calendar_player(p),"calendar")
+            add("Registra ritiro · "+name(pid),"Giocatori · Art. 11",lambda p=pid:self.withdraw_player(p),"flag")
+        for gid,rnd,w,b in GAMES:
+            caption=f"ROUND {rnd} · {name(w)} vs {name(b)}"
+            add("Modifica partita · "+caption,"Apri LIVE ARENA",lambda g=gid:self.open_game_in_live(g),"live")
+            add("Registra risultato · "+gid,"Inserisci o modifica il risultato",lambda g=gid:self.command_set_result(g),"edit")
+            add("Esporta PGN · "+gid,"Esporta singola partita",lambda g=gid:self.export_pgn(g),"download")
+            add("Apri note · "+gid,"Note e incidenti arbitrali",lambda g=gid:self.show_match_notes(g),"file")
+        add("Esporta PGN del torneo","Esportazione completa",self.export_all_pgn,"download")
+        add("Crea backup","Salva dati locali",self.export_backup,"archive")
+        add("Ripristina backup","Ripristina dati locali",self.restore_backup,"refresh")
+        def filter_items(value):
+            q=value.strip().casefold(); first=None
+            for i in range(results.count()):
+                item=results.item(i); hidden=bool(q) and q not in (item.text()+" "+item.toolTip()).casefold()
+                item.setHidden(hidden)
+                if not hidden and first is None: first=item
+            results.setCurrentItem(first)
+        def execute(item=None):
+            if item is None: return
+            callback=callbacks.get(item.data(Qt.ItemDataRole.UserRole))
+            if callback: dialog.accept(); callback()
+        search.textChanged.connect(filter_items); results.itemActivated.connect(execute)
+        search.returnPressed.connect(lambda:execute(results.currentItem()))
+        buttons=QHBoxLayout(); hint=QLabel("CTRL + K  ·  NAVIGAZIONE E AZIONI RAPIDE"); hint.setObjectName("Footnote")
+        buttons.addWidget(hint); buttons.addStretch()
+        close=QPushButton("CHIUDI"); close.clicked.connect(dialog.reject); buttons.addWidget(close)
+        open_button=QPushButton("APRI"); open_button.setObjectName("PrimaryButton")
+        open_button.clicked.connect(lambda:execute(results.currentItem())); buttons.addWidget(open_button)
+        root.addLayout(buttons); filter_items(""); search.setFocus(); dialog.exec()
+
+    def refresh_podium(self,rows):
+        if not hasattr(self,"podium_entries"): return
+        for place,row in enumerate(rows[:3],1):
+            entry=self.podium_entries[place]; pid=row["id"]
+            entry["rank"].setText(f"#{place}  ·  "+("LEADER" if place==1 else "PODIO"))
+            entry["avatar"].setText(name(pid)[:1].upper()); entry["player"].setText(name(pid))
+            entry["points"].setText(f'{row["points"]:.1f}')
+            entry["detail"].setText(f'{row["wins"]} VITTORIE  ·  {row["draws"]} PATTE  ·  {row["losses"]} SCONFITTE')
+            recent=[]
+            for gid,r,w,b in GAMES:
+                result=self.results.get(gid)
+                if pid not in (w,b) or result in (None,"VOID"): continue
+                if result=="1/2-1/2": outcome="P"
+                elif (result=="1-0" and pid==w) or (result=="0-1" and pid==b): outcome="V"
+                else: outcome="S"
+                recent.append(outcome)
+            entry["form"].setText("FORMA RECENTE  ·  "+("  /  ".join(recent[-3:]) if recent else "In attesa dei risultati"))
+
     def build_ui(self):
         root=QWidget(); outer=QVBoxLayout(root); outer.setContentsMargins(22,18,22,16); outer.setSpacing(14)
         header=QHBoxLayout(); logo=LogoWidget(76,82)
@@ -1237,16 +1370,17 @@ class MainWindow(QMainWindow):
         title=QLabel("COPPA DEI 5 RE"); title.setObjectName("BrandTitle")
         sub=QLabel("CONTROL ROOM  ·  TOURNAMENT EDITION"); sub.setObjectName("Eyebrow")
         texts.addWidget(title); texts.addWidget(sub); header.addLayout(texts); header.addStretch()
-        saved=QLabel("●  OFFLINE  ·  SALVATAGGIO AUTOMATICO"); saved.setObjectName("SavedBadge"); header.addWidget(saved)
+        saved=QLabel("OFFLINE  ·  SALVATAGGIO AUTOMATICO"); saved.setObjectName("SavedBadge"); header.addWidget(saved)
         time_label=QLabel("QUALIFICAZIONE · 15+3   |   PLAYOFF · 30+10"); time_label.setObjectName("Eyebrow"); header.addWidget(time_label)
-        stream=QPushButton("◉  VISTA STREAMING"); stream.setObjectName("PrimaryButton"); stream.clicked.connect(self.open_broadcast); header.addWidget(stream)
+        stream=QPushButton("VISTA STREAMING"); stream.setIcon(self.line_icon("monitor",17)); stream.setObjectName("PrimaryButton"); stream.clicked.connect(self.open_broadcast); header.addWidget(stream)
         outer.addLayout(header)
         workspace=QHBoxLayout(); workspace.setSpacing(12)
         self.nav=QListWidget(); self.nav.setObjectName("Sidebar"); self.nav.setFixedWidth(190)
-        nav_items=["◈  DASHBOARD","♟  LIVE ARENA","♜  ESTRAZIONE","▦  CALENDARIO","☷  CLASSIFICA",
-                   "◉  QUOTE","⚑  PENALITÀ","♛  PLAYOFF","▤  ARCHIVIO","⇄  TESTA A TESTA",
-                   "☷  REGISTRO","⚙  IMPOSTAZIONI"]
-        self.nav.addItems(nav_items)
+        nav_items=[("Dashboard","dashboard"),("Live Arena","live"),("Estrazione","shuffle"),("Calendario","calendar"),
+            ("Classifica","trophy"),("Quote","chart"),("Penalità","flag"),("Playoff","bracket"),
+            ("Archivio","archive"),("Testa a testa","compare"),("Registro","clipboard"),("Impostazioni","settings")]
+        self.nav.setIconSize(QSize(18,18))
+        for label,icon in nav_items: self.nav.addItem(QListWidgetItem(self.line_icon(icon,18),label))
         self.tabs=QStackedWidget()
         pages=[self.build_dashboard(),self.build_live(),self.build_draw_page(),self.build_calendar(),
                self.build_standings(),self.build_odds(),self.build_penalties(),self.build_playoffs(),
@@ -1266,7 +1400,15 @@ class MainWindow(QMainWindow):
         title=QLabel("<span style='font-size:27px;font-weight:900;color:#EEF1F5'>C5R · COPPA DEI 5 RE</span><br><span style='color:#D8B36A;letter-spacing:3px'>CHESS TOURNAMENT CONTROL ROOM</span>")
         title.setTextFormat(Qt.TextFormat.RichText)
         hl.addWidget(crown); hl.addWidget(title,1); root.addWidget(hero)
-        self.dashboard_summary=QLabel(); self.dashboard_summary.setObjectName("SectionTitle"); root.addWidget(self.dashboard_summary)
+        metric_row=QHBoxLayout(); metric_row.setSpacing(10); self.dashboard_stat_values={}
+        for key,label in (("done","PARTITE CONCLUSE"),("running","IN CORSO"),("retired","RITIRI")):
+            metric=QFrame(); metric.setObjectName("MetricCard")
+            ml=QVBoxLayout(metric); ml.setContentsMargins(16,12,16,12); ml.setSpacing(3)
+            value=QLabel("0"); value.setObjectName("MetricValue")
+            caption=QLabel(label); caption.setObjectName("MetricCaption")
+            ml.addWidget(value); ml.addWidget(caption); metric_row.addWidget(metric,1)
+            self.dashboard_stat_values[key]=value
+        root.addLayout(metric_row)
         self.dashboard_detail=QLabel(); self.dashboard_detail.setObjectName("Muted"); root.addWidget(self.dashboard_detail)
         actions=QGridLayout()
         items=[("ESPORTA PGN TORNEO",self.export_all_pgn),("CLASSIFICA CSV",self.export_standings_csv),
@@ -1366,7 +1508,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Impostazioni torneo salvate.",2500)
 
     def install_shortcuts(self):
-        shortcuts=[("Ctrl+S",self.save),("Ctrl+E",self.export_all_pgn),
+        shortcuts=[("Ctrl+K",self.open_command_palette),("Ctrl+S",self.save),("Ctrl+E",self.export_all_pgn),
                    ("Ctrl+Shift+B",self.export_backup),("Ctrl+1",lambda:self.tabs.setCurrentIndex(1)),
                    ("Ctrl+2",lambda:self.tabs.setCurrentIndex(2)),("Ctrl+3",lambda:self.tabs.setCurrentIndex(3)),
                    ("Ctrl+Z",lambda:self.undo(self.live_cards[0].game_id)),
@@ -1380,10 +1522,12 @@ class MainWindow(QMainWindow):
             shortcut.activated.connect(callback); self.shortcuts.append(shortcut)
 
     def refresh_dashboard(self):
-        if not hasattr(self,"dashboard_summary"): return
+        if not hasattr(self,"dashboard_stat_values"): return
         done=sum(1 for value in self.results.values() if value!="VOID"); running=sum(1 for gid,_,_,_ in GAMES if self.clock_data(gid).get("started") or self.moves.get(gid))
         retired=sum(1 for player in ORDER if player in self.withdrawn_players)
-        self.dashboard_summary.setText(f"PARTITE CONCLUSE  {done}/10     ·     IN CORSO  {running}     ·     RITIRATI {retired}     ·     15+3 / PLAYOFF 30+10")
+        self.dashboard_stat_values["done"].setText(f"{done}/10")
+        self.dashboard_stat_values["running"].setText(str(running))
+        self.dashboard_stat_values["retired"].setText(str(retired))
         leader=self.standings()[0]
         self.dashboard_detail.setText(f"LEADER ATTUALE  ·  {name(leader['id'])}  ·  {leader['points']:.1f} punti     |     ARBITRO  ·  {self.referee or 'non impostato'}")
 
@@ -1722,9 +1866,9 @@ class MainWindow(QMainWindow):
         desc=QLabel("Il sorteggio crea un round-robin completo: 5 turni, 2 partite per turno e un riposo a turno. Ogni coppia si incontra una sola volta e ogni giocatore riposa una volta.")
         desc.setObjectName("Muted"); desc.setWordWrap(True); layout.addWidget(desc)
         controls=QHBoxLayout()
-        draw=QPushButton("♜  ESTRAZIONE RANDOM"); draw.setObjectName("PrimaryButton"); draw.clicked.connect(self.random_draw)
-        edit=QPushButton("MODIFICA GIRONE"); edit.clicked.connect(self.open_schedule_editor)
-        reset=QPushButton("RIPRISTINA CALENDARIO"); reset.clicked.connect(self.reset_schedule)
+        draw=QPushButton("ESTRAZIONE CASUALE"); draw.setIcon(self.line_icon("shuffle",16)); draw.setObjectName("PrimaryButton"); draw.clicked.connect(self.random_draw)
+        edit=QPushButton("MODIFICA GIRONE"); edit.setIcon(self.line_icon("edit",16)); edit.clicked.connect(self.open_schedule_editor)
+        reset=QPushButton("RIPRISTINA CALENDARIO"); reset.setIcon(self.line_icon("refresh",16)); reset.clicked.connect(self.reset_schedule)
         controls.addWidget(draw); controls.addWidget(edit); controls.addStretch(); controls.addWidget(reset)
         layout.addLayout(controls)
         self.draw_table=QTableWidget(5,4); self.draw_table.setHorizontalHeaderLabels(["TURNO","TAVOLO 1","TAVOLO 2","RIPOSA"])
@@ -1838,6 +1982,28 @@ class MainWindow(QMainWindow):
         h=QLabel("CLASSIFICA GENERALE"); h.setObjectName("SectionTitle"); l.addWidget(h)
         d=QLabel("Vittoria 1 pt · patta 0,5 pt · sconfitta 0 pt · penalità sottratte. Spareggi Art. 8 in ordine: scontro diretto (solo due), Sonneborn–Berger, vittorie; poi Armageddon o mini-girone.")
         d.setObjectName("Muted"); l.addWidget(d)
+        podium_row=QHBoxLayout(); podium_row.setSpacing(10); self.podium_entries={}
+        podium_colors={1:("#D8B36A","#352A19"),2:("#B8C3CF","#202A35"),3:("#B9815D","#33251F")}
+        for place in (2,1,3):
+            card=QFrame(); card.setObjectName("PodiumCard")
+            border,avatar_bg=podium_colors[place]
+            card.setStyleSheet(f"QFrame#PodiumCard{{background:{PANEL};border:1px solid {border};border-radius:14px;}}")
+            card.setMinimumHeight(166 if place==1 else 150)
+            content=QVBoxLayout(card); content.setContentsMargins(14,12,14,12); content.setSpacing(5)
+            rank=QLabel(f"#{place}"); rank.setObjectName("PodiumRank")
+            avatar=QLabel("?"); avatar.setObjectName("PlayerAvatar"); avatar.setFixedSize(42,42)
+            avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            avatar.setStyleSheet(f"background:{avatar_bg};color:{TEXT};border:1px solid {border};border-radius:21px;font-size:16px;font-weight:900;")
+            player=QLabel("Da definire"); player.setObjectName("PodiumPlayer")
+            points=QLabel("0.0"); points.setObjectName("PodiumPoints")
+            detail=QLabel("0 VITTORIE  ·  0 PATTE  ·  0 SCONFITTE"); detail.setObjectName("PodiumDetail")
+            form=QLabel("FORMA RECENTE  ·  In attesa dei risultati"); form.setObjectName("PodiumForm")
+            content.addWidget(rank); content.addWidget(avatar,0,Qt.AlignmentFlag.AlignHCenter)
+            content.addWidget(player,0,Qt.AlignmentFlag.AlignHCenter); content.addWidget(points,0,Qt.AlignmentFlag.AlignHCenter)
+            content.addWidget(detail,0,Qt.AlignmentFlag.AlignHCenter); content.addWidget(form,0,Qt.AlignmentFlag.AlignHCenter)
+            podium_row.addWidget(card,2 if place==1 else 1)
+            self.podium_entries[place]={"rank":rank,"avatar":avatar,"player":player,"points":points,"detail":detail,"form":form}
+        l.addLayout(podium_row)
         self.st_table=QTableWidget(0,8); self.st_table.setHorizontalHeaderLabels(["POS","GIOCATORE","G","V","X","P","PEN.","PT"])
         self.st_table.verticalHeader().setVisible(False); self.st_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.st_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
@@ -2048,7 +2214,7 @@ class MainWindow(QMainWindow):
         self.apply_calendar_filters()
         if self.broadcast and self.broadcast.isVisible(): self.broadcast.refresh_from_app()
     def refresh_standings(self):
-        rows=self.standings(); self.st_table.setRowCount(5); previous=None; rank=0
+        rows=self.standings(); self.refresh_podium(rows); self.st_table.setRowCount(5); previous=None; rank=0
         for i,x in enumerate(rows):
             current_key=(x["points"],self.tie_break_value(x["id"],[r["id"] for r in rows if r["points"]==x["points"]]))
             if previous is None or current_key!=previous: rank=i+1
@@ -2057,7 +2223,7 @@ class MainWindow(QMainWindow):
             vals=[f"{rank}°",display_name,str(x["played"]),str(x["wins"]),str(x["draws"]),str(x["losses"]),
                    f"{x['penalty']:+.1f}" if x["penalty"] else "—",f"{x['points']:.1f}"]
             for c,val in enumerate(vals):
-                item=QTableWidgetItem(("🥇 " if rank==1 else "🥈 " if rank==2 else "🥉 " if rank==3 else "")+val if c==0 else val); item.setTextAlignment(Qt.AlignmentFlag.AlignCenter if c!=1 else Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignLeft)
+                item=QTableWidgetItem(val); item.setTextAlignment(Qt.AlignmentFlag.AlignCenter if c!=1 else Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignLeft)
                 if x["id"]=="simone": item.setForeground(QColor(GOLD))
                 if c==7: item.setFont(QFont("Segoe UI",11,QFont.Weight.Bold))
                 self.st_table.setItem(i,c,item)
@@ -2151,29 +2317,50 @@ class MainWindow(QMainWindow):
 
 STYLE=f"""
 QMainWindow,QWidget{{background:{BG};color:{TEXT};font-family:'Segoe UI';font-size:13px;}}
+QDialog{{background:{BG};}}
+QToolTip{{background:{PANEL2};color:{TEXT};border:1px solid {LINE};padding:6px 8px;}}
 QTabWidget::pane{{border:1px solid {LINE};border-radius:12px;background:{BG};top:-1px;}}
 QTabBar::tab{{background:#101721;color:{MUTED};padding:12px 18px;margin-right:4px;border-top-left-radius:8px;border-top-right-radius:8px;font-weight:800;letter-spacing:1px;}}
 QTabBar::tab:selected{{background:#1B2633;color:{GOLD};border-bottom:2px solid {GOLD};}}
 QFrame#Card{{background:{PANEL};border:1px solid {LINE};border-radius:14px;}}
-QLabel#BrandTitle{{color:{TEXT};font-size:22px;font-weight:900;letter-spacing:3px;}}
+QLabel#BrandTitle{{color:{TEXT};font-size:28px;font-weight:900;letter-spacing:3px;}}
 QLabel#Eyebrow{{color:{GOLD};font-size:10px;font-weight:900;letter-spacing:2px;}}
-QLabel#MatchTitle{{color:{TEXT};font-size:17px;font-weight:800;}}
-QLabel#SectionTitle{{color:{TEXT};font-size:21px;font-weight:900;letter-spacing:1px;padding:8px 0;}}
+QLabel#MatchTitle{{color:{TEXT};font-size:18px;font-weight:850;}}
+QLabel#MatchPlayer{{color:{TEXT};font-size:13px;font-weight:750;}}
+QLabel#MatchScore{{color:{GOLD};font-size:21px;font-weight:900;padding:0 8px;}}
+QLabel#SectionTitle{{color:{TEXT};font-size:24px;font-weight:900;letter-spacing:1px;padding:12px 0 8px;}}
 QLabel#Muted{{color:{MUTED};font-size:12px;}}
+QLabel#MetricValue{{color:{TEXT};font-size:31px;font-weight:900;letter-spacing:-1px;}}
+QLabel#MetricCaption{{color:{MUTED};font-size:10px;font-weight:850;letter-spacing:1.4px;}}
+QLabel#PodiumRank{{color:{GOLD};font-size:10px;font-weight:900;letter-spacing:1.5px;}}
+QLabel#PodiumPlayer{{color:{TEXT};font-size:16px;font-weight:850;}}
+QLabel#PodiumPoints{{color:{GOLD};font-size:28px;font-weight:900;}}
+QLabel#PodiumDetail{{color:{MUTED};font-size:9px;font-weight:800;letter-spacing:.4px;}}
+QLabel#PodiumForm{{color:{MUTED};font-size:10px;font-weight:750;}}
+QLabel#PlayerAvatar{{background:#202B38;color:{GOLD};border:1px solid {LINE};border-radius:16px;font-size:13px;font-weight:900;}}
+QLabel#StatusPill{{color:{GREEN};font-size:10px;font-weight:900;letter-spacing:1px;padding:5px 9px;background:#10241F;border:1px solid #28513F;border-radius:8px;}}
 QLabel#Footnote{{color:#677485;font-size:10px;letter-spacing:1.5px;}}
+QFrame#MetricCard{{background:{PANEL};border:1px solid {LINE};border-radius:13px;}}
+QListWidget#CommandResults{{background:{PANEL};border:1px solid {LINE};border-radius:10px;padding:7px;}}
+QListWidget#CommandResults::item{{color:{TEXT};padding:12px 10px;border-bottom:1px solid {LINE};border-radius:6px;}}
+QListWidget#CommandResults::item:selected{{background:#263647;color:{GOLD};}}
 QLabel#SavedBadge{{color:{GREEN};font-size:10px;font-weight:800;letter-spacing:1px;padding:8px 12px;background:#10241F;border:1px solid #28513F;border-radius:8px;}}
-QPushButton{{background:{PANEL2};color:{TEXT};border:1px solid {LINE};border-radius:8px;padding:9px 13px;font-weight:700;}}
-QPushButton:hover{{border-color:{GOLD};color:{GOLD};}}
+QPushButton{{background:{PANEL2};color:{TEXT};border:1px solid {LINE};border-radius:9px;padding:10px 14px;font-weight:750;min-height:18px;}}
+QPushButton:hover{{border-color:{GOLD};color:{GOLD};background:#1B2937;}}
+QPushButton:focus{{border:1px solid {GOLD};}}
+QPushButton:pressed{{background:#202D3B;}}
 QPushButton:disabled{{color:#5E6875;background:#10151C;}}
 QPushButton#PrimaryButton{{background:#B68D48;color:#10151B;border:1px solid #D6B16B;font-weight:900;}}
 QPushButton#PrimaryButton:hover{{background:#D6B16B;color:#080B10;}}
-QComboBox,QLineEdit,QDoubleSpinBox{{background:#0D141D;color:{TEXT};border:1px solid {LINE};border-radius:7px;padding:8px 10px;min-height:22px;}}
+QComboBox,QLineEdit,QDoubleSpinBox{{background:#0D141D;color:{TEXT};border:1px solid {LINE};border-radius:8px;padding:9px 11px;min-height:24px;}}
+QComboBox:focus,QLineEdit:focus,QDoubleSpinBox:focus{{border:1px solid {GOLD};}}
 QComboBox QAbstractItemView{{background:{PANEL};color:{TEXT};selection-background-color:#334457;}}
 QTableWidget{{background:{PANEL};alternate-background-color:#141E29;border:1px solid {LINE};border-radius:10px;gridline-color:{LINE};}}
-QTableWidget::item{{padding:12px 8px;border-bottom:1px solid {LINE};}}
+QTableWidget::item{{padding:14px 10px;border-bottom:1px solid {LINE};}}
+QTableWidget::item:selected{{background:#263647;color:{TEXT};}}
 QHeaderView::section{{background:#1A2633;color:{GOLD};padding:11px 8px;border:none;font-size:10px;font-weight:900;}}
 QListWidget#Sidebar{{background:#0C131D;border:1px solid {LINE};border-radius:12px;padding:8px;font-weight:800;}}
-QListWidget#Sidebar::item{{color:{MUTED};padding:13px 10px;border-radius:8px;margin:3px 0;}}
+QListWidget#Sidebar::item{{color:{MUTED};padding:13px 12px;border-radius:9px;margin:3px 0;spacing:10px;}}
 QListWidget#Sidebar::item:selected{{background:#1B2633;color:{GOLD};border-left:3px solid {GOLD};}}
 QListWidget#Sidebar::item:hover{{background:#151F2B;color:{TEXT};}}
 QListWidget{{background:{PANEL};border:1px solid {LINE};border-radius:10px;padding:8px;}}
