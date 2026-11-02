@@ -91,6 +91,10 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python windows_app/match_web_board_smoke.py
+      - name: Test Windows public portal, remote token, referee alerts and final package
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python windows_app/public_spectator_portal_smoke.py
       - name: Test odds and streaming controls
         env:
           QT_QPA_PLATFORM: offscreen
