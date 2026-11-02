@@ -82,6 +82,8 @@ class BoardWidget(QWidget):
         super().__init__()
         self.interactive=interactive
         self.board=chess.Board()
+        self._known_ply=0
+        self._known_last_move=None
         self.selected=None
         self.targets=set()
         self.captures=set()
@@ -108,14 +110,19 @@ class BoardWidget(QWidget):
         return QSize(520,520)
 
     def set_position(self,board,locked=False):
-        old_len=len(self.board.move_stack)
-        old_last=self.board.peek() if self.board.move_stack else None
-        self.board=board.copy(stack=True)
-        self.locked=locked
-        new_last=self.board.peek() if self.board.move_stack else None
-        if len(self.board.move_stack)>old_len or (new_last and new_last!=old_last):
+        # BoardWidget is read-only with respect to the game state; keeping the
+        # authoritative board reference avoids an O(ply) history copy on every move.
+        new_ply=len(board.move_stack)
+        new_last=board.peek() if board.move_stack else None
+        if new_ply>self._known_ply or (new_last is not None and new_last!=self._known_last_move):
             self.move_flash=1.0
-            self.flash_timer.start()
+        self._known_ply=new_ply
+        self._known_last_move=new_last
+        self.board=board
+        self.locked=locked
+        # A 40 ms timer repainted the entire vector board many times after each move.
+        # Keep the last-move marker static: one paint is enough and feels immediate.
+        self.flash_timer.stop()
         self._clear_selection()
         self.promotion=None
         self.update()
