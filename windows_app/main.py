@@ -3453,7 +3453,7 @@ async function poll(){{
   if(pollBusy||document.hidden)return;
   pollBusy=true;
   try{{
-    const response=await fetch(STATE_URL+'?t='+Date.now(),{{cache:'no-store'}});
+    const response=await fetch(STATE_URL+'&t='+Date.now(),{{cache:'no-store'}});
     if(response.ok)renderState(await response.json());
   }}catch(error){{}}
   finally{{pollBusy=false;}}
@@ -3577,27 +3577,38 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
             return self.match_http_host,self.match_http_port
         app=self
         class MatchHandler(BaseHTTPRequestHandler):
+            def send_content(self,status,content,content_type):
+                body=content.encode("utf-8") if isinstance(content,str) else content
+                self.send_response(status)
+                self.send_header("Content-Type",content_type)
+                self.send_header("Content-Length",str(len(body)))
+                self.send_header("Cache-Control","no-store, max-age=0")
+                self.send_header("X-Content-Type-Options","nosniff")
+                self.end_headers()
+                self.wfile.write(body)
             def do_GET(self):
                 parsed=urllib.parse.urlparse(self.path)
                 if parsed.path=="/health":
-                    body=b"C5R local match server OK"
-                    self.send_response(200)
-                    self.send_header("Content-Type","text/plain; charset=utf-8")
-                    self.send_header("Content-Length",str(len(body)))
-                    self.end_headers(); self.wfile.write(body); return
+                    self.send_content(200,b"C5R local match server OK","text/plain; charset=utf-8")
+                    return
+                query=urllib.parse.parse_qs(parsed.query)
+                token=query.get("token",[""])[0]
+                if not app.valid_spectator_token(token):
+                    self.send_error(403,"Link spettatore non valido o scaduto")
+                    return
+                if parsed.path=="/portal":
+                    self.send_content(200,app.portal_web_html(),"text/html; charset=utf-8")
+                    return
+                if parsed.path=="/api/portal":
+                    self.send_content(200,json.dumps(app.public_portal_state(),ensure_ascii=True),"application/json; charset=utf-8")
+                    return
                 if parsed.path.startswith("/api/match/"):
                     gid=urllib.parse.unquote(parsed.path[len("/api/match/"):])
                     state=app.match_web_state(gid)
                     if state is None:
                         self.send_error(404,"Partita non trovata")
                         return
-                    body=json.dumps(state,ensure_ascii=True).encode("utf-8")
-                    self.send_response(200)
-                    self.send_header("Content-Type","application/json; charset=utf-8")
-                    self.send_header("Content-Length",str(len(body)))
-                    self.send_header("Cache-Control","no-store")
-                    self.end_headers()
-                    self.wfile.write(body)
+                    self.send_content(200,json.dumps(state,ensure_ascii=True),"application/json; charset=utf-8")
                     return
                 if parsed.path.startswith("/match/"):
                     gid=urllib.parse.unquote(parsed.path[len("/match/"):])
@@ -3605,13 +3616,7 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
                     if page is None:
                         self.send_error(404,"Partita non trovata")
                         return
-                    body=page.encode("utf-8")
-                    self.send_response(200)
-                    self.send_header("Content-Type","text/html; charset=utf-8")
-                    self.send_header("Content-Length",str(len(body)))
-                    self.send_header("Cache-Control","no-store")
-                    self.end_headers()
-                    self.wfile.write(body)
+                    self.send_content(200,page,"text/html; charset=utf-8")
                     return
                 self.send_error(404,"Not found")
             def log_message(self,format,*args):
@@ -3634,42 +3639,114 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
                 return self.match_http_host,self.match_http_port
             except OSError as exc:
                 last_error=exc
-        raise RuntimeError(f"Non è stato possibile avviare il server locale sulle porte 8765–8774: {last_error}")
+        message=f"Non è stato possibile avviare il server locale sulle porte 8765–8774: {last_error}"
+        self.record_operational_alert("Server spettatori non disponibile",message,"danger","settings","local-server-bind-failed")
+        raise RuntimeError(message)
 
-    def match_web_url(self,gid,host_override=None):
-        host,port=self.start_match_web_server(host_override)
-        return f"http://{host}:{port}/match/{urllib.parse.quote(gid,safe='')}"
+    def match_web_url(self,gid,host_override=None,public=False):
+        host,port=self.start_match_web_server("127.0.0.1" if public else host_override)
+        path="/match/"+urllib.parse.quote(gid,safe="")
+        if public:
+            if not self.public_base_url:
+                raise ValueError("Configura prima un indirizzo pubblico HTTPS nelle Impostazioni.")
+            base=self.public_base_url
+        else:
+            base=f"http://{host}:{port}"
+        return base+path+"?token="+urllib.parse.quote(self.spectator_token,safe="")
+
+    def portal_web_url(self,host_override=None,public=False):
+        host,port=self.start_match_web_server("127.0.0.1" if public else host_override)
+        if public:
+            if not self.public_base_url:
+                raise ValueError("Configura prima un indirizzo pubblico HTTPS nelle Impostazioni.")
+            base=self.public_base_url
+        else:
+            base=f"http://{host}:{port}"
+        return base+"/portal?token="+urllib.parse.quote(self.spectator_token,safe="")
 
     def show_match_qr_dialog(self,gid):
         try:
-            url=self.match_web_url(gid)
             dialog=QDialog(self)
             dialog.setWindowTitle(f"QR · {gid}")
-            dialog.resize(420,480)
+            dialog.resize(440,560)
             layout=QVBoxLayout(dialog)
             layout.addWidget(ui_label(f"QR TAVOLO · {gid}","h2",align=Qt.AlignmentFlag.AlignCenter))
-            image=QLabel()
-            image.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            image.setPixmap(self.make_qr_pixmap(url,270))
+            mode=QComboBox()
+            mode.addItem("Rete Wi-Fi / LAN","local")
+            if self.public_base_url:
+                mode.addItem("Internet · HTTPS protetto","public")
+                mode.setCurrentIndex(1)
+            layout.addWidget(mode)
+            image=QLabel(); image.setAlignment(Qt.AlignmentFlag.AlignCenter)
             layout.addWidget(image)
-            link=QLineEdit(url); link.setReadOnly(True)
+            link=QLineEdit(); link.setReadOnly(True); link.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             layout.addWidget(link)
-            layout.addWidget(ui_label(
-                "Scansiona il codice con il telefono collegato alla stessa rete Wi-Fi/LAN. "
-                "La pagina mostra scacchiera e cronologia mosse in sola lettura; la posizione si aggiorna automaticamente ogni secondo.",
-                "muted",wrap=True))
+            hint=ui_label("Accesso da Internet disponibile solo quando il tunnel HTTPS è attivo e inoltra alla porta locale indicata nelle Impostazioni.","muted",wrap=True)
+            layout.addWidget(hint)
+            def update_link():
+                try:
+                    is_public=mode.currentData()=="public"
+                    url=self.match_web_url(gid,public=is_public)
+                    link.setText(url);image.setPixmap(self.make_qr_pixmap(url,270))
+                    hint.setText(
+                        f"Link pubblico HTTPS · token privato. Inoltra la porta locale {self.match_http_port} al PC arbitro."
+                        if is_public else "Il telefono deve essere collegato alla stessa rete Wi-Fi/LAN del PC Windows."
+                    )
+                except Exception as exc:
+                    link.clear();image.clear();hint.setText(str(exc))
+            mode.currentIndexChanged.connect(update_link)
+            update_link()
             buttons=QHBoxLayout()
             copy=QPushButton("COPIA LINK")
-            copy.clicked.connect(lambda:QApplication.clipboard().setText(url))
+            copy.clicked.connect(lambda:QApplication.clipboard().setText(link.text()))
             open_local=QPushButton("APRI SUL PC")
-            open_local.clicked.connect(lambda:QDesktopServices.openUrl(QUrl(url)))
-            close=QPushButton("CHIUDI")
-            close.clicked.connect(dialog.accept)
-            buttons.addWidget(copy); buttons.addWidget(open_local); buttons.addWidget(close)
+            open_local.clicked.connect(lambda:QDesktopServices.openUrl(QUrl(link.text())) if link.text() else None)
+            close=QPushButton("CHIUDI");close.clicked.connect(dialog.accept)
+            buttons.addWidget(copy);buttons.addWidget(open_local);buttons.addWidget(close)
             layout.addLayout(buttons)
             dialog.exec()
         except Exception as exc:
             QMessageBox.warning(self,"QR non disponibile",str(exc))
+
+    def show_portal_qr_dialog(self):
+        try:
+            dialog=QDialog(self)
+            dialog.setWindowTitle("QR · Portale di tutti i tavoli")
+            dialog.resize(440,560)
+            layout=QVBoxLayout(dialog)
+            layout.addWidget(ui_label("PORTALE SPETTATORI","h2",align=Qt.AlignmentFlag.AlignCenter))
+            layout.addWidget(ui_label("Un solo link per tutte le scacchiere, i cronometri e la classifica live.","muted",wrap=True))
+            mode=QComboBox()
+            mode.addItem("Rete Wi-Fi / LAN","local")
+            if self.public_base_url:
+                mode.addItem("Internet · HTTPS protetto","public")
+                mode.setCurrentIndex(1)
+            layout.addWidget(mode)
+            image=QLabel();image.setAlignment(Qt.AlignmentFlag.AlignCenter);layout.addWidget(image)
+            link=QLineEdit();link.setReadOnly(True);layout.addWidget(link)
+            hint=ui_label("L'accesso remoto richiede un tunnel o reverse proxy HTTPS attivo verso il PC Windows.","muted",wrap=True)
+            layout.addWidget(hint)
+            def update_link():
+                try:
+                    is_public=mode.currentData()=="public"
+                    url=self.portal_web_url(public=is_public)
+                    link.setText(url);image.setPixmap(self.make_qr_pixmap(url,280))
+                    hint.setText(
+                        f"Portale HTTPS pubblico · inoltra la porta locale {self.match_http_port}; ogni accesso richiede il token privato."
+                        if is_public else "Scansiona dalla stessa rete Wi-Fi/LAN del PC Windows."
+                    )
+                except Exception as exc:
+                    link.clear();image.clear();hint.setText(str(exc))
+            mode.currentIndexChanged.connect(update_link)
+            update_link()
+            buttons=QHBoxLayout()
+            copy=QPushButton("COPIA LINK");copy.clicked.connect(lambda:QApplication.clipboard().setText(link.text()))
+            open_btn=QPushButton("APRI SUL PC");open_btn.clicked.connect(lambda:QDesktopServices.openUrl(QUrl(link.text())) if link.text() else None)
+            close=QPushButton("CHIUDI");close.clicked.connect(dialog.accept)
+            buttons.addWidget(copy);buttons.addWidget(open_btn);buttons.addWidget(close);layout.addLayout(buttons)
+            dialog.exec()
+        except Exception as exc:
+            QMessageBox.warning(self,"Portale non disponibile",str(exc))
 
     def export_all_match_qr_pdf(self):
         try:
@@ -3695,7 +3772,7 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
                 painter.setPen(QPen(QColor("#C9A15B"),3))
                 painter.setBrush(QColor("#FFFFFF"))
                 painter.drawRoundedRect(QRect(x,y,cell_w,cell_h),18,18)
-                url=f"http://{host}:{port}/match/{urllib.parse.quote(gid,safe='')}"
+                url=f"http://{host}:{port}/match/{urllib.parse.quote(gid,safe='')}?token={urllib.parse.quote(self.spectator_token,safe='')}"
                 pix=self.make_qr_pixmap(url,260)
                 qr_size=min(300,cell_h-90)
                 painter.drawPixmap(QRect(x+18,y+22,qr_size,qr_size),pix)
