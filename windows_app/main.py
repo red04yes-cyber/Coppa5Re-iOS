@@ -1692,12 +1692,26 @@ class MainWindow(QMainWindow):
                         "name":entry.get("name") or resolved.name,
                         "size":int(entry.get("size",resolved.stat().st_size if resolved.exists() else 0)),
                     })
+            game_id=str(data.get("game_id",""))
+            game_label=str(data.get("game_label",""))
+            if game_id in ("sf1","sf2","final","third"):
+                game_label=game_label or {"sf1":"Playoff · Semifinale 1","sf2":"Playoff · Semifinale 2",
+                    "final":"Playoff · Finale","third":"Playoff · 3° / 4° posto"}.get(game_id,game_id)
+            elif game_id:
+                match=next((item for item in GAMES if item[0]==game_id),None)
+                if match:
+                    game_label=game_label or f"Round {match[1]} · {game_id} · {name(match[2])} – {name(match[3])}"
+            else:
+                game_label="Generale / non associato"
+            if old and old.get("game_id")==game_id and old.get("game_label"):
+                game_label=old["game_label"]
             record={
                 "id":report_id,
                 "created_at":created_at,
                 "updated_at":datetime.now().isoformat(timespec="seconds"),
                 "category":str(data.get("category","Altro")),
-                "game_id":str(data.get("game_id","")),
+                "game_id":game_id,
+                "game_label":game_label,
                 "participants":str(data.get("participants","")).strip(),
                 "summary":str(data.get("summary","")).strip(),
                 "description":str(data.get("description","")).strip(),
@@ -1925,11 +1939,7 @@ class MainWindow(QMainWindow):
         self.incident_table.setRowCount(len(visible))
         for row,report in enumerate(visible):
             gid=report.get("game_id","")
-            if gid in ("sf1","sf2","final","third"):
-                game_label={"sf1":"Semifinale 1","sf2":"Semifinale 2","final":"Finale","third":"3° / 4° posto"}[gid]
-            else:
-                match=next((item for item in GAMES if item[0]==gid),None)
-                game_label=f"Round {match[1]} · {gid}" if match else "Generale"
+            game_label=report.get("game_label") or ("Generale / non associato" if not gid else gid)
             date=str(report.get("created_at","")).replace("T"," ")
             if len(date)>16: date=date[:16]
             values=[f"{report.get('id','')}\n{date}",report.get("category",""),game_label,
@@ -1972,11 +1982,11 @@ class MainWindow(QMainWindow):
             return
         with open(path,"w",newline="",encoding="utf-8-sig") as stream:
             writer=csv.writer(stream,delimiter=";")
-            writer.writerow(["ID","Creato il","Aggiornato il","Categoria","Partita","Soggetti","Oggetto",
+            writer.writerow(["ID","Creato il","Aggiornato il","Categoria","Partita","Riferimento partita","Soggetti","Oggetto",
                              "Descrizione","Decisione","Stato","Arbitro","Allegati"])
             for item in self.incident_reports:
                 writer.writerow([item.get(key,"") for key in
-                    ("id","created_at","updated_at","category","game_id","participants","summary",
+                    ("id","created_at","updated_at","category","game_id","game_label","participants","summary",
                      "description","decision","status","referee")]
                     +[", ".join(a.get("name","") for a in item.get("attachments",[]))])
         self.statusBar().showMessage("Registro verbali esportato in CSV.",3000)
@@ -2020,7 +2030,7 @@ class MainWindow(QMainWindow):
                 y+=height+25
             write_block("Numero e data",f"{report.get('id')} · {report.get('created_at','')}")
             write_block("Categoria / stato",f"{report.get('category')} · {report.get('status')}")
-            write_block("Partita / turno",report.get("game_id") or "Generale / non associato")
+            write_block("Partita / turno",report.get("game_label") or report.get("game_id") or "Generale / non associato")
             write_block("Persone coinvolte",report.get("participants"))
             write_block("Oggetto",report.get("summary"))
             write_block("Descrizione dei fatti",report.get("description"))
