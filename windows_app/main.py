@@ -3843,6 +3843,23 @@ class MainWindow(QMainWindow):
             })
             self.odds_rows_layout.addWidget(row_card)
         layout.addLayout(self.odds_rows_layout)
+        forecast=Card("Simulatore predittivo avanzato",
+            "Confronta scenari prudente, base e ad alta sensibilità. Gli intervalli sono incertezza Monte Carlo, non garanzie sul risultato.")
+        forecast_controls=QHBoxLayout()
+        self.forecast_runs_combo=QComboBox()
+        for runs,label in [(2000,"2.000 simulazioni"),(5000,"5.000 simulazioni"),(10000,"10.000 simulazioni")]:
+            self.forecast_runs_combo.addItem(label,runs)
+        forecast_controls.addWidget(self.forecast_runs_combo)
+        forecast_button=QPushButton("CONFRONTA SCENARI")
+        forecast_button.setObjectName("PrimaryButton")
+        forecast_button.clicked.connect(self.refresh_advanced_forecast)
+        forecast_controls.addWidget(forecast_button)
+        forecast.body.addLayout(forecast_controls)
+        self.forecast_summary=ui_label(
+            "Avvia il confronto per calcolare probabilità, intervalli al 95% e qualità storica del modello.",
+            "muted", wrap=True)
+        forecast.body.addWidget(self.forecast_summary)
+        layout.addWidget(forecast)
         self.odds_footer = ui_label("", "caption", wrap=True)
         layout.addWidget(self.odds_footer)
         return page
@@ -4187,6 +4204,84 @@ class MainWindow(QMainWindow):
             f"PARTITE CONCLUSE  {concluded}/10  ·  ANNULLATE {voided}  ·  PENALITÀ {len(self.penalties)}"
             + ("  ·  SPAREGGIO ART. 8 DA DISPUTARE" if unresolved_ties else "")
         )
+
+    def advanced_forecast(self,n=2000):
+        raw,played,_,_,_=self.raw_stats()
+        penalties=self.penalty_points()
+        current={p:raw[p]+penalties[p] for p in PLAYERS}
+        form={p:(raw[p]+1.0)/(played[p]+2.0) for p in PLAYERS}
+        remaining=[g for g in GAMES if self.results.get(g[0]) is None]
+        payload=json.dumps({"results":self.results,"penalties":self.penalties,"schedule":GAMES},
+            sort_keys=True,ensure_ascii=False,default=str)
+        seed=int.from_bytes(hashlib.sha256(payload.encode("utf-8")).digest()[:8],"big")
+        modes=(("Prudente",0.55,0.015),("Base",1.0,0.035),("Sensibilità alta",1.55,0.065))
+        forecasts={}
+        count=max(500,int(n))
+        for index,(label,factor,noise) in enumerate(modes):
+            rng=random.Random(seed+index*104729)
+            wins={p:0.0 for p in PLAYERS}
+            for _ in range(count):
+                score=current.copy()
+                for gid,r,w,b in remaining:
+                    base_white,base_black,(pw,pd,pb)=PAIR_PRIORS[frozenset((w,b))]
+                    if w!=base_white:
+                        pw,pb=pb,pw
+                    shift=max(-0.24,min(0.24,0.20*factor*(form[w]-form[b])))
+                    jitter=rng.uniform(-noise,noise)
+                    pw=max(0.025,pw+shift+jitter)
+                    pb=max(0.025,pb-shift-jitter)
+                    total=pw+pd+pb
+                    pw,pd,pb=pw/total,pd/total,pb/total
+                    draw=rng.random()
+                    if draw<pw: score[w]+=1
+                    elif draw<pw+pd: score[w]+=.5; score[b]+=.5
+                    else: score[b]+=1
+                best=max(score.values())
+                tied=[p for p in PLAYERS if score[p]==best]
+                for player in tied:
+                    wins[player]+=1/len(tied)
+            forecasts[label]={}
+            for player in PLAYERS:
+                probability=wins[player]/count
+                margin=1.96*math.sqrt(max(0.0,probability*(1-probability)/count))
+                forecasts[label][player]=(probability,max(0.0,probability-margin),min(1.0,probability+margin))
+        brier_values=[]
+        for gid,r,w,b in GAMES:
+            result=self.results.get(gid)
+            if result in (None,"VOID"):
+                continue
+            base_white,base_black,(pw,pd,pb)=PAIR_PRIORS[frozenset((w,b))]
+            if w!=base_white:
+                pw,pb=pb,pw
+            target=(1.0,0.0,0.0) if result=="1-0" else ((0.0,0.0,1.0) if result=="0-1" else (0.0,1.0,0.0))
+            brier_values.append(sum((actual-predicted)**2 for actual,predicted in zip(target,(pw,pd,pb)))/3.0)
+        return forecasts,(sum(brier_values)/len(brier_values) if brier_values else None),len(brier_values),current,form
+
+    def refresh_advanced_forecast(self):
+        if not hasattr(self,"forecast_summary"):
+            return
+        runs=int(self.forecast_runs_combo.currentData() or 2000)
+        try:
+            forecasts,brier,sample,current,form=self.advanced_forecast(runs)
+            rows=[]
+            for player in sorted(PLAYERS,key=lambda item:forecasts["Base"][item][0],reverse=True):
+                cautious=forecasts["Prudente"][player][0]*100
+                base,low,high=forecasts["Base"][player]
+                sensitive=forecasts["Sensibilità alta"][player][0]*100
+                rows.append(f"{name(player)}: prudente {cautious:.1f}% · base {base*100:.1f}% "
+                    f"(IC 95% {low*100:.1f}–{high*100:.1f}%) · sensibilità alta {sensitive:.1f}%")
+            leader=max(current,key=current.get)
+            brier_text=(f"Brier score storico: {brier:.3f} su {sample} partite concluse (più basso è meglio)."
+                if brier is not None else "Brier score non disponibile: non ci sono partite valide concluse.")
+            self.forecast_summary.setText(
+                f"{runs:,} simulazioni per scenario.\n".replace(",",".")
+                +"\n".join(rows)+"\n\n"
+                +f"Driver leggibili: {name(leader)} guida per punti attuali ({current[leader]:.1f}); "
+                "la forma è regolarizzata con prior 1 vittoria / 2 partite per ridurre oscillazioni con pochi risultati.\n"
+                +brier_text+" Gli intervalli descrivono solo l'errore Monte Carlo, non l'incertezza completa del modello."
+            )
+        except Exception as exc:
+            self.forecast_summary.setText(f"Simulazione non disponibile: {exc}")
 
     def refresh_odds(self):
         values = self.odds()
