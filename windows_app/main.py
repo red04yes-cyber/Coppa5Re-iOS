@@ -21,7 +21,7 @@ except ImportError:
         EvalBar, Avatar, label as ui_label, pill as ui_pill, set_pill, button as ui_button
     )
     from c5r_board import BoardWidget
-from PySide6.QtCore import Qt, QSize, Signal, QThread, QTimer, QRect, QUrl
+from PySide6.QtCore import Qt, QSize, Signal, QThread, QTimer, QRect, QUrl, QDateTime
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPdfWriter, QKeySequence, QShortcut, QDesktopServices
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox, QLineEdit, QVBoxLayout, QHBoxLayout, QGridLayout, QTabWidget,
     QTableWidget, QTableWidgetItem, QHeaderView, QScrollArea, QMessageBox,
     QListWidget, QListWidgetItem, QInputDialog, QFileDialog, QAbstractItemView, QSizePolicy,
-    QDialog, QDialogButtonBox, QProgressBar, QStackedWidget, QPlainTextEdit
+    QDialog, QDialogButtonBox, QProgressBar, QStackedWidget, QPlainTextEdit, QDateTimeEdit
 )
 
 try:
@@ -1709,6 +1709,7 @@ class MainWindow(QMainWindow):
                 "id":report_id,
                 "created_at":created_at,
                 "updated_at":datetime.now().isoformat(timespec="seconds"),
+                "event_at":str(data.get("event_at") or created_at),
                 "category":str(data.get("category","Altro")),
                 "game_id":game_id,
                 "game_label":game_label,
@@ -1781,6 +1782,13 @@ class MainWindow(QMainWindow):
         category.addItems(categories)
         if existing and existing.get("category") in categories:
             category.setCurrentText(existing["category"])
+        event_at=QDateTimeEdit(QDateTime.currentDateTime(),dialog)
+        event_at.setCalendarPopup(True)
+        event_at.setDisplayFormat("dd/MM/yyyy HH:mm")
+        if existing and existing.get("event_at"):
+            parsed_event=QDateTime.fromString(existing["event_at"],Qt.DateFormat.ISODate)
+            if parsed_event.isValid():
+                event_at.setDateTime(parsed_event)
         game_combo=QComboBox()
         game_combo.addItem("Generale / non associato","")
         for gid,rnd,white,black in GAMES:
@@ -1802,12 +1810,14 @@ class MainWindow(QMainWindow):
         grid.addWidget(category,0,1)
         grid.addWidget(ui_label("STATO","field"),0,2)
         grid.addWidget(status,0,3)
-        grid.addWidget(ui_label("PARTITA / TURNO","field"),1,0)
-        grid.addWidget(game_combo,1,1,1,3)
-        grid.addWidget(ui_label("PERSONE COINVOLTE","field"),2,0)
-        grid.addWidget(participants,2,1,1,3)
-        grid.addWidget(ui_label("OGGETTO","field"),3,0)
-        grid.addWidget(summary,3,1,1,3)
+        grid.addWidget(ui_label("DATA E ORA DELL'EVENTO","field"),1,0)
+        grid.addWidget(event_at,1,1,1,3)
+        grid.addWidget(ui_label("PARTITA / TURNO","field"),2,0)
+        grid.addWidget(game_combo,2,1,1,3)
+        grid.addWidget(ui_label("PERSONE COINVOLTE","field"),3,0)
+        grid.addWidget(participants,3,1,1,3)
+        grid.addWidget(ui_label("OGGETTO","field"),4,0)
+        grid.addWidget(summary,4,1,1,3)
         root.addLayout(grid)
 
         description=QPlainTextEdit()
@@ -1897,6 +1907,7 @@ class MainWindow(QMainWindow):
             entries.append(attachments.item(index).data(Qt.ItemDataRole.UserRole) or {})
         data={
             "id":report_id,
+            "event_at":event_at.dateTime().toString(Qt.DateFormat.ISODate),
             "category":category.currentText(),
             "game_id":game_combo.currentData() or "",
             "participants":participants.text(),
@@ -1931,7 +1942,7 @@ class MainWindow(QMainWindow):
         visible=[]
         for report in reports:
             haystack=" ".join(str(report.get(key,"")) for key in
-                ("id","category","game_id","participants","summary","description","decision","referee")).casefold()
+                ("id","category","event_at","game_id","participants","summary","description","decision","referee")).casefold()
             if query and query not in haystack: continue
             if category and report.get("category")!=category: continue
             if status and report.get("status")!=status: continue
@@ -1940,7 +1951,7 @@ class MainWindow(QMainWindow):
         for row,report in enumerate(visible):
             gid=report.get("game_id","")
             game_label=report.get("game_label") or ("Generale / non associato" if not gid else gid)
-            date=str(report.get("created_at","")).replace("T"," ")
+            date=str(report.get("event_at") or report.get("created_at","")).replace("T"," ")
             if len(date)>16: date=date[:16]
             values=[f"{report.get('id','')}\n{date}",report.get("category",""),game_label,
                     report.get("participants",""),report.get("summary",""),report.get("status",""),
@@ -1969,6 +1980,7 @@ class MainWindow(QMainWindow):
         files=", ".join(item.get("name","Allegato") for item in report.get("attachments",[])) or "Nessun allegato"
         self.incident_detail.setText(
             f"{report.get('id')} · {report.get('category')} · {report.get('status')} · "
+            f"Evento: {str(report.get('event_at','')).replace('T',' ')} · Creato: {str(report.get('created_at','')).replace('T',' ')} · "
             f"Arbitro: {report.get('referee','Non indicato')}\n"
             f"{report.get('summary','')}\n"
             f"Fatti: {report.get('description','')}\n"
@@ -1982,11 +1994,11 @@ class MainWindow(QMainWindow):
             return
         with open(path,"w",newline="",encoding="utf-8-sig") as stream:
             writer=csv.writer(stream,delimiter=";")
-            writer.writerow(["ID","Creato il","Aggiornato il","Categoria","Partita","Riferimento partita","Soggetti","Oggetto",
+            writer.writerow(["ID","Data evento","Creato il","Aggiornato il","Categoria","Partita","Riferimento partita","Soggetti","Oggetto",
                              "Descrizione","Decisione","Stato","Arbitro","Allegati"])
             for item in self.incident_reports:
                 writer.writerow([item.get(key,"") for key in
-                    ("id","created_at","updated_at","category","game_id","game_label","participants","summary",
+                    ("id","event_at","created_at","updated_at","category","game_id","game_label","participants","summary",
                      "description","decision","status","referee")]
                     +[", ".join(a.get("name","") for a in item.get("attachments",[]))])
         self.statusBar().showMessage("Registro verbali esportato in CSV.",3000)
@@ -2028,7 +2040,8 @@ class MainWindow(QMainWindow):
                     y=margin
                 painter.drawText(QRect(margin,y,width,height),Qt.TextFlag.TextWordWrap,str(value or "—"))
                 y+=height+25
-            write_block("Numero e data",f"{report.get('id')} · {report.get('created_at','')}")
+            write_block("Numero e data di registrazione",f"{report.get('id')} · {report.get('created_at','')}")
+            write_block("Data e ora dell'evento",report.get("event_at") or report.get("created_at",""))
             write_block("Categoria / stato",f"{report.get('category')} · {report.get('status')}")
             write_block("Partita / turno",report.get("game_label") or report.get("game_id") or "Generale / non associato")
             write_block("Persone coinvolte",report.get("participants"))
