@@ -2443,6 +2443,41 @@ class MainWindow(QMainWindow):
             "lead", wrap=True
         ))
 
+        appearance = Card("Personalizzazione", "Tema, leggibilità e densità delle tabelle. Salva profili riutilizzabili tra gli arbitri.")
+        appearance_grid = QGridLayout()
+        self.ui_theme_combo = QComboBox()
+        self.ui_theme_combo.addItem("Scuro", "dark")
+        self.ui_theme_combo.addItem("Chiaro", "light")
+        self.ui_font_combo = QComboBox()
+        for scale, label in [(0.9,"90%"),(1.0,"100%"),(1.1,"110%"),(1.2,"120%")]:
+            self.ui_font_combo.addItem(label, scale)
+        self.ui_density_combo = QComboBox()
+        self.ui_density_combo.addItem("Standard", "comfortable")
+        self.ui_density_combo.addItem("Compatta", "compact")
+        self.ui_density_combo.addItem("Ampia", "spacious")
+        appearance_grid.addWidget(ui_label("TEMA", "field"),0,0)
+        appearance_grid.addWidget(self.ui_theme_combo,0,1)
+        appearance_grid.addWidget(ui_label("DIMENSIONE TESTO", "field"),0,2)
+        appearance_grid.addWidget(self.ui_font_combo,0,3)
+        appearance_grid.addWidget(ui_label("DENSITÀ TABELLE", "field"),1,0)
+        appearance_grid.addWidget(self.ui_density_combo,1,1)
+        appearance.body.addLayout(appearance_grid)
+        profile_row=QHBoxLayout()
+        self.ui_profile_combo=QComboBox()
+        profile_row.addWidget(self.ui_profile_combo,1)
+        save_profile=QPushButton("SALVA PROFILO")
+        save_profile.clicked.connect(self.save_ui_profile)
+        apply_profile=QPushButton("APPLICA PROFILO")
+        apply_profile.clicked.connect(self.apply_ui_profile)
+        apply_ui=QPushButton("APPLICA PREFERENZE")
+        apply_ui.setObjectName("PrimaryButton")
+        apply_ui.clicked.connect(self.save_ui_preferences)
+        profile_row.addWidget(save_profile)
+        profile_row.addWidget(apply_profile)
+        profile_row.addWidget(apply_ui)
+        appearance.body.addLayout(profile_row)
+        layout.addWidget(appearance)
+
         referee = Card("Direzione di gara", "Il nome dell'arbitro viene associato alle nuove operazioni del registro.")
         self.referee_input = QLineEdit(self.referee)
         self.referee_input.setPlaceholderText("Nome arbitro / direttore di gara")
@@ -2520,7 +2555,8 @@ class MainWindow(QMainWindow):
         operations = [
             ("BACKUP DATI", self.export_backup), ("RIPRISTINA BACKUP", self.restore_backup),
             ("ESPORTA PGN TORNEO", self.export_all_pgn), ("CLASSIFICA CSV", self.export_standings_csv),
-            ("CLASSIFICA PDF", self.export_standings_pdf), ("REGISTRO CSV", self.export_audit_csv),
+            ("CLASSIFICA PDF", self.export_standings_pdf), ("REPORT UFFICIALE PDF", self.export_tournament_report_pdf),
+            ("REGISTRO CSV", self.export_audit_csv),
         ]
         for index, (text, callback) in enumerate(operations):
             btn = QPushButton(text)
@@ -2540,8 +2576,103 @@ class MainWindow(QMainWindow):
         layout.addLayout(save_row)
         return page
 
+    def _read_ui_preferences(self):
+        if not hasattr(self,"ui_theme_combo"):
+            return
+        self.ui_preferences={
+            "theme":self.ui_theme_combo.currentData() or "dark",
+            "font_scale":float(self.ui_font_combo.currentData() or 1.0),
+            "density":self.ui_density_combo.currentData() or "comfortable",
+        }
+
+    def apply_ui_preferences(self):
+        prefs=getattr(self,"ui_preferences",{}) or {}
+        theme=prefs.get("theme","dark")
+        scale=max(0.85,min(1.25,float(prefs.get("font_scale",1.0))))
+        density=prefs.get("density","comfortable")
+        app=QApplication.instance()
+        if app is not None:
+            qss=T.build_qss()
+            if theme=="light":
+                substitutions={
+                    "#0A0F15":"#F2F5F8","#0D131A":"#FFFFFF","#121A23":"#FFFFFF",
+                    "#18222D":"#EDF1F5","#202D3B":"#E2E8EE","#0C1219":"#F7F9FB",
+                    "#263444":"#CFD8E1","#1A2530":"#E1E7ED","#EDE7DA":"#17212B",
+                    "#AAB2BD":"#526170","#7C8899":"#738190","#C9A15B":"#9A6A18",
+                    "#E3C07F":"#80520D","#8F7240":"#A77A2B",
+                }
+                for old,new in substitutions.items():
+                    qss=qss.replace(old,new)
+            if abs(scale-1.0)>0.001:
+                qss=re.sub(r"font-size:\\s*(\\d+)px",
+                    lambda match:f"font-size:{max(9,round(int(match.group(1))*scale))}px",qss)
+            app.setStyleSheet(qss)
+            app.setFont(T.font(T.SANS,round(14*scale)))
+        density_px={"compact":36,"comfortable":48,"spacious":60}.get(density,48)
+        for table in self.findChildren(QTableWidget):
+            table.verticalHeader().setDefaultSectionSize(density_px)
+            for row in range(table.rowCount()):
+                table.setRowHeight(row,density_px)
+        theme_widget=getattr(self,"ui_theme_combo",None)
+        if theme_widget is not None:
+            idx=theme_widget.findData(theme)
+            if idx>=0: theme_widget.setCurrentIndex(idx)
+        font_widget=getattr(self,"ui_font_combo",None)
+        if font_widget is not None:
+            idx=font_widget.findData(scale)
+            if idx>=0: font_widget.setCurrentIndex(idx)
+        density_widget=getattr(self,"ui_density_combo",None)
+        if density_widget is not None:
+            idx=density_widget.findData(density)
+            if idx>=0: density_widget.setCurrentIndex(idx)
+        self.refresh_ui_profiles()
+
+    def refresh_ui_profiles(self):
+        combo=getattr(self,"ui_profile_combo",None)
+        if combo is None:
+            return
+        current=combo.currentData()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("Seleziona un profilo…","")
+        for profile_name in sorted(self.ui_profiles,key=str.casefold):
+            combo.addItem(profile_name,profile_name)
+        idx=combo.findData(current)
+        if idx>=0: combo.setCurrentIndex(idx)
+        combo.blockSignals(False)
+
+    def save_ui_preferences(self):
+        self._read_ui_preferences()
+        self.apply_ui_preferences()
+        self.save()
+        self.statusBar().showMessage("Preferenze di visualizzazione salvate.",2500)
+
+    def save_ui_profile(self):
+        self._read_ui_preferences()
+        profile_name,ok=QInputDialog.getText(self,"Salva profilo di visualizzazione",
+            "Nome del profilo (es. Arbitro principale):",text=self.referee or "Arbitro")
+        profile_name=profile_name.strip()
+        if not ok or not profile_name:
+            return
+        self.ui_profiles[profile_name]=dict(self.ui_preferences)
+        self.refresh_ui_profiles()
+        idx=self.ui_profile_combo.findData(profile_name)
+        if idx>=0: self.ui_profile_combo.setCurrentIndex(idx)
+        self.save()
+        self.statusBar().showMessage(f"Profilo '{profile_name}' salvato.",2500)
+
+    def apply_ui_profile(self):
+        profile_name=self.ui_profile_combo.currentData()
+        if not profile_name or profile_name not in self.ui_profiles:
+            return
+        self.ui_preferences=dict(self.ui_profiles[profile_name])
+        self.apply_ui_preferences()
+        self.save()
+        self.statusBar().showMessage(f"Profilo '{profile_name}' applicato.",2500)
+
     def save_settings(self):
         self.referee=self.referee_input.text().strip()
+        self._read_ui_preferences()
         self.tie_break="Regolamento Art. 8"
         self.log_operation("Impostazioni torneo","","",f"arbitro={self.referee}; spareggio={self.tie_break}")
         self.save(); self.refresh_all()
@@ -2552,7 +2683,8 @@ class MainWindow(QMainWindow):
                    ("Ctrl+Shift+B",self.export_backup),("Ctrl+K",self.open_command_palette),
                    ("Ctrl+1",lambda:self.tabs.setCurrentIndex(1)),
                    ("Ctrl+2",lambda:self.tabs.setCurrentIndex(2)),("Ctrl+3",lambda:self.tabs.setCurrentIndex(3)),
-                   ("Ctrl+Z",lambda:self.undo(self.live_cards[0].game_id)),
+                   ("Ctrl+Z",self.undo_history),("Ctrl+Y",self.redo_history),
+                    ("Ctrl+Alt+Z",lambda:self.undo(self.live_cards[0].game_id)),
                    ("Alt+Left",lambda:self.live_cards[0].previous_move()),
                    ("Alt+Right",lambda:self.live_cards[0].next_move()),
                    ("F2",lambda:self.live_cards[0].board.toggle_orientation()),
