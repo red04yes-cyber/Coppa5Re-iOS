@@ -80,13 +80,16 @@ try:
     window._navigate_to("audit")
     app.processEvents()
     audit_layout_count = window.audit_events_layout.count()
+    prior_audit_total = len(window.audit_log)
     window._navigate_to("dashboard")
     app.processEvents()
     window.log_operation("Mossa", "R1-M1", "", "e2e4", "test refresh audit lazy")
     assert window.audit_events_layout.count() == audit_layout_count
+    assert len(window.audit_log) == prior_audit_total + 1
     window._navigate_to("audit")
     app.processEvents()
-    assert "test refresh audit lazy" in window.audit_events_layout.itemAt(0).widget().findChild(QLabel).text() or window.audit_count_label.text().startswith("1 operazioni")
+    assert window.audit_count_label.text().startswith(f"{prior_audit_total + 1} operazioni visualizzate")
+    assert window.audit_log[-1]["detail"] == "test refresh audit lazy"
     window._navigate_to("dashboard")
 
     # Board rendering: keep a read-only board reference and do not animate full-board repaint loops.
