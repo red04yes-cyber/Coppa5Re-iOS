@@ -10,7 +10,7 @@ APPDATA = tempfile.mkdtemp(prefix="c5r-regression-")
 os.environ["APPDATA"] = APPDATA
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox, QInputDialog
 import chess
 
 from windows_app.main import MainWindow, PLAYERS, GAMES
@@ -135,7 +135,65 @@ try:
     assert window.playoff_results["sf2"] == "1-0"
     assert not clock["started"]
 
-    print("C5R Windows regression OK: Art.5 clocks, Art.8 tiebreak, draw/resignation PGNs, move review, Art.11 withdrawals, Armageddon and flag fall.")
+    # Pro tools: player profile statistics, common opening recognition and health validation.
+    window.results = {"R1-M1": "1-0"}
+    window.moves = {"R1-M1": ["e2e4", "e7e5", "g1f3", "b8c6", "f1c4"]}
+    window.boards.clear()
+    window.move_reviews = {}
+    window.move_annotations = {"R1-M1": {"5": {"note": "Idea tattica", "variation": "Nf6"}}}
+    window.round_closures = {}
+    window.clocks = {}
+    window.playoff_results = {}
+    window.playoff_winners = {}
+    profile = window.player_profile_data("jacopo")
+    assert profile["played"] == 1 and profile["wins"] == 1
+    assert profile["history"][0]["opening"] == "Italiana"
+    assert window.opening_name("R1-M1") == "Italiana"
+
+    # Per-move comments and SAN continuations are exported into the PGN.
+    annotated_pgn = window.build_pgn_game("R1-M1")
+    annotated_moves = list(annotated_pgn.mainline())
+    assert "Idea tattica" in annotated_moves[4].comment
+    assert len(annotated_moves[4].variations) == 1
+    exported = annotated_pgn.accept(chess.pgn.StringExporter(headers=True, variations=True, comments=True))
+    assert "Nota C5R" in exported and "Nf6" in exported
+
+    # Health Check detects closed rounds with missing results and clears the warning once resolved.
+    window.round_closures = {"1": "02/11/2026 10:00"}
+    assert any(severity == "ERRORE" and title == "Turno chiuso ma incompleto"
+               for severity, title, _ in window.health_check())
+    window.round_closures = {}
+    assert not any(severity == "ERRORE" for severity, _, _ in window.health_check())
+
+    # Snapshot persistence and restore retain both tournament state and move annotations.
+    snapshot = window.create_snapshot("Test manuale regression")
+    assert snapshot is not None and snapshot.is_file()
+    entries = window.snapshot_entries()
+    selected_entry = next(entry for entry in entries if entry[0] == snapshot)
+    labels = [f"{created.replace('T', ' ')} · {reason} · {path.name}" for path, created, reason in entries]
+    selected_label = labels[entries.index(selected_entry)]
+    old_get_item = QInputDialog.getItem
+    QInputDialog.getItem = lambda *args, **kwargs: (selected_label, True)
+    try:
+        window.results["R1-M1"] = "0-1"
+        assert window.restore_snapshot() is True
+        assert window.results["R1-M1"] == "1-0"
+        assert window.move_annotations["R1-M1"]["5"]["note"] == "Idea tattica"
+    finally:
+        QInputDialog.getItem = old_get_item
+
+    # The new pages and global tools are all wired in the live desktop window.
+    window.refresh_all()
+    assert len(window._page_keys) == 16
+    assert len(window.profile_tiles) == 4
+    assert len(window.compare_tiles) == 2
+    assert window.opening_table.rowCount() == len(GAMES)
+    assert hasattr(window, "notification_button")
+    assert isinstance(window.collect_notifications(), list)
+    window.run_health_check()
+    assert window.health_list.count() >= 1
+
+    print("C5R Windows regression OK: tournament rules, PGN, recovery, profiles, opening explorer, health check, move annotations, snapshots and UI tools.")
 finally:
     QMessageBox.question = old_question
     window.close()
