@@ -454,16 +454,31 @@ class Avatar(QWidget):
     def __init__(self, initials: str = "?", tint: str = C.brass, size: int = 36):
         super().__init__()
         self._initials, self._tint = initials, tint
+        self._pixmap = None
         self.setFixedSize(size, size)
 
     def set_player(self, initials: str, tint: str):
         self._initials, self._tint = initials, tint
         self.update()
 
+    def set_pixmap(self, pixmap: QPixmap | None):
+        self._pixmap = pixmap if pixmap is not None and not pixmap.isNull() else None
+        self.update()
+
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+        if self._pixmap is not None:
+            clip = QPainterPath()
+            clip.addEllipse(r)
+            p.setClipPath(clip)
+            p.drawPixmap(self.rect(), self._pixmap)
+            p.setClipping(False)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(with_alpha(self._tint, .75), 1.4))
+            p.drawEllipse(r)
+            return
         p.setBrush(with_alpha(self._tint, .20))
         p.setPen(QPen(with_alpha(self._tint, .65), 1.4))
         p.drawEllipse(r)
