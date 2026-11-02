@@ -488,6 +488,8 @@ class BoardCard(QFrame):
         self.clock_btn=QPushButton("AVVIA OROLOGIO"); self.clock_btn.clicked.connect(lambda:self.app.start_clock(self.game_id))
         self.rotate_btn=QPushButton("RUOTA"); self.rotate_btn.clicked.connect(self.board.toggle_orientation)
         self.theme_btn=QPushButton("TEMA"); self.theme_btn.clicked.connect(self.board.cycle_theme)
+        print_sheet=QPushButton("STAMPA SCHEDA"); print_sheet.clicked.connect(lambda:self.app.export_match_sheet_pdf(self.game_id))
+        show_qr=QPushButton("QR TAVOLO"); show_qr.clicked.connect(lambda:self.app.show_match_qr_dialog(self.game_id))
         notes=QPushButton("NOTA"); notes.clicked.connect(lambda:self.app.prompt_match_note(self.game_id))
         view_notes=QPushButton("VEDI NOTE"); view_notes.clicked.connect(lambda:self.app.show_match_notes(self.game_id))
         draw_offer=QPushButton("PATTA CONCORDATA"); draw_offer.clicked.connect(lambda:self.app.offer_draw(self.game_id))
@@ -495,6 +497,7 @@ class BoardCard(QFrame):
         force=QPushButton("FORZA RISULTATO"); force.clicked.connect(lambda:self.app.force_game_result(self.game_id))
         control_top.addWidget(self.undo); control_top.addWidget(self.clock_btn); control_top.addStretch()
         control_top.addWidget(self.rotate_btn); control_top.addWidget(self.theme_btn)
+        control_top.addWidget(print_sheet); control_top.addWidget(show_qr)
         control_bottom.addWidget(notes); control_bottom.addWidget(view_notes)
         control_bottom.addWidget(draw_offer); control_bottom.addWidget(resign); control_bottom.addWidget(force)
         control_bottom.addWidget(self.engine_btn); control_bottom.addStretch(); control_bottom.addWidget(pgn); control_bottom.addWidget(reset)
@@ -3177,6 +3180,13 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
         edit_bio.setObjectName("PrimaryButton")
         edit_bio.clicked.connect(lambda:self.edit_player_bio(self.profile_combo.currentData()))
         identity_details.addWidget(edit_bio,0,Qt.AlignmentFlag.AlignLeft)
+        badge_actions=QHBoxLayout()
+        print_badge=QPushButton("STAMPA TESSERINO")
+        print_badge.clicked.connect(self.export_current_player_badge)
+        print_all_badges=QPushButton("STAMPA TUTTI I TESSERINI")
+        print_all_badges.clicked.connect(self.export_player_badges_pdf)
+        badge_actions.addWidget(print_badge); badge_actions.addWidget(print_all_badges)
+        identity_details.addLayout(badge_actions)
         identity_row.addLayout(identity_details,1)
         identity.body.addLayout(identity_row)
         rating_row=QHBoxLayout()
@@ -5126,7 +5136,13 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
         round_wizard = QPushButton("ASSISTENTE OPERATIVO ROUND")
         round_wizard.setObjectName("PrimaryButton")
         round_wizard.clicked.connect(self.open_round_wizard)
+        print_sheets=QPushButton("STAMPA SCHEDE PARTITA")
+        print_sheets.clicked.connect(self.export_all_match_sheets_pdf)
+        print_qr=QPushButton("STAMPA QR TAVOLI")
+        print_qr.clicked.connect(self.export_all_match_qr_pdf)
         wizard_row.addWidget(round_wizard)
+        wizard_row.addWidget(print_sheets)
+        wizard_row.addWidget(print_qr)
         filters_card.body.addLayout(wizard_row)
         for control in (self.calendar_search, self.filter_round, self.filter_player, self.filter_status):
             signal = control.textChanged if control is self.calendar_search else control.currentIndexChanged
@@ -5656,6 +5672,7 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
         self.refresh_standings(); self.refresh_odds(); self.refresh_penalties(); self.refresh_playoffs()
         self.refresh_dashboard(); self.refresh_archive(); self.refresh_h2h(); self.refresh_audit()
         self.refresh_player_profile(); self.refresh_compare(); self.refresh_openings(); self.refresh_snapshot_status(); self.refresh_incidents()
+        self.refresh_communications()
         self.apply_calendar_filters(); self.refresh_notification_badge()
         if self.broadcast and self.broadcast.isVisible(): self.broadcast.refresh_from_app()
     def refresh_standings(self):
@@ -5927,6 +5944,14 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
         self.broadcast.activateWindow()
     def closeEvent(self,event):
         if hasattr(self,"clock_timer"): self.clock_timer.stop()
+        server=getattr(self,"match_http_server",None)
+        if server is not None:
+            try:
+                server.shutdown()
+                server.server_close()
+            except Exception:
+                pass
+            self.match_http_server=None
         service=getattr(self,"engine_service",None)
         if service is not None and service.isRunning():
             service.stop()
