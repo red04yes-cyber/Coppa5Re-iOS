@@ -57,7 +57,7 @@ def decode_document(raw: Any) -> dict[str, Any]:
         "playoff_winners": {}, "eval_history": {}, "game_terminations": {},
         "move_reviews": {}, "withdrawn_players": {}, "move_annotations": {},
         "round_closures": {}, "ui_preferences": {},
-        "ui_profiles": {},
+        "ui_profiles": {}, "incident_reports": [],
     }
     for key, value in defaults.items():
         payload.setdefault(key, value.copy() if isinstance(value, (dict, list)) else value)
