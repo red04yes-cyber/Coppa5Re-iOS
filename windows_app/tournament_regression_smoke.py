@@ -15,7 +15,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication, QMessageBox, QInputDialog, QFileDialog
 import chess
 
-from windows_app.main import MainWindow, PLAYERS, GAMES
+from windows_app.main import MainWindow, PLAYERS, GAMES, storage_path
 from windows_app.c5r_storage import atomic_write_json, read_document, decode_document, StorageIntegrityError
 
 app = QApplication([])
@@ -262,7 +262,69 @@ try:
     finally:
         QFileDialog.getSaveFileName = old_save_dialog
 
-    print("C5R Windows regression OK: tournament rules, PGN, recovery, profiles, opening explorer, health check, move annotations, snapshots and UI tools.")
+    # Incident reports: structured minutes, local attachments, immutable match context and exports.
+    evidence_one = Path(APPDATA) / "referto-arbitrale.txt"
+    evidence_one.write_text("Dichiarazione scritta acquisita dal direttore di gara.", encoding="utf-8")
+    evidence_two = Path(APPDATA) / "foto-tavolo.txt"
+    evidence_two.write_text("Descrizione del documento allegato.", encoding="utf-8")
+    incident = window.save_incident_report({
+        "category": "Contestazione",
+        "game_id": "R1-M1",
+        "participants": "Jacopo, Roberto",
+        "summary": "Contestazione su una decisione durante la partita",
+        "description": "Alle 15:42 viene presentata una contestazione. Il direttore di gara ascolta entrambi i giocatori.",
+        "decision": "La decisione viene confermata dopo verifica del regolamento.",
+        "status": "In esame",
+        "referee": "Arbitro test",
+    }, [{"source": str(evidence_one)}])
+    assert incident["id"].startswith("INC-")
+    assert incident["game_label"].startswith("Round 1 · R1-M1")
+    first_attachment = incident["attachments"][0]
+    first_attachment_path = window.incident_attachment_path(first_attachment["path"])
+    assert first_attachment_path.is_file()
+    # Replacing the attachment removes the old file only after the new copy succeeds.
+    updated_incident = window.save_incident_report({
+        **incident,
+        "status": "Risolto",
+        "decision": "Contestazione respinta; risultato confermato.",
+    }, [{"source": str(evidence_two)}])
+    assert updated_incident["id"] == incident["id"]
+    assert updated_incident["status"] == "Risolto"
+    assert not first_attachment_path.exists()
+    second_attachment_path = window.incident_attachment_path(updated_incident["attachments"][0]["path"])
+    assert second_attachment_path.is_file()
+    persisted, _ = read_document(storage_path())
+    assert persisted["incident_reports"][0]["summary"] == incident["summary"]
+    assert persisted["incident_reports"][0]["attachments"][0]["name"] == "foto-tavolo.txt"
+    # UI registration and CSV/PDF export are reachable from the incident register.
+    window.refresh_all()
+    assert len(window._page_keys) == 17
+    assert window.incident_table.rowCount() == 1
+    window.incident_table.selectRow(0)
+    incident_pdf = str(Path(APPDATA) / "verbale-incidente.pdf")
+    old_save_dialog = QFileDialog.getSaveFileName
+    QFileDialog.getSaveFileName = lambda *args, **kwargs: (incident_pdf, "PDF (*.pdf)")
+    try:
+        window.export_selected_incident_pdf()
+        assert Path(incident_pdf).is_file() and Path(incident_pdf).stat().st_size > 500
+    finally:
+        QFileDialog.getSaveFileName = old_save_dialog
+    incident_csv = str(Path(APPDATA) / "verbali.csv")
+    QFileDialog.getSaveFileName = lambda *args, **kwargs: (incident_csv, "CSV (*.csv)")
+    try:
+        window.export_incidents_csv()
+        assert Path(incident_csv).is_file()
+        assert "Contestazione" in Path(incident_csv).read_text(encoding="utf-8-sig")
+    finally:
+        QFileDialog.getSaveFileName = old_save_dialog
+    # Reject path traversal outside the local incident evidence folder.
+    try:
+        window.incident_attachment_path("../tournament.json")
+        raise AssertionError("An attachment path outside the incidents folder was accepted.")
+    except ValueError:
+        pass
+
+    print("C5R Windows regression OK: tournament rules, PGN, recovery, precision clocks, undo/redo, predictive scenarios, UI profiles, PDF exports and incident reports.")
 finally:
     QMessageBox.question = old_question
     window.close()
