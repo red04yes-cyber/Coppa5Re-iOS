@@ -864,6 +864,10 @@ class MainWindow(QMainWindow):
             player_id=white_player if mover_color else black_player
             mover="white" if mover_color else "black"
             clock=self.clock_data(gid)
+            if clock.get("started"):
+                side,remaining,_=self._advance_clock(gid)
+                if remaining<=0:
+                    self.tick_clocks(); return
             b.push(move)
             if clock.get("started"): clock[mover]+=self.increment_seconds(gid)
             self.moves[gid]=[x.uci() for x in b.move_stack]
@@ -1005,23 +1009,43 @@ class MainWindow(QMainWindow):
         control=self.time_control_for_game(gid)
         if gid not in self.clocks:
             base,_=control.split("+"); seconds=int(base)*60
-            self.clocks[gid]={"white":seconds,"black":seconds,"started":False}
+            self.clocks[gid]={"white":seconds,"black":seconds,"started":False,"last_wall":time.time()}
         else:
             base,_=control.split("+"); seconds=int(base)*60
             self.clocks[gid].setdefault("white",seconds)
             self.clocks[gid].setdefault("black",seconds)
             self.clocks[gid].setdefault("started",False)
+            self.clocks[gid].setdefault("last_wall",time.time())
         return self.clocks[gid]
+
+    def _advance_clock(self,gid,side=None):
+        clock=self.clock_data(gid)
+        if side is None:
+            side=clock.get("side_to_move","white") if gid in ("sf1","sf2","final","third") else ("white" if self.get_board(gid).turn else "black")
+        now_mono=time.monotonic()
+        now_wall=time.time()
+        previous_mono=self._clock_runtime.get(gid)
+        previous_wall=float(clock.get("last_wall",now_wall) or now_wall)
+        wall_elapsed=max(0.0,now_wall-previous_wall)
+        mono_elapsed=max(0.0,now_mono-previous_mono) if previous_mono is not None else 0.0
+        # Wall time includes Windows sleep/hibernation; monotonic protects against clock rollback.
+        elapsed=min(43200.0,max(wall_elapsed,mono_elapsed))
+        clock[side]=max(0.0,float(clock.get(side,0.0))-elapsed)
+        clock["last_wall"]=now_wall
+        self._clock_runtime[gid]=now_mono
+        return side,clock[side],elapsed
+
     def increment_seconds(self,gid=None):
         return int(self.time_control_for_game(gid).split("+")[1])
     def clock_text(self,gid):
         c=self.clock_data(gid)
         def fmt(v):
             v=max(0,int(v)); return f"{v//60:02d}:{v%60:02d}"
-        return f"BIANCO {fmt(c['white'])}   ·   NERO {fmt(c['black'])}"
+        return f"BIANCO {fmt(math.ceil(c['white']))}   ·   NERO {fmt(math.ceil(c['black']))}"
     def start_clock(self,gid):
         if self.results.get(gid): return
         self.clock_data(gid)["started"]=True
+        self.clock_data(gid)["last_wall"]=time.time(); self._clock_runtime[gid]=time.monotonic()
         self.log_operation("Orologio avviato",gid,"fermo",self.time_control_for_game(gid))
         self.save(); self.save_recovery(); self.refresh_all()
         self.statusBar().showMessage("Cronometro avviato.",2000)
@@ -1034,19 +1058,20 @@ class MainWindow(QMainWindow):
         for gid,_,white,black in GAMES:
             clock=self.clock_data(gid)
             if not clock.get("started") or self.results.get(gid): continue
-            side="white" if self.get_board(gid).turn else "black"
-            clock[side]=max(0,int(clock[side])-1); changed=True
-            if clock[side]<=0:
+            side,remaining,elapsed=self._advance_clock(gid)
+            if elapsed>0.01: changed=True
+            if remaining<=0:
                 timed_out.append((gid,"0-1" if side=="white" else "1-0"))
         for key in ("sf1","sf2","final","third"):
             clock=self.clock_data(key)
             if not clock.get("started") or self.playoff_results.get(key): continue
-            side=clock.get("side_to_move","white")
-            clock[side]=max(0,int(clock[side])-1); changed=True
-            if clock[side]<=0:
+            side,remaining,elapsed=self._advance_clock(key,clock.get("side_to_move","white"))
+            if elapsed>0.01: changed=True
+            if remaining<=0:
                 timed_out.append((key,"0-1" if side=="white" else "1-0"))
         for gid,result in timed_out:
             self.clock_data(gid)["started"]=False
+            self._clock_runtime.pop(gid,None)
             if gid in ("sf1","sf2","final","third"):
                 self.set_playoff_result(gid,result,detail="Caduta della bandierina · tempo esaurito")
             else:
@@ -1061,20 +1086,26 @@ class MainWindow(QMainWindow):
             for card in getattr(self,"live_cards",[]): card.refresh_clock()
             if hasattr(self,"playoff_cards"): self.refresh_playoffs()
             if self.broadcast and self.broadcast.isVisible(): self.broadcast.refresh_from_app()
-            if self.clock_ticks%5==0: self.save_recovery()
+            if time.monotonic()-self._last_clock_persist>=5.0:
+                self._last_clock_persist=time.monotonic()
+                self.save_recovery()
+
     def start_playoff_clock(self,key):
         if self.playoff_results.get(key): return
         clock=self.clock_data(key)
         clock["started"]=True
         clock.setdefault("side_to_move","white")
+        clock["last_wall"]=time.time(); self._clock_runtime[key]=time.monotonic()
         self.log_operation("Orologio playoff avviato",key,"fermo","30+10")
         self.save(); self.save_recovery(); self.refresh_playoffs()
     def switch_playoff_clock(self,key):
         if self.playoff_results.get(key): return
         clock=self.clock_data(key)
         if not clock.get("started"): return
-        side=clock.get("side_to_move","white")
-        clock[side]=int(clock[side])+10
+        side,remaining,_=self._advance_clock(key,clock.get("side_to_move","white"))
+        if remaining<=0:
+            self.tick_clocks(); return
+        clock[side]=float(clock[side])+10
         clock["side_to_move"]="black" if side=="white" else "white"
         self.log_operation("Mossa playoff",key,side,clock["side_to_move"],"+10 secondi")
         self.save(); self.save_recovery(); self.refresh_playoffs()
@@ -1082,7 +1113,7 @@ class MainWindow(QMainWindow):
         clock=self.clock_data(key)
         def fmt(seconds):
             seconds=max(0,int(seconds)); return f"{seconds//60:02d}:{seconds%60:02d}"
-        return f"BIANCO {fmt(clock['white'])} · NERO {fmt(clock['black'])} · TOCCA A {clock.get('side_to_move','white').upper()}"
+        return f"BIANCO {fmt(math.ceil(clock['white']))} · NERO {fmt(math.ceil(clock['black']))} · TOCCA A {clock.get('side_to_move','white').upper()}"
     def log_operation(self,action,entity,before,after,detail=""):
         self.audit_log.append({"time":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "referee":self.referee,"action":action,"entity":str(entity),
