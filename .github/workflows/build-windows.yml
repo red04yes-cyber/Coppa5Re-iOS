@@ -83,6 +83,10 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python windows_app/ui_results_recovery_smoke.py
+      - name: Test Windows sidebar page navigation mapping
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python windows_app/page_navigation_smoke.py
       - name: Test odds and streaming controls
         env:
           QT_QPA_PLATFORM: offscreen
