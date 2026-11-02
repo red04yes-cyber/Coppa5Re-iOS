@@ -1115,6 +1115,10 @@ class MainWindow(QMainWindow):
             self.clocks[gid].setdefault("black",seconds)
             self.clocks[gid].setdefault("started",False)
             self.clocks[gid].setdefault("last_wall",time.time())
+            self.clocks[gid].setdefault("started_at",None)
+            self.clocks[gid].setdefault("overlong_alerted",False)
+        self.clocks[gid].setdefault("started_at",None)
+        self.clocks[gid].setdefault("overlong_alerted",False)
         return self.clocks[gid]
 
     def _advance_clock(self,gid,side=None):
@@ -1143,8 +1147,11 @@ class MainWindow(QMainWindow):
         return f"BIANCO {fmt(math.ceil(c['white']))}   ·   NERO {fmt(math.ceil(c['black']))}"
     def start_clock(self,gid):
         if self.results.get(gid): return
-        self.clock_data(gid)["started"]=True
-        self.clock_data(gid)["last_wall"]=time.time(); self._clock_runtime[gid]=time.monotonic()
+        clock=self.clock_data(gid)
+        clock["started"]=True
+        clock["started_at"]=clock.get("started_at") or time.time()
+        clock["overlong_alerted"]=bool(clock.get("overlong_alerted",False))
+        clock["last_wall"]=time.time(); self._clock_runtime[gid]=time.monotonic()
         self.log_operation("Orologio avviato",gid,"fermo",self.time_control_for_game(gid))
         self.save(); self.save_recovery(); self.refresh_all()
         self.statusBar().showMessage("Cronometro avviato.",2000)
@@ -1152,7 +1159,34 @@ class MainWindow(QMainWindow):
         # I controlli sono vincolati all'Art. 5: 15+3 in qualificazione, 30+10 nei playoff.
         self.time_control="15+3"
         self.statusBar().showMessage("Cadenze fissate dal regolamento: qualificazione 15+3, playoff 30+10.",3500)
+    def check_long_match_alerts(self):
+        threshold=max(15,int(getattr(self,"long_match_minutes",120) or 120))*60
+        active=[]
+        for gid,_,white,black in GAMES:
+            if self.results.get(gid) is None:active.append((gid,name(white),name(black),"calendar"))
+        for key in ("sf1","sf2","final","third"):
+            if self.playoff_results.get(key) is None:
+                pair=getattr(self,"playoff_pairs",{}).get(key,(None,None))
+                active.append((key,name(pair[0]) if pair[0] else "Da definire",
+                               name(pair[1]) if pair[1] else "Da definire","playoffs"))
+        now=time.time()
+        for gid,white,black,target in active:
+            clock=self.clock_data(gid)
+            started_at=clock.get("started_at")
+            if not clock.get("started") or not started_at or clock.get("overlong_alerted"):
+                continue
+            duration=max(0.0,now-float(started_at))
+            if duration>=threshold:
+                clock["overlong_alerted"]=True
+                minutes=int(duration//60)
+                self.record_operational_alert(
+                    "Partita ancora in corso oltre la durata prevista",
+                    f"{gid} · {white} vs {black} · attiva da circa {minutes} minuti.",
+                    "warning",target,f"overlong:{gid}:{int(float(started_at))}"
+                )
+
     def tick_clocks(self):
+        self.check_long_match_alerts()
         changed=False; timed_out=[]
         for gid,_,white,black in GAMES:
             clock=self.clock_data(gid)
@@ -1193,6 +1227,8 @@ class MainWindow(QMainWindow):
         if self.playoff_results.get(key): return
         clock=self.clock_data(key)
         clock["started"]=True
+        clock["started_at"]=clock.get("started_at") or time.time()
+        clock.setdefault("overlong_alerted",False)
         clock.setdefault("side_to_move","white")
         clock["last_wall"]=time.time(); self._clock_runtime[key]=time.monotonic()
         self.log_operation("Orologio playoff avviato",key,"fermo","30+10")
