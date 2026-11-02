@@ -78,7 +78,7 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          python -c "from PySide6.QtWidgets import QApplication; from windows_app.main import MainWindow; app=QApplication([]); w=MainWindow(); print('DIAG',len(w.podium_cards),len(w.odds_rows),len(w.calendar_round_bars),hasattr(w,'audit_events_layout'),len(w.profile_tiles),len(w.compare_tiles),w._page_keys,hasattr(w,'notification_button'),w.health_check(),flush=True); assert len(w.podium_cards)==3; assert len(w.odds_rows)==5; assert len(w.calendar_round_bars)==5; assert hasattr(w,'audit_events_layout'); assert len(w.profile_tiles)==4; assert len(w.compare_tiles)==2; assert len(w._page_keys)==19 and 'incidents' in w._page_keys and 'communications' in w._page_keys and 'history' in w._page_keys; assert hasattr(w,'notification_button'); assert not any(x[0]=='ERRORE' for x in w.health_check()); w.refresh_all(); print('AFTER_REFRESH',w.dashboard_progress.minimum(),w.dashboard_progress.maximum(),w.dashboard_progress.value(),flush=True); assert w.dashboard_progress.value()>=0; print('PLAYER_REFRESH',flush=True); w.refresh_player_profile(); print('COMPARE_REFRESH',flush=True); w.refresh_compare(); print('OPENINGS_REFRESH',flush=True); w.refresh_openings(); print('BADGE_REFRESH',flush=True); w.refresh_notification_badge(); w.close(); print('Dashboard, podium, calendar, odds, playoffs, audit and pro tools OK')"
+          python -c "from PySide6.QtWidgets import QApplication; from windows_app.main import MainWindow; app=QApplication([]); w=MainWindow(); print('DIAG',len(w.podium_cards),len(w.odds_rows),len(w.calendar_round_bars),hasattr(w,'audit_events_layout'),len(w.profile_tiles),len(w.compare_tiles),w._page_keys,hasattr(w,'notification_button'),w.health_check(),flush=True); assert len(w.podium_cards)==3; assert len(w.odds_rows)==5; assert len(w.calendar_round_bars)==5; assert hasattr(w,'audit_events_layout'); assert len(w.profile_tiles)==4; assert len(w.compare_tiles)==2; assert len(w._page_keys)==20 and 'analytics' in w._page_keys and 'incidents' in w._page_keys and 'communications' in w._page_keys and 'history' in w._page_keys; assert hasattr(w,'notification_button'); assert not any(x[0]=='ERRORE' for x in w.health_check()); w.refresh_all(); print('AFTER_REFRESH',w.dashboard_progress.minimum(),w.dashboard_progress.maximum(),w.dashboard_progress.value(),flush=True); assert w.dashboard_progress.value()>=0; print('PLAYER_REFRESH',flush=True); w.refresh_player_profile(); print('COMPARE_REFRESH',flush=True); w.refresh_compare(); print('OPENINGS_REFRESH',flush=True); w.refresh_openings(); print('BADGE_REFRESH',flush=True); w.refresh_notification_badge(); w.close(); print('Dashboard, podium, calendar, odds, playoffs, audit and pro tools OK')"
       - name: Test Windows dashboard result visibility and local recovery
         env:
           QT_QPA_PLATFORM: offscreen
@@ -104,6 +104,10 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python windows_app/tournament_regression_smoke.py
+      - name: Test Windows tournament analytics and move timing
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python windows_app/analytics_regression_smoke.py
       - name: Build standalone EXE
         shell: pwsh
         run: |
