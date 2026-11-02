@@ -73,7 +73,7 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          python -c "from PySide6.QtWidgets import QApplication; from windows_app.main import MainWindow; app=QApplication([]); w=MainWindow(); assert len(w.podium_cards)==3; assert len(w.odds_rows)==5; assert len(w.calendar_round_bars)==5; assert hasattr(w,'audit_events_layout'); w.refresh_all(); assert w.dashboard_progress.value()>=0; w.close(); print('Dashboard, podium, calendar, odds, playoffs and audit timeline OK')"
+          python -c "from PySide6.QtWidgets import QApplication; from windows_app.main import MainWindow; app=QApplication([]); w=MainWindow(); assert len(w.podium_cards)==3; assert len(w.odds_rows)==5; assert len(w.calendar_round_bars)==5; assert hasattr(w,'audit_events_layout'); assert len(w.profile_tiles)==4; assert len(w.compare_tiles)==2; assert len(w._page_keys)==16; assert hasattr(w,'notification_button'); assert not any(x[0]=='ERRORE' for x in w.health_check()); w.refresh_all(); assert w.dashboard_progress.value()>=0; w.refresh_player_profile(); w.refresh_compare(); w.refresh_openings(); w.refresh_notification_badge(); w.close(); print('Dashboard, podium, calendar, odds, playoffs, audit and pro tools OK')"
       - name: Test odds and streaming controls
         env:
           QT_QPA_PLATFORM: offscreen
