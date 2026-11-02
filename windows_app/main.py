@@ -2915,8 +2915,8 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
                 last_error=exc
         raise RuntimeError(f"Non è stato possibile avviare il server locale sulle porte 8765–8774: {last_error}")
 
-    def match_web_url(self,gid):
-        host,port=self.start_match_web_server()
+    def match_web_url(self,gid,host_override=None):
+        host,port=self.start_match_web_server(host_override)
         return f"http://{host}:{port}/match/{urllib.parse.quote(gid,safe='')}"
 
     def show_match_qr_dialog(self,gid):
