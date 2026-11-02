@@ -7,11 +7,19 @@ import chess
 import chess.pgn
 try:
     from . import c5r_theme as T
-    from .c5r_widgets import (SideNav, ToastStatusBar, Card, StatTile, EmptyState, ProbBar,\n        PillDelegate, style_table, table_card, LineChart, ClockChip, ResultPicker,\n        EvalBar, Avatar, label as ui_label, pill as ui_pill, set_pill, button as ui_button)
+    from .c5r_widgets import (
+        SideNav, ToastStatusBar, Card, StatTile, EmptyState, ProbBar,
+        PillDelegate, style_table, table_card, LineChart, ClockChip, ResultPicker,
+        EvalBar, Avatar, label as ui_label, pill as ui_pill, set_pill, button as ui_button
+    )
     from .c5r_board import BoardWidget
 except ImportError:
     import c5r_theme as T
-    from c5r_widgets import (SideNav, ToastStatusBar, Card, StatTile, EmptyState, ProbBar,\n        PillDelegate, style_table, table_card, LineChart, ClockChip, ResultPicker,\n        EvalBar, Avatar, label as ui_label, pill as ui_pill, set_pill, button as ui_button)
+    from c5r_widgets import (
+        SideNav, ToastStatusBar, Card, StatTile, EmptyState, ProbBar,
+        PillDelegate, style_table, table_card, LineChart, ClockChip, ResultPicker,
+        EvalBar, Avatar, label as ui_label, pill as ui_pill, set_pill, button as ui_button
+    )
     from c5r_board import BoardWidget
 from PySide6.QtCore import Qt, QSize, Signal, QThread, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPdfWriter, QKeySequence, QShortcut
