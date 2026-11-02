@@ -1734,16 +1734,9 @@ class MainWindow(QMainWindow):
                 self.incident_reports.append(record)
                 action="Verbale incidente creato"
                 before="—"
-            keep={item["path"] for item in final_attachments}
-            if old:
-                for old_attachment in old.get("attachments",[]):
-                    old_path=old_attachment.get("path")
-                    if old_path and old_path not in keep:
-                        try:
-                            resolved=self.incident_attachment_path(old_path)
-                            resolved.unlink(missing_ok=True)
-                        except (ValueError,OSError):
-                            pass
+            # Evidence files are retained when detached from a report: undo/redo and
+            # older snapshots may still reference them. The report stores only its
+            # currently linked attachments.
             self.log_operation(action,report_id,before,
                 f"{record['status']} · {record['summary']}",
                 f"{record['category']} · {record['game_id'] or 'Generale'} · {record['participants']}")
@@ -1849,7 +1842,7 @@ class MainWindow(QMainWindow):
         root.addWidget(attachments,1)
         attachment_buttons=QHBoxLayout()
         add_file=QPushButton("AGGIUNGI ALLEGATI")
-        remove_file=QPushButton("RIMUOVI SELEZIONATO")
+        remove_file=QPushButton("RIMUOVI DAL VERBALE")
         open_file=QPushButton("APRI ALLEGATO")
         attachment_buttons.addWidget(add_file)
         attachment_buttons.addWidget(remove_file)
@@ -1893,7 +1886,8 @@ class MainWindow(QMainWindow):
         open_file.clicked.connect(open_attachment)
 
         root.addWidget(ui_label(
-            "Dimensione massima: 25 MB per file. I documenti vengono copiati nella cartella locale del verbale.",
+            "Massimo 25 MB per file. I documenti vengono copiati nella cartella locale del verbale. "
+            "Rimuovere un allegato lo scollega dal verbale, ma conserva il file per permettere undo e ripristino degli snapshot.",
             "caption", wrap=True))
         buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Save|QDialogButtonBox.StandardButton.Cancel)
         buttons.button(QDialogButtonBox.StandardButton.Save).setText("SALVA VERBALE")
