@@ -5,8 +5,14 @@ from pathlib import Path
 from itertools import combinations
 import chess
 import chess.pgn
-import c5r_theme as T
-from c5r_widgets import SideNav, ToastStatusBar
+try:
+    from . import c5r_theme as T
+    from .c5r_widgets import SideNav, ToastStatusBar
+    from .c5r_board import BoardWidget
+except ImportError:
+    import c5r_theme as T
+    from c5r_widgets import SideNav, ToastStatusBar
+    from c5r_board import BoardWidget
 from PySide6.QtCore import Qt, QSize, Signal, QThread, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPdfWriter, QKeySequence, QShortcut
 from PySide6.QtSvg import QSvgRenderer
@@ -181,8 +187,6 @@ def storage_path():
     folder = Path(os.environ.get("APPDATA", str(Path.home()))) / "Coppa5Re"
     folder.mkdir(parents=True, exist_ok=True)
     return folder / "tournament.json"
-
-from c5r_board import BoardWidget
 
 class BoardCard(QFrame):
     def __init__(self,app,slot,initial):
