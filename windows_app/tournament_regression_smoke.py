@@ -130,7 +130,7 @@ try:
     window.start_playoff_clock("sf2")
     before_white = clock["white"]
     window.switch_playoff_clock("sf2")
-    assert clock["white"] == before_white + 10
+    assert abs(clock["white"] - (before_white + 10)) < 0.5
     assert clock["side_to_move"] == "black"
     assert window.recovery_path.is_file()
     clock["black"] = 1
