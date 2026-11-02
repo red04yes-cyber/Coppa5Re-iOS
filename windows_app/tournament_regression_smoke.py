@@ -14,7 +14,8 @@ os.environ["APPDATA"] = APPDATA
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication, QMessageBox, QInputDialog, QFileDialog
-from PySide6.QtGui import QPixmap, QColor
+from PySide6.QtGui import QPixmap, QColor, QDesktopServices
+from PySide6.QtCore import Qt
 import chess
 
 from windows_app.main import MainWindow, PLAYERS, GAMES, storage_path
