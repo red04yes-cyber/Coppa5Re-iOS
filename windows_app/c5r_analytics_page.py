@@ -72,6 +72,15 @@ class TournamentAnalyticsPage(QWidget):
         summary_card.body.addWidget(self.tournament_summary_label)
         root.addWidget(summary_card)
 
+        errors_card = Card("Confronto errori tra partecipanti",
+            "Conteggi delle mosse già valutate da Stockfish; i dati mancanti non vengono considerati come zero.")
+        self.error_table = QTableWidget(0, 5)
+        self.error_table.setHorizontalHeaderLabels(["GIOCATORE", "MOSSE VALUTATE", "IMPRECISIONI", "ERRORI", "GRAVI ERRORI"])
+        self.error_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        style_table(self.error_table, row_height=38, selectable=False)
+        errors_card.body.addWidget(table_card(self.error_table))
+        root.addWidget(errors_card)
+
         simulation = Card("Simulatore della classifica",
             "Modifica virtualmente i risultati delle partite ancora da disputare. Le modifiche restano temporanee e non vengono salvate.")
         self.simulation_hint = ui_label("", "muted", wrap=True)
@@ -179,6 +188,19 @@ class TournamentAnalyticsPage(QWidget):
             f"Tempo medio per mossa: {avg_time} ({summary['timed_moves']} mosse cronometrate).\n"
             f"Durata media misurata delle partite: {avg_game} ({summary['games_with_timing']} partite con tempi disponibili)."
         )
+        self.error_table.setRowCount(len(self.player_order))
+        for row_index, pid in enumerate(self.player_order):
+            stats = player_error_statistics(self.schedule, self.app.move_reviews, pid)
+            values = [
+                self.player_name(pid), str(stats["reviewed_moves"]),
+                str(stats["counts"]["IMPRECISIONE"]), str(stats["counts"]["ERRORE"]),
+                str(stats["counts"]["GRAVE ERRORE"])
+            ]
+            for column, value in enumerate(values):
+                cell = QTableWidgetItem(value)
+                if column:
+                    cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.error_table.setItem(row_index, column, cell)
         self.refresh_simulation()
 
     def refresh_simulation(self):
