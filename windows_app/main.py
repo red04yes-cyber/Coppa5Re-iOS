@@ -3534,25 +3534,31 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
         QApplication.clipboard().setText(draft["body"])
         self.statusBar().showMessage("Testo copiato negli appunti.",2500)
 
+    def notification_compose_url(self,draft,channel):
+        if channel=="email":
+            address=draft.get("email","")
+            if not address:
+                raise ValueError("Nella scheda del giocatore non è stato inserito un indirizzo email.")
+            return QUrl("mailto:"+quote(address,safe="@.")+"?"+urlencode({
+                "subject":"Coppa dei 5 Re · "+draft.get("title","Comunicazione"),
+                "body":draft.get("body","")}))
+        if channel=="whatsapp":
+            number=re.sub(r"\D","",draft.get("whatsapp",""))
+            if not number:
+                raise ValueError("Nella scheda del giocatore non è stato inserito un numero WhatsApp.")
+            return QUrl("https://wa.me/"+number+"?"+urlencode({"text":draft.get("body","")}))
+        raise ValueError("Canale di comunicazione non riconosciuto.")
+
     def open_selected_notification(self,channel):
         draft=self.selected_notification_draft()
         if not draft:
             QMessageBox.information(self,"Nessun messaggio","Seleziona una comunicazione generata.")
             return
-        if channel=="email":
-            address=draft.get("email","")
-            if not address:
-                QMessageBox.warning(self,"Email mancante",
-                    f"Nella scheda di {name(draft['player_id'])} non è stato inserito un indirizzo email.")
-                return
-            url=QUrl("mailto:"+quote(address,safe="@.")+"?"+urlencode({"subject":"Coppa dei 5 Re · "+draft["title"],"body":draft["body"]}))
-        else:
-            number=re.sub(r"\D","",draft.get("whatsapp",""))
-            if not number:
-                QMessageBox.warning(self,"WhatsApp mancante",
-                    f"Nella scheda di {name(draft['player_id'])} non è stato inserito un numero WhatsApp.")
-                return
-            url=QUrl("https://wa.me/"+number+"?"+urlencode({"text":draft["body"]}))
+        try:
+            url=self.notification_compose_url(draft,channel)
+        except ValueError as exc:
+            QMessageBox.warning(self,"Recapito mancante",str(exc))
+            return
         QDesktopServices.openUrl(url)
         draft["status"]="Compositore aperto"
         self.save()
