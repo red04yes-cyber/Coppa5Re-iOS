@@ -13,7 +13,7 @@ try:
     from .c5r_widgets import (
         CardGlowController, SideNav, ToastStatusBar, Card, StatTile, EmptyState, ProbBar,
         PillDelegate, style_table, table_card, LineChart, ClockChip, ResultPicker,
-        EvalBar, Avatar, label as ui_label, pill as ui_pill, set_pill, button as ui_button
+        EvalBar, Avatar, PlayerStrip, FormStrip, MatchLine, label as ui_label, pill as ui_pill, set_pill, button as ui_button
     )
     from .c5r_board import BoardWidget
 except ImportError:
@@ -21,7 +21,7 @@ except ImportError:
     from c5r_widgets import (
         CardGlowController, SideNav, ToastStatusBar, Card, StatTile, EmptyState, ProbBar,
         PillDelegate, style_table, table_card, LineChart, ClockChip, ResultPicker,
-        EvalBar, Avatar, label as ui_label, pill as ui_pill, set_pill, button as ui_button
+        EvalBar, Avatar, PlayerStrip, FormStrip, MatchLine, label as ui_label, pill as ui_pill, set_pill, button as ui_button
     )
     from c5r_board import BoardWidget
 from PySide6.QtCore import Qt, QSize, Signal, QThread, QTimer, QRect, QUrl, QDateTime, QByteArray, QBuffer, QIODevice, QPropertyAnimation, QEasingCurve
@@ -445,25 +445,13 @@ class BoardCard(QFrame):
         self.selector.currentIndexChanged.connect(self.select_game)
         self.selector.setMinimumWidth(220); top.addWidget(self.selector); lay.addLayout(top)
         player_row=QHBoxLayout()
-        white_box=QHBoxLayout()
-        self.white_photo=QLabel(); self.white_photo.setFixedSize(44,44)
-        white_text=QVBoxLayout()
-        self.white_name=QLabel(); self.white_name.setObjectName("MatchTitle")
-        self.white_ratings=QLabel(); self.white_ratings.setObjectName("Muted")
-        white_text.addWidget(self.white_name); white_text.addWidget(self.white_ratings)
-        white_box.addWidget(self.white_photo); white_box.addLayout(white_text,1)
-        vs_label=QLabel("VS"); vs_label.setObjectName("Eyebrow")
-        black_box=QHBoxLayout()
-        self.black_photo=QLabel(); self.black_photo.setFixedSize(44,44)
-        black_text=QVBoxLayout()
-        self.black_name=QLabel(); self.black_name.setObjectName("MatchTitle")
-        self.black_ratings=QLabel(); self.black_ratings.setObjectName("Muted")
-        black_text.addWidget(self.black_name); black_text.addWidget(self.black_ratings)
-        black_box.addLayout(black_text,1); black_box.addWidget(self.black_photo)
-        player_row.addLayout(white_box,1); player_row.addWidget(vs_label); player_row.addLayout(black_box,1)
+        player_row.setSpacing(8)
+        self.white_strip=PlayerStrip()
+        self.black_strip=PlayerStrip()
+        player_row.addWidget(self.white_strip,1)
+        player_row.addWidget(self.black_strip,1)
         lay.addLayout(player_row)
         self.state_label=QLabel(); self.state_label.setObjectName("Eyebrow"); lay.addWidget(self.state_label)
-        self.clock_label=QLabel(); self.clock_label.setObjectName("Muted"); lay.addWidget(self.clock_label)
         self.history_index=None
         self.board=BoardWidget(True); self.board.moveRequested.connect(self.move); lay.addWidget(self.board,1)
         nav=QHBoxLayout()
@@ -532,10 +520,39 @@ class BoardCard(QFrame):
         full=self.app.get_board(self.game_id)
         self.history_index=min(len(full.move_stack),(len(full.move_stack) if self.history_index is None else self.history_index)+1)
         self.refresh()
+    def refresh_players(self, gid, white, black):
+        state = self.app.clock_data(gid)
+        board = self.app.get_board(gid)
+        finished = self.app.results.get(gid) is not None
+        running = bool(state.get("started") and not finished)
+        self.white_strip.set_data(
+            name(white), self.app.player_rating_summary(white),
+            T.player_tint(ORDER.index(white)), True, state.get("white", 0),
+            running, board.turn == chess.WHITE and not finished,
+        )
+        self.black_strip.set_data(
+            name(black), self.app.player_rating_summary(black),
+            T.player_tint(ORDER.index(black)), False, state.get("black", 0),
+            running, board.turn == chess.BLACK and not finished,
+        )
+        self.white_strip.set_photo(self.app.player_photo_pixmap(white, 32))
+        self.black_strip.set_photo(self.app.player_photo_pixmap(black, 32))
+
     def refresh_clock(self):
-        self.clock_label.setText(self.app.clock_text(self.game_id))
-        state=self.app.clock_data(self.game_id)
-        self.clock_btn.setEnabled(not self.app.results.get(self.game_id) and not state.get("started"))
+        gid, _, _, _ = game(self.game_id)
+        state = self.app.clock_data(gid)
+        board = self.app.get_board(gid)
+        finished = self.app.results.get(gid) is not None
+        running = bool(state.get("started") and not finished)
+        self.white_strip.clock.set_time(
+            state.get("white", 0),
+            running and board.turn == chess.WHITE,
+        )
+        self.black_strip.clock.set_time(
+            state.get("black", 0),
+            running and board.turn == chess.BLACK,
+        )
+        self.clock_btn.setEnabled(not finished and not state.get("started"))
         self.clock_btn.setText("OROLOGIO IN CORSO" if state.get("started") else "AVVIA OROLOGIO")
     def refresh_move_quality(self):
         reviews=self.app.move_reviews.get(self.game_id,[])
@@ -591,14 +608,9 @@ class BoardCard(QFrame):
         self.known_ply=len(board.move_stack)
         visible=chess.Board()
         for move in board.move_stack[:self.history_index]: visible.push(move)
-        self.white_name.setText(name(w))
-        self.black_name.setText(name(b))
-        self.app.set_player_avatar_label(self.white_photo,w,44)
-        self.app.set_player_avatar_label(self.black_photo,b,44)
-        self.white_ratings.setText(self.app.player_rating_summary(w))
-        self.black_ratings.setText(self.app.player_rating_summary(b))
         self.engine_btn.setText("STOCKFISH · ON" if self.app.engine_enabled else "STOCKFISH · OFF")
         clock_state=self.app.clock_data(gid)
+        self.refresh_players(gid,w,b)
         self.state_label.setText("CONCLUSA" if self.app.results.get(gid) else ("IN CORSO" if clock_state.get("started") or board.move_stack else "LIVE"))
         self.turn.setText("PARTITA CONCLUSA · SCACCHIERA BLOCCATA" if self.app.results.get(gid) else
                           f"{'REVISIONE · ' if self.history_index<len(board.move_stack) else ''}AL MUOVERE: {'BIANCO' if visible.turn else 'NERO'} · {visible.fullmove_number}ª mossa")
@@ -1549,16 +1561,34 @@ class MainWindow(QMainWindow):
         snapshot.setSpacing(12)
         upcoming = Card("Prossimi incontri", "Partite attive e prossime da disputare.")
         self.dashboard_next_labels = []
+        self.dashboard_next_matches = []
         for _ in range(3):
-            item = ui_label("In attesa del calendario.", "body", wrap=True)
-            self.dashboard_next_labels.append(item)
-            upcoming.body.addWidget(item)
+            row = QWidget()
+            row_layout = QVBoxLayout(row)
+            row_layout.setContentsMargins(0, 2, 0, 6)
+            row_layout.setSpacing(3)
+            match = MatchLine()
+            status = ui_label("In attesa del calendario.", "caption", wrap=True)
+            row_layout.addWidget(match)
+            row_layout.addWidget(status)
+            self.dashboard_next_matches.append(match)
+            self.dashboard_next_labels.append(status)
+            upcoming.body.addWidget(row)
         ranking = Card("Podio provvisorio", "Classifica netta aggiornata dopo ogni risultato.")
         self.dashboard_ranking_labels = []
+        self.dashboard_ranking_forms = []
         for _ in range(3):
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 3, 0, 3)
+            row_layout.setSpacing(8)
             item = ui_label("—", "body", wrap=True)
+            form = FormStrip()
+            row_layout.addWidget(item, 1)
+            row_layout.addWidget(form, 0)
             self.dashboard_ranking_labels.append(item)
-            ranking.body.addWidget(item)
+            self.dashboard_ranking_forms.append(form)
+            ranking.body.addWidget(row)
         snapshot.addWidget(upcoming, 3)
         snapshot.addWidget(ranking, 2)
         root.addLayout(snapshot)
@@ -4702,25 +4732,47 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
             if self.results.get(gid) is None and gid not in active_games
         ]
         for index, label in enumerate(self.dashboard_next_labels):
+            match_line = self.dashboard_next_matches[index]
             if index < len(upcoming_ids):
                 gid = upcoming_ids[index]
                 _, rnd, white, black = game(gid)
                 state = "IN CORSO" if gid in active_games else "DA DISPUTARE"
-                label.setText(f"R{rnd} · {gid}     {name(white)}  vs  {name(black)}     ·     {state}")
+                match_line.set_players(name(white), name(black))
+                label.setText(f"ROUND {rnd} · {gid} · {state}")
             elif index == 0 and not upcoming_ids:
+                match_line.set_players("", "")
                 label.setText("Girone completato: non ci sono altre partite da disputare.")
             else:
+                match_line.set_players("", "")
                 label.setText("—")
         ranking_rows = self.standings()[:3]
         for index, label in enumerate(self.dashboard_ranking_labels):
+            form_widget = self.dashboard_ranking_forms[index]
             if index < len(ranking_rows):
                 row = ranking_rows[index]
+                player_id = row["id"]
                 label.setText(
-                    f"{index + 1}.  {name(row['id'])}     {row['points']:.1f} pt"
+                    f"{index + 1}.  {name(player_id)}     {row['points']:.1f} pt"
                     f"     ·     {row['played']}/5 giocate"
                 )
+                recent = []
+                for match in sorted(GAMES, key=lambda item: (item[1], item[0])):
+                    gid, _, white, black = match
+                    if player_id not in (white, black):
+                        continue
+                    result = self.results.get(gid)
+                    if result not in ("1-0", "0-1", "1/2-1/2"):
+                        continue
+                    if result == "1/2-1/2":
+                        recent.append("X")
+                    elif (result == "1-0" and player_id == white) or (result == "0-1" and player_id == black):
+                        recent.append("V")
+                    else:
+                        recent.append("P")
+                form_widget.set_items(recent)
             else:
                 label.setText("—")
+                form_widget.set_items([])
         cumulative = {player: [] for player in ORDER}
         running_points = {player: 0.0 for player in ORDER}
         for rnd in range(1, 6):

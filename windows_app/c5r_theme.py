@@ -261,6 +261,8 @@ QFrame#CardAccent:hover { border: 1px solid rgba(235,198,126,0.82); }
 QFrame#CardPlain:hover { border: 1px solid rgba(99,174,222,0.45); }
 QProgressBar { background: #101821; border: 1px solid #263545; border-radius: 6px; min-height: 10px; max-height: 10px; text-align: center; color: transparent; }
 QProgressBar::chunk { background: qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #8E6D35,stop:0.55 #C9A15B,stop:1 #E7C786); border-radius: 5px; }
+QWidget#Broadcast { background: @bg@; }
+QFrame#RowHover[selected="true"] { border-color: @brass@; background: rgba(201,161,91,0.10); }
 QFrame#Toast[toast_tone="success"] { border-left: 3px solid @success@; }
 QFrame#Toast[toast_tone="danger"] { border-left: 3px solid @danger@; }
 QFrame#Toast[toast_tone="warning"] { border-left: 3px solid @warning@; }
