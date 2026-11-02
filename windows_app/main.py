@@ -36,9 +36,9 @@ from PySide6.QtWidgets import (
 )
 
 try:
-    from .c5r_storage import atomic_write_json, read_document, decode_document
+    from .c5r_storage import atomic_write_json, read_document, decode_document, seal_document
 except ImportError:
-    from c5r_storage import atomic_write_json, read_document, decode_document
+    from c5r_storage import atomic_write_json, read_document, decode_document, seal_document
 try:
     from .c5r_history import archive_edition, import_edition_file, list_editions, career_statistics
 except ImportError:
@@ -833,7 +833,7 @@ class MainWindow(QMainWindow):
 
     def save_recovery(self):
         if getattr(self,"state_load_blocked",False):
-            return
+            return False
         active=any(
             (self.moves.get(gid) and not self.results.get(gid)) or self.clock_data(gid).get("started")
             for gid,_,_,_ in GAMES
@@ -841,11 +841,21 @@ class MainWindow(QMainWindow):
             for key in ("sf1","sf2","final","third"))
         if not active:
             self.recovery_path.unlink(missing_ok=True)
-            return
-        self.save()
-        tmp=self.recovery_path.with_suffix(".tmp")
-        shutil.copy2(storage_path(),tmp)
-        tmp.replace(self.recovery_path)
+            return True
+        temporary=self.recovery_path.with_suffix(".tmp")
+        try:
+            self.recovery_path.parent.mkdir(parents=True,exist_ok=True)
+            encoded=json.dumps(seal_document(self.state_payload()),ensure_ascii=False,indent=2,sort_keys=True)
+            with temporary.open("w",encoding="utf-8",newline="\n") as stream:
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary,self.recovery_path)
+            return True
+        except Exception as exc:
+            temporary.unlink(missing_ok=True)
+            self.statusBar().showMessage(f"Recovery non aggiornato: {exc}",5000)
+            return False
 
     def toggle_engine(self):
         if not self.find_engine():
@@ -1129,15 +1139,17 @@ class MainWindow(QMainWindow):
         for gid,result in timed_out:
             self.clock_data(gid)["started"]=False
             self._clock_runtime.pop(gid,None)
+            board=self.get_board(gid)
+            flagged_side=chess.WHITE if result=="0-1" else chess.BLACK
+            opponent=not flagged_side
+            insufficient=board.has_insufficient_material(opponent)
+            if insufficient:
+                result="1/2-1/2"
+            detail="Caduta della bandierina · patta per materiale insufficiente" if insufficient else "Caduta della bandierina · tempo esaurito"
             if gid in ("sf1","sf2","final","third"):
-                self.set_playoff_result(gid,result,detail="Caduta della bandierina · tempo esaurito")
+                self.set_playoff_result(gid,result,detail=detail)
             else:
-                board=self.get_board(gid)
-                flagged_side=chess.WHITE if result=="0-1" else chess.BLACK
-                opponent=not flagged_side
-                if board.has_insufficient_material(opponent):
-                    result="1/2-1/2"
-                self.set_result(gid,result,confirm=False,detail="Caduta della bandierina · tempo esaurito",termination="time forfeit")
+                self.set_result(gid,result,confirm=False,detail=detail,termination="time forfeit")
         if changed:
             self.clock_ticks+=1
             for card in getattr(self,"live_cards",[]): card.refresh_clock()
@@ -2376,21 +2388,36 @@ class MainWindow(QMainWindow):
         return folder
 
     def _store_snapshot(self, reason):
-        source = storage_path()
+        source=storage_path()
         if not source.exists():
             return None
-        state = json.loads(source.read_text(encoding="utf-8"))
-        created = datetime.now().isoformat(timespec="seconds")
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        target = self.snapshot_directory() / f"{stamp}.json"
-        payload = {"_c5r_snapshot": {"created_at": created, "reason": str(reason)}, "state": state}
-        tmp = target.with_suffix(".tmp")
-        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(target)
-        snapshots = sorted(self.snapshot_directory().glob("*.json"), key=lambda path: path.name, reverse=True)
-        for stale in snapshots[40:]:
-            stale.unlink(missing_ok=True)
+        state,_=read_document(source)
+        created=datetime.now().isoformat(timespec="seconds")
+        stamp=datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        target=self.snapshot_directory()/f"{stamp}.json"
+        payload={
+            "_c5r_snapshot":{"created_at":created,"reason":str(reason)},
+            "state":seal_document(state),
+        }
+        atomic_write_json(target,payload)
         return target
+
+    def _decode_snapshot_file(self,path):
+        raw=json.loads(Path(path).read_text(encoding="utf-8"))
+        payload=decode_document(raw)
+        metadata=payload.get("_c5r_snapshot")
+        state_raw=payload.get("state")
+        if not isinstance(metadata,dict) or not isinstance(state_raw,dict):
+            raise ValueError("Il file non contiene un'istantanea C5R completa.")
+        state=decode_document(state_raw)
+        schedule=state.get("schedule")
+        if not isinstance(schedule,list) or not schedule:
+            raise ValueError("Lo snapshot non contiene un calendario.")
+        parsed=[(item["id"],int(item["round"]),item["white"],item["black"]) for item in schedule]
+        validate_schedule(parsed)
+        if not isinstance(state.get("results"),dict) or not isinstance(state.get("moves"),dict):
+            raise ValueError("La struttura di risultati o mosse dello snapshot non è valida.")
+        return metadata,state
 
     def _maybe_create_auto_snapshot(self):
         try:
@@ -2421,17 +2448,13 @@ class MainWindow(QMainWindow):
             return None
 
     def snapshot_entries(self):
-        entries = []
-        for path in sorted(self.snapshot_directory().glob("*.json"), key=lambda item: item.name, reverse=True):
+        entries=[]
+        for path in sorted(self.snapshot_directory().glob("*.json"),key=lambda item:item.name,reverse=True):
             try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-                metadata = payload.get("_c5r_snapshot", {})
-                state = payload.get("state", {})
-                if not isinstance(state, dict) or "results" not in state or "schedule" not in state:
-                    continue
-                created = metadata.get("created_at", path.stem)
-                reason = metadata.get("reason", "Snapshot")
-                entries.append((path, created, reason))
+                metadata,_=self._decode_snapshot_file(path)
+                created=metadata.get("created_at",path.stem)
+                reason=metadata.get("reason","Snapshot")
+                entries.append((path,created,reason))
             except Exception:
                 continue
         return entries
@@ -2449,53 +2472,72 @@ class MainWindow(QMainWindow):
             )
 
     def restore_snapshot(self):
-        entries = self.snapshot_entries()
+        entries=self.snapshot_entries()
         if not entries:
-            QMessageBox.information(self, "Ripristino snapshot", "Non ci sono snapshot validi da ripristinare.")
+            QMessageBox.information(self,"Ripristina snapshot","Non ci sono snapshot integri e validi da ripristinare.")
             return False
-        labels = [
-            f"{created.replace('T', ' ')} · {reason} · {path.name}"
-            for path, created, reason in entries
-        ]
-        selected, ok = QInputDialog.getItem(
-            self, "Ripristina snapshot", "Seleziona la versione del torneo:", labels, 0, False
-        )
+        labels=[f"{created.replace('T',' ')} · {reason} · {path.name}" for path,created,reason in entries]
+        selected,ok=QInputDialog.getItem(self,"Ripristina snapshot","Seleziona la versione del torneo:",labels,0,False)
         if not ok or not selected:
             return False
-        index = labels.index(selected)
-        snapshot_path, _, _ = entries[index]
-        answer = QMessageBox.question(
-            self, "Conferma ripristino",
+        snapshot_path=entries[labels.index(selected)][0]
+        answer=QMessageBox.question(
+            self,"Conferma ripristino",
             "Lo stato corrente verrà sostituito con lo snapshot selezionato. "
-            "Prima del ripristino verrà salvata una copia di sicurezza dello stato attuale. Continuare?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            "Prima del ripristino verrà salvata una copia verificata dello stato attuale. Continuare?",
+            QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
-        if answer != QMessageBox.StandardButton.Yes:
+        if answer!=QMessageBox.StandardButton.Yes:
             return False
+
+        target=storage_path()
+        previous_exists=target.exists()
+        previous_state=self.state_payload()
         try:
-            self.save(automatic_snapshot=False)
-            self._store_snapshot("Sicurezza prima del ripristino")
-            payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
-            restored = payload["state"]
-            schedule = [
-                (item["id"], int(item["round"]), item["white"], item["black"])
-                for item in restored.get("schedule", [])
-            ]
-            validate_schedule(schedule)
-            temp = storage_path().with_suffix(".restore.tmp")
-            temp.write_text(json.dumps(restored, ensure_ascii=False, indent=2), encoding="utf-8")
-            temp.replace(storage_path())
-            self.load_state()
+            _,restored=self._decode_snapshot_file(snapshot_path)
+            if not self.save(automatic_snapshot=False):
+                raise RuntimeError("Impossibile salvare lo stato corrente prima del ripristino.")
+            safety_snapshot=self._store_snapshot("Sicurezza prima del ripristino")
+            if safety_snapshot is None:
+                raise RuntimeError("Non è stato possibile creare la copia di sicurezza.")
+            atomic_write_json(target,restored)
+            self.state_load_blocked=False
             self.boards.clear()
-            self.log_operation("Ripristino snapshot", snapshot_path.name, "Stato precedente", "Snapshot ripristinato")
-            self.save(automatic_snapshot=False)
+            self._odds_cache_key=None
+            self._odds_cache=None
+            self.load_state()
+            if self.state_load_blocked:
+                raise RuntimeError("Il nuovo archivio non ha superato il caricamento.")
+            self.boards.clear()
+            self.log_operation("Ripristino snapshot",snapshot_path.name,"Stato precedente","Snapshot ripristinato")
+            if not self.save(automatic_snapshot=False):
+                raise RuntimeError("Impossibile salvare lo stato ripristinato.")
             self.refresh_all()
             self.refresh_snapshot_status()
-            self.statusBar().showMessage("Snapshot ripristinato. È stata conservata anche una copia dello stato precedente.", 5000)
+            self.statusBar().showMessage("Snapshot verificato e ripristinato. La versione precedente è stata conservata.",5000)
             return True
         except Exception as exc:
-            QMessageBox.critical(self, "Ripristino non riuscito", str(exc))
+            rollback_error=None
+            try:
+                if previous_exists:
+                    atomic_write_json(target,previous_state)
+                else:
+                    target.unlink(missing_ok=True)
+                self.state_load_blocked=False
+                self.boards.clear()
+                self.load_state()
+                if self.state_load_blocked:
+                    raise RuntimeError("Anche il caricamento dello stato precedente è fallito.")
+                self.boards.clear()
+                self.refresh_all()
+            except Exception as rollback_exc:
+                rollback_error=rollback_exc
+                self.state_load_blocked=True
+            message=f"Ripristino non riuscito; lo stato precedente è stato ripristinato.\n{exc}"
+            if rollback_error is not None:
+                message+=f"\nAttenzione: anche il rollback ha segnalato un errore: {rollback_error}"
+            QMessageBox.critical(self,"Ripristino non riuscito",message)
             return False
 
     def collect_notifications(self):
@@ -5440,11 +5482,28 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
         self.statusBar().showMessage("Registro operazioni esportato.",2500)
 
     def export_backup(self):
-        self.save()
         path,_=QFileDialog.getSaveFileName(self,"Backup torneo","Backup-C5R.json","JSON (*.json)")
-        if path:
-            shutil.copy2(storage_path(),path)
-            self.statusBar().showMessage("Backup completo salvato.",2500)
+        if not path:
+            return
+        source=storage_path()
+        destination=Path(path)
+        temporary=destination.with_name(destination.name+".tmp")
+        try:
+            if not self.save():
+                self.statusBar().showMessage("Backup non creato: il salvataggio del torneo è bloccato.",5000)
+                return
+            if not source.is_file():
+                raise FileNotFoundError("Archivio del torneo non trovato.")
+            if destination.resolve()==source.resolve():
+                raise ValueError("Scegli un percorso diverso dall'archivio operativo del torneo.")
+            temporary.unlink(missing_ok=True)
+            shutil.copy2(source,temporary)
+            read_document(temporary)
+            temporary.replace(destination)
+            self.statusBar().showMessage("Backup completo verificato e salvato.",3500)
+        except Exception as exc:
+            temporary.unlink(missing_ok=True)
+            QMessageBox.warning(self,"Backup non creato",f"Non è stato possibile creare un backup valido:\n{exc}")
 
     def restore_backup(self):
         path,_=QFileDialog.getOpenFileName(self,"Ripristina backup","","Backup torneo (*.json)")
@@ -6193,79 +6252,220 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
         )
 
     def advanced_forecast(self,n=2000):
-        raw,played,_,_,_=self.raw_stats()
+        raw,played,current_wins,_,_=self.raw_stats()
         penalties=self.penalty_points()
         current={p:raw[p]+penalties[p] for p in PLAYERS}
         form={p:(raw[p]+1.0)/(played[p]+2.0) for p in PLAYERS}
-        remaining=[g for g in GAMES if self.results.get(g[0]) is None]
         payload=json.dumps({"results":self.results,"penalties":self.penalties,"schedule":GAMES},
             sort_keys=True,ensure_ascii=False,default=str)
         seed=int.from_bytes(hashlib.sha256(payload.encode("utf-8")).digest()[:8],"big")
         modes=(("Prudente",0.55,0.015),("Base",1.0,0.035),("Sensibilità alta",1.55,0.065))
         forecasts={}
+        champions={}
         count=max(500,int(n))
+        valid_results={"1-0","0-1","1/2-1/2","VOID"}
+
+        def score_result(result,player,white,black):
+            if result=="1-0":
+                return 1.0 if player==white else 0.0
+            if result=="0-1":
+                return 1.0 if player==black else 0.0
+            if result=="1/2-1/2":
+                return 0.5
+            return 0.0
+
+        def match_probabilities(white,black,factor,noise,rng):
+            base_white,base_black,(pw,pd,pb)=PAIR_PRIORS[frozenset((white,black))]
+            if white!=base_white:
+                pw,pb=pb,pw
+            shift=max(-0.24,min(0.24,0.20*factor*(form[white]-form[black])))
+            jitter=rng.uniform(-noise,noise)
+            pw=max(0.025,pw+shift+jitter)
+            pb=max(0.025,pb-shift-jitter)
+            total=pw+pd+pb
+            return pw/total,pd/total,pb/total
+
+        def sample_qualification_result(white,black,factor,noise,rng):
+            pw,pd,pb=match_probabilities(white,black,factor,noise,rng)
+            draw=rng.random()
+            if draw<pw:
+                return "1-0"
+            if draw<pw+pd:
+                return "1/2-1/2"
+            return "0-1"
+
+        def rank_qualification(score,wins,simulated_results):
+            grouped={}
+            for player,points in score.items():
+                grouped.setdefault(points,[]).append(player)
+            ordered=[]
+            for points in sorted(grouped,reverse=True):
+                group=grouped[points]
+                def tie_key(player):
+                    direct=0.0
+                    if len(group)==2:
+                        opponent=next((candidate for candidate in group if candidate!=player),None)
+                        for gid,_,white,black in GAMES:
+                            if {white,black}!={player,opponent}:
+                                continue
+                            result=simulated_results.get(gid)
+                            if result in valid_results and result!="VOID":
+                                direct=score_result(result,player,white,black)
+                            break
+                    sonneborn=0.0
+                    for gid,_,white,black in GAMES:
+                        result=simulated_results.get(gid)
+                        if result not in ("1-0","0-1","1/2-1/2") or player not in (white,black):
+                            continue
+                        opponent=black if player==white else white
+                        sonneborn+=score[opponent]*score_result(result,player,white,black)
+                    return direct,sonneborn,wins[player]
+                group.sort(key=lambda player:(
+                    -tie_key(player)[0],-tie_key(player)[1],-tie_key(player)[2],ORDER.index(player)
+                ))
+                ordered.extend(group)
+            return ordered
+
+        def recorded_playoff_winner(key,pair):
+            actual_pair=tuple(getattr(self,"playoff_pairs",{}).get(key,(None,None)))
+            if actual_pair!=tuple(pair):
+                return None,False
+            result=self.playoff_results.get(key)
+            if result=="1-0":
+                return pair[0],True
+            if result=="0-1":
+                return pair[1],True
+            if result=="1/2-1/2":
+                winner=self.playoff_winners.get(key)
+                if winner in pair:
+                    return winner,True
+                return None,True
+            return None,False
+
+        def simulate_playoff_winner(key,pair,factor,noise,rng):
+            if not all(pair):
+                return None
+            winner,has_record=recorded_playoff_winner(key,pair)
+            if winner is not None:
+                return winner
+            if has_record and self.playoff_results.get(key)=="1/2-1/2":
+                return pair[rng.randrange(2)]
+            pw,pd,pb=match_probabilities(pair[0],pair[1],factor,noise,rng)
+            draw=rng.random()
+            if draw<pw:
+                return pair[0]
+            if draw<pw+pd:
+                return pair[rng.randrange(2)]
+            return pair[1]
+
+        brier_values=[]
+        for gid,_,white,black in GAMES:
+            result=self.results.get(gid)
+            if result not in ("1-0","0-1","1/2-1/2"):
+                continue
+            base_white,base_black,(pw,pd,pb)=PAIR_PRIORS[frozenset((white,black))]
+            if white!=base_white:
+                pw,pb=pb,pw
+            target=(1.0,0.0,0.0) if result=="1-0" else ((0.0,1.0,0.0) if result=="1/2-1/2" else (0.0,0.0,1.0))
+            brier_values.append(sum((actual-predicted)**2 for actual,predicted in zip(target,(pw,pd,pb)))/3.0)
+
         for index,(label,factor,noise) in enumerate(modes):
             rng=random.Random(seed+index*104729)
-            wins={p:0.0 for p in PLAYERS}
+            qualification_wins={p:0.0 for p in PLAYERS}
+            top_four={p:0.0 for p in PLAYERS}
+            champion_wins={p:0.0 for p in PLAYERS}
             for _ in range(count):
                 score=current.copy()
-                for gid,r,w,b in remaining:
-                    base_white,base_black,(pw,pd,pb)=PAIR_PRIORS[frozenset((w,b))]
-                    if w!=base_white:
-                        pw,pb=pb,pw
-                    shift=max(-0.24,min(0.24,0.20*factor*(form[w]-form[b])))
-                    jitter=rng.uniform(-noise,noise)
-                    pw=max(0.025,pw+shift+jitter)
-                    pb=max(0.025,pb-shift-jitter)
-                    total=pw+pd+pb
-                    pw,pd,pb=pw/total,pd/total,pb/total
-                    draw=rng.random()
-                    if draw<pw: score[w]+=1
-                    elif draw<pw+pd: score[w]+=.5; score[b]+=.5
-                    else: score[b]+=1
-                best=max(score.values())
-                tied=[p for p in PLAYERS if score[p]==best]
-                for player in tied:
-                    wins[player]+=1/len(tied)
+                wins=current_wins.copy()
+                simulated_results={gid:result for gid,result in self.results.items() if result in valid_results}
+                for gid,round_no,white,black in GAMES:
+                    if self.results.get(gid) is not None:
+                        continue
+                    result=sample_qualification_result(white,black,factor,noise,rng)
+                    simulated_results[gid]=result
+                    score[white]+=score_result(result,white,white,black)
+                    score[black]+=score_result(result,black,white,black)
+                    if result=="1-0":
+                        wins[white]+=1
+                    elif result=="0-1":
+                        wins[black]+=1
+                ranking=rank_qualification(score,wins,simulated_results)
+                qualification_wins[ranking[0]]+=1.0
+                for player in ranking[:4]:
+                    top_four[player]+=1.0
+                semi1=(ranking[0],ranking[3])
+                semi2=(ranking[1],ranking[2])
+                winner1=simulate_playoff_winner("sf1",semi1,factor,noise,rng)
+                winner2=simulate_playoff_winner("sf2",semi2,factor,noise,rng)
+                champion=simulate_playoff_winner("final",(winner1,winner2),factor,noise,rng)
+                if champion in champion_wins:
+                    champion_wins[champion]+=1.0
+
             forecasts[label]={}
+            champions[label]={}
             for player in PLAYERS:
-                probability=wins[player]/count
+                probability=qualification_wins[player]/count
                 margin=1.96*math.sqrt(max(0.0,probability*(1-probability)/count))
-                forecasts[label][player]=(probability,max(0.0,probability-margin),min(1.0,probability+margin))
-        brier_values=[]
-        for gid,r,w,b in GAMES:
-            result=self.results.get(gid)
-            if result in (None,"VOID"):
-                continue
-            base_white,base_black,(pw,pd,pb)=PAIR_PRIORS[frozenset((w,b))]
-            if w!=base_white:
-                pw,pb=pb,pw
-            target=(1.0,0.0,0.0) if result=="1-0" else ((0.0,0.0,1.0) if result=="0-1" else (0.0,1.0,0.0))
-            brier_values.append(sum((actual-predicted)**2 for actual,predicted in zip(target,(pw,pd,pb)))/3.0)
-        return forecasts,(sum(brier_values)/len(brier_values) if brier_values else None),len(brier_values),current,form
+                forecasts[label][player]=(
+                    probability,max(0.0,probability-margin),min(1.0,probability+margin)
+                )
+                champion_probability=champion_wins[player]/count
+                champion_margin=1.96*math.sqrt(
+                    max(0.0,champion_probability*(1-champion_probability)/count)
+                )
+                champions[label][player]=(
+                    champion_probability,
+                    max(0.0,champion_probability-champion_margin),
+                    min(1.0,champion_probability+champion_margin),
+                )
+        return forecasts,champions,(sum(brier_values)/len(brier_values) if brier_values else None),len(brier_values),current,form
 
     def refresh_advanced_forecast(self):
         if not hasattr(self,"forecast_summary"):
             return
         runs=int(self.forecast_runs_combo.currentData() or 2000)
         try:
-            forecasts,brier,sample,current,form=self.advanced_forecast(runs)
+            forecasts,champions,brier,sample,current,form=self.advanced_forecast(runs)
             rows=[]
             for player in sorted(PLAYERS,key=lambda item:forecasts["Base"][item][0],reverse=True):
                 cautious=forecasts["Prudente"][player][0]*100
                 base,low,high=forecasts["Base"][player]
                 sensitive=forecasts["Sensibilità alta"][player][0]*100
-                rows.append(f"{name(player)}: prudente {cautious:.1f}% · base {base*100:.1f}% "
-                    f"(IC 95% {low*100:.1f}–{high*100:.1f}%) · sensibilità alta {sensitive:.1f}%")
+                rows.append(
+                    f"{name(player)}: 1° in qualificazione · prudente {cautious:.1f}% · "
+                    f"base {base*100:.1f}% (IC 95% {low*100:.1f}–{high*100:.1f}%) · "
+                    f"sensibilità alta {sensitive:.1f}%"
+                )
+            champion_rows=[]
+            for player in sorted(PLAYERS,key=lambda item:champions["Base"][item][0],reverse=True):
+                cautious=champions["Prudente"][player][0]*100
+                base,low,high=champions["Base"][player]
+                sensitive=champions["Sensibilità alta"][player][0]*100
+                champion_rows.append(
+                    f"{name(player)}: campione · prudente {cautious:.1f}% · "
+                    f"base {base*100:.1f}% (IC 95% {low*100:.1f}–{high*100:.1f}%) · "
+                    f"sensibilità alta {sensitive:.1f}%"
+                )
             leader=max(current,key=current.get)
-            brier_text=(f"Brier score storico: {brier:.3f} su {sample} partite concluse (più basso è meglio)."
-                if brier is not None else "Brier score non disponibile: non ci sono partite valide concluse.")
+            brier_text=(
+                f"Brier score storico: {brier:.3f} su {sample} partite concluse (più basso è meglio)."
+                if brier is not None else
+                "Brier score non disponibile: non ci sono partite valide concluse."
+            )
             self.forecast_summary.setText(
                 f"{runs:,} simulazioni per scenario.\n".replace(",",".")
-                +"\n".join(rows)+"\n\n"
+                +"PROBABILITÀ DI GUIDARE LA QUALIFICAZIONE\n"
+                +"\n".join(rows)
+                +"\n\nPROBABILITÀ DI VINCERE IL TORNEO (QUALIFICAZIONE + PLAYOFF)\n"
+                +"\n".join(champion_rows)
+                +"\n\n"
                 +f"Driver leggibili: {name(leader)} guida per punti attuali ({current[leader]:.1f}); "
                 "la forma è regolarizzata con prior 1 vittoria / 2 partite per ridurre oscillazioni con pochi risultati.\n"
-                +brier_text+" Gli intervalli descrivono solo l'errore Monte Carlo, non l'incertezza completa del modello."
+                +"Le semifinali sono simulate con gli abbinamenti 1ª–4ª e 2ª–3ª; i risultati playoff già registrati "
+                "sono mantenuti quando i partecipanti coincidono. Le patte senza vincitore Armageddon sono "
+                "modellate come spareggio 50/50.\n"
+                +brier_text
+                +" Gli intervalli descrivono solo l'errore Monte Carlo, non l'incertezza completa del modello."
             )
         except Exception as exc:
             self.forecast_summary.setText(f"Simulazione non disponibile: {exc}")
