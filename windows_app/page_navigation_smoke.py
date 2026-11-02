@@ -1,8 +1,11 @@
 """Regression test for Windows sidebar-to-page navigation mapping."""
+from pathlib import Path
 import os
 import sys
 import tempfile
 
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 os.environ["APPDATA"] = tempfile.mkdtemp(prefix="c5r-page-navigation-")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
