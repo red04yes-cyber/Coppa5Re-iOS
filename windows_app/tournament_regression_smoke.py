@@ -20,6 +20,7 @@ from PySide6.QtTest import QTest
 import chess
 
 from windows_app.main import MainWindow, PLAYERS, GAMES, storage_path
+from windows_app.c5r_board import BoardWidget
 from windows_app.c5r_storage import atomic_write_json, read_document, decode_document, StorageIntegrityError
 
 app = QApplication([])
@@ -75,8 +76,55 @@ try:
     assert resign_pgn.headers["Result"] == "0-1"
     assert resign_pgn.headers["Termination"] == "abandoned"
 
-    # Article 5: the 15+3 clock awards +3 to the player who just moved.
+    # Responsiveness: hidden audit history must not rebuild its cards for every move.
+    window._navigate_to("audit")
+    app.processEvents()
+    audit_layout_count = window.audit_events_layout.count()
+    prior_audit_total = len(window.audit_log)
+    window._navigate_to("dashboard")
+    app.processEvents()
+    window.log_operation("Mossa", "R1-M1", "", "e2e4", "test refresh audit lazy")
+    assert window.audit_events_layout.count() == audit_layout_count
+    assert len(window.audit_log) == prior_audit_total + 1
+    window._navigate_to("audit")
+    app.processEvents()
+    assert window.audit_count_label.text().startswith(f"{prior_audit_total + 1} operazioni visualizzate")
+    assert window.audit_log[-1]["detail"] == "test refresh audit lazy"
+    window._navigate_to("dashboard")
+
+    # Board rendering: keep a read-only board reference and do not animate full-board repaint loops.
+    board_widget = BoardWidget(interactive=False)
+    render_board = chess.Board()
+    board_widget.set_position(render_board, True)
+    assert board_widget.board is render_board
+    render_board.push_uci("e2e4")
+    board_widget.set_position(render_board, True)
+    assert board_widget.board is render_board
+    assert not board_widget.flash_timer.isActive()
+    board_widget.close()
+
+    # Article 5: the 15+3 clock starts automatically on the first legal move.
     window.engine_enabled = False
+    window.results = {}
+    window.moves = {}
+    window.boards.clear()
+    window.clocks.clear()
+    auto_clock = window.clock_data("R1-M1")
+    initial_auto_white = auto_clock["white"]
+    initial_auto_black = auto_clock["black"]
+    window.record_move("R1-M1", "e2e4")
+    assert auto_clock["started"] is True
+    assert auto_clock["started_at"] is not None
+    assert abs(auto_clock["white"] - (initial_auto_white + 3)) < 0.5
+    assert abs(auto_clock["black"] - initial_auto_black) < 0.5
+    assert window.get_board("R1-M1").turn == chess.BLACK
+    time.sleep(0.05)
+    active_side, black_remaining, _ = window._advance_clock("R1-M1")
+    assert active_side == "black" and black_remaining < initial_auto_black
+    window._move_save_timer.stop()
+    window.flush_move_save()
+
+    # Article 5: the 15+3 clock awards +3 to the player who just moved after manual start too.
     window.results = {}
     window.moves = {}
     window.boards.clear()

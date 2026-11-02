@@ -7,6 +7,7 @@ import tempfile
 import urllib.request
 import urllib.parse
 import urllib.error
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -31,6 +32,13 @@ try:
 
     state = window.match_web_state(game_id)
     assert state is not None
+    cached_snapshot = window._web_match_cache[game_id][1]
+    # Repeated clock/API reads reuse the validated chess replay instead of replaying
+    # the entire PGN on every spectator poll.
+    window.clocks[game_id] = {"white": 600, "black": 600, "started": True, "last_wall": time.time()}
+    clock_state = window.match_web_state(game_id)
+    assert window._web_match_cache[game_id][1] is cached_snapshot
+    assert clock_state["fen"] == state["fen"]
     assert state["fen"] == board.fen()
     assert state["last_move"] == "g1f3"
     assert state["move_text"] == "1. e4 e5 2. Nf3"
@@ -43,7 +51,8 @@ try:
     assert "CRONOLOGIA MOSSE" in page
     assert "id='board'" in page
     assert "function renderBoard(state)" in page
-    assert "window.setInterval(poll,1000)" in page
+    assert "window.setInterval(poll,350)" in page
+    assert "if(state.fen!==lastRenderedFen)" in page
     assert "api/match/R1-M1" in page
     assert "http-equiv='refresh'" not in page
 
