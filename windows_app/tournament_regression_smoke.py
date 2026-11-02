@@ -325,7 +325,7 @@ try:
     assert persisted["incident_reports"][0]["attachments"][0]["name"] == "foto-tavolo.txt"
     # UI registration and CSV/PDF export are reachable from the incident register.
     window.refresh_all()
-    assert len(window._page_keys) == 19 and "communications" in window._page_keys and "history" in window._page_keys
+    assert len(window._page_keys) == 20 and "analytics" in window._page_keys and "communications" in window._page_keys and "history" in window._page_keys
     assert window.incident_table.rowCount() == 1
     window.incident_table.selectRow(0)
     incident_pdf = str(Path(APPDATA) / "verbale-incidente.pdf")
