@@ -1932,6 +1932,6 @@ def main():
                 try: win.close()
                 except Exception: pass
             sys.exit(3)
-    app=QApplication(sys.argv); app.setApplicationName(APP_NAME); app.setStyle("Fusion"); app.setStyleSheet(STYLE)
+    app=QApplication(sys.argv); app.setApplicationName(APP_NAME); T.apply_theme(app)
     win=MainWindow(); win.show(); sys.exit(app.exec())
 if __name__=="__main__": main()
