@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, os, random, sys, shutil, hashlib, math, csv, time, subprocess, queue, threading
+import json, os, random, sys, shutil, hashlib, math, csv, time, subprocess, queue, threading, re
 from datetime import datetime, timedelta
 from pathlib import Path
 from itertools import combinations
@@ -21,7 +21,7 @@ except ImportError:
         EvalBar, Avatar, label as ui_label, pill as ui_pill, set_pill, button as ui_button
     )
     from c5r_board import BoardWidget
-from PySide6.QtCore import Qt, QSize, Signal, QThread, QTimer
+from PySide6.QtCore import Qt, QSize, Signal, QThread, QTimer, QRect
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPdfWriter, QKeySequence, QShortcut
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
@@ -31,6 +31,11 @@ from PySide6.QtWidgets import (
     QListWidget, QInputDialog, QFileDialog, QAbstractItemView, QSizePolicy,
     QDialog, QDialogButtonBox, QProgressBar, QStackedWidget
 )
+
+try:
+    from .c5r_storage import atomic_write_json, read_document, decode_document
+except ImportError:
+    from c5r_storage import atomic_write_json, read_document, decode_document
 
 APP_NAME = "Coppa dei 5 Re"
 PLAYERS = {
@@ -626,58 +631,135 @@ class MainWindow(QMainWindow):
         self.tie_break="Regolamento Art. 8"; self.playoff_results={}; self.eval_history={}; self.clock_ticks=0; self.board_theme=0
         self.game_terminations={}; self.move_reviews={}; self.withdrawn_players={}
         self.move_annotations={}; self.round_closures={}
+        self.ui_preferences={"theme":"dark","font_scale":1.0,"density":"comfortable"}; self.ui_profiles={}
+        self._clock_runtime={}; self._last_clock_persist=time.monotonic()
+        self._undo_stack=[]; self._redo_stack=[]; self._history_restoring=False; self._last_history_state=None
         self.recovery_path=storage_path().with_name("recovery.json")
         self.offer_recovery()
-        self.load_state(); self.build_ui(); self.refresh_all()
+        self.load_state(); self._last_history_state=self._history_snapshot(self.state_payload()); self.build_ui(); self.apply_ui_preferences(); self.refresh_all()
         self.clock_timer=QTimer(self); self.clock_timer.timeout.connect(self.tick_clocks); self.clock_timer.start(1000)
         self.notification_timer=QTimer(self); self.notification_timer.timeout.connect(self.refresh_notification_badge); self.notification_timer.start(30000)
         self.install_shortcuts()
         self.refresh_notification_badge()
     def load_state(self):
         path=storage_path()
-        if path.exists():
-            try:
-                data=json.loads(path.read_text(encoding="utf-8"))
-                self.results=data.get("results",{}); self.penalties=data.get("penalties",[]); self.moves=data.get("moves",{}); self.engine_path=data.get("engine_path"); self.engine_enabled=bool(data.get("engine_enabled",True))
-                self.time_control=data.get("time_control","15+3"); self.clocks=data.get("clocks",{})
-                self.audit_log=data.get("audit_log",[]); self.match_notes=data.get("match_notes",{})
-                self.referee=data.get("referee",""); self.tie_break=data.get("tie_break","Nessuno")
-                self.playoff_results=data.get("playoff_results",{}); self.playoff_winners=data.get("playoff_winners",{}); self.eval_history=data.get("eval_history",{})
-                self.game_terminations=data.get("game_terminations",{}); self.move_reviews=data.get("move_reviews",{})
-                self.withdrawn_players=data.get("withdrawn_players",{})
-                self.move_annotations=data.get("move_annotations",{})
-                self.round_closures=data.get("round_closures",{})
-                saved_schedule=data.get("schedule")
-                if saved_schedule:
-                    parsed=[(g["id"],int(g["round"]),g["white"],g["black"]) for g in saved_schedule]
-                    if validate_schedule(parsed):
-                        GAMES[:] = parsed
-                        BYES.clear()
-                        for rnd in range(1,6):
-                            played=[p for g in GAMES if g[1]==rnd for p in (g[2],g[3])]
-                            BYES[rnd]=next(p for p in ORDER if p not in played)
-            except Exception: self.results={}; self.penalties=[]; self.moves={}
-    def save(self, automatic_snapshot=True):
-        path=storage_path(); tmp=path.with_suffix(".tmp")
+        if not path.exists():
+            return
+        try:
+            data, fallback = read_document(path)
+            self.results=data.get("results",{}); self.penalties=data.get("penalties",[]); self.moves=data.get("moves",{}); self.engine_path=data.get("engine_path"); self.engine_enabled=bool(data.get("engine_enabled",True))
+            self.time_control=data.get("time_control","15+3"); self.clocks=data.get("clocks",{})
+            self.audit_log=data.get("audit_log",[]); self.match_notes=data.get("match_notes",{})
+            self.referee=data.get("referee",""); self.tie_break=data.get("tie_break","Nessuno")
+            self.playoff_results=data.get("playoff_results",{}); self.playoff_winners=data.get("playoff_winners",{}); self.eval_history=data.get("eval_history",{})
+            self.game_terminations=data.get("game_terminations",{}); self.move_reviews=data.get("move_reviews",{})
+            self.withdrawn_players=data.get("withdrawn_players",{})
+            self.move_annotations=data.get("move_annotations",{})
+            self.round_closures=data.get("round_closures",{})
+            self.ui_preferences=data.get("ui_preferences",getattr(self,"ui_preferences",{}))
+            self.ui_profiles=data.get("ui_profiles",getattr(self,"ui_profiles",{}))
+            saved_schedule=data.get("schedule")
+            if saved_schedule:
+                parsed=[(g["id"],int(g["round"]),g["white"],g["black"]) for g in saved_schedule]
+                if validate_schedule(parsed):
+                    GAMES[:] = parsed
+                    BYES.clear()
+                    for rnd in range(1,6):
+                        played=[p for g in GAMES if g[1]==rnd for p in (g[2],g[3])]
+                        BYES[rnd]=next(p for p in ORDER if p not in played)
+            # A process restart pauses clocks; suspend/resume in this process is timed separately.
+            now=time.time()
+            self._clock_runtime={}
+            for gid,clock in self.clocks.items():
+                if clock.get("started"):
+                    clock["last_wall"]=now
+                    self._clock_runtime[gid]=time.monotonic()
+            if fallback is not None:
+                QMessageBox.warning(self,"Archivio recuperato",
+                    f"Il file principale non era integro. Sono stati recuperati i dati dalla copia {fallback.name}. "
+                    "Salva il torneo per rigenerare l'archivio principale.")
+        except Exception as exc:
+            QMessageBox.critical(self,"Archivio non leggibile",
+                f"Non è stato possibile leggere i dati del torneo in modo sicuro.\n\n{exc}\n\n"
+                "I dati originali non sono stati sovrascritti.")
+
+    def state_payload(self):
         stored_schedule=[{"id":gid,"round":rnd,"white":white,"black":black} for gid,rnd,white,black in GAMES]
-        tmp.write_text(json.dumps({"results":self.results,"penalties":self.penalties,"moves":self.moves,
-                                  "schedule":stored_schedule,"engine_path":self.engine_path,"engine_enabled":self.engine_enabled,"time_control":self.time_control,
-                                  "clocks":self.clocks,"audit_log":self.audit_log,"match_notes":self.match_notes,
-                                  "referee":self.referee,"tie_break":self.tie_break,"playoff_results":self.playoff_results,
-                                  "eval_history":self.eval_history,"playoff_winners":getattr(self,"playoff_winners",{}),
-                                  "game_terminations":self.game_terminations,"move_reviews":self.move_reviews,
-                                  "withdrawn_players":self.withdrawn_players,
-                                  "move_annotations":self.move_annotations,"round_closures":self.round_closures,
-                                  "saved_at":datetime.now().isoformat(timespec="seconds")},ensure_ascii=False,indent=2),encoding="utf-8")
-        tmp.replace(path)
+        return {
+            "results":self.results,"penalties":self.penalties,"moves":self.moves,
+            "schedule":stored_schedule,"engine_path":self.engine_path,"engine_enabled":self.engine_enabled,"time_control":self.time_control,
+            "clocks":self.clocks,"audit_log":self.audit_log,"match_notes":self.match_notes,
+            "referee":self.referee,"tie_break":self.tie_break,"playoff_results":self.playoff_results,
+            "eval_history":self.eval_history,"playoff_winners":getattr(self,"playoff_winners",{}),
+            "game_terminations":self.game_terminations,"move_reviews":self.move_reviews,
+            "withdrawn_players":self.withdrawn_players,
+            "move_annotations":self.move_annotations,"round_closures":self.round_closures,
+            "ui_preferences":self.ui_preferences,"ui_profiles":self.ui_profiles,
+            "saved_at":datetime.now().isoformat(timespec="seconds"),
+        }
+
+    def _history_snapshot(self,payload=None):
+        data=dict(payload or self.state_payload())
+        # Clocks and engine evaluations evolve without operator actions.
+        for key in ("clocks","eval_history","saved_at"):
+            data.pop(key,None)
+        return json.loads(json.dumps(data,ensure_ascii=False,sort_keys=True,default=str))
+
+    def save(self, automatic_snapshot=True):
+        payload=self.state_payload()
+        current_history=self._history_snapshot(payload)
+        if not self._history_restoring and self._last_history_state is not None and current_history!=self._last_history_state:
+            self._undo_stack.append(self._last_history_state)
+            if len(self._undo_stack)>100:
+                del self._undo_stack[:-100]
+            self._redo_stack.clear()
+        self._last_history_state=current_history
+        atomic_write_json(storage_path(),payload)
         if automatic_snapshot:
             self._maybe_create_auto_snapshot()
+
+    def _restore_history_snapshot(self,snapshot,action_label):
+        current=self.state_payload()
+        merged=dict(current)
+        merged.update(snapshot)
+        self._history_restoring=True
+        try:
+            atomic_write_json(storage_path(),merged)
+            self.boards.clear()
+            self._odds_cache_key=None; self._odds_cache=None
+            self.load_state()
+            self.log_operation(action_label,"","", "Cronologia torneo ripristinata")
+            self.save(automatic_snapshot=False)
+        finally:
+            self._history_restoring=False
+        self._last_history_state=self._history_snapshot(self.state_payload())
+        self.refresh_all()
+        self.statusBar().showMessage(f"{action_label}: operazione applicata.",3000)
+
+    def undo_history(self):
+        if not self._undo_stack:
+            self.statusBar().showMessage("Nessuna operazione del torneo da annullare.",2500)
+            return
+        current=self._history_snapshot(self.state_payload())
+        target=self._undo_stack.pop()
+        self._redo_stack.append(current)
+        self._restore_history_snapshot(target,"Annullamento")
+
+    def redo_history(self):
+        if not self._redo_stack:
+            self.statusBar().showMessage("Nessuna operazione da ripristinare.",2500)
+            return
+        current=self._history_snapshot(self.state_payload())
+        target=self._redo_stack.pop()
+        self._undo_stack.append(current)
+        self._restore_history_snapshot(target,"Ripristino")
+
     def offer_recovery(self):
         path=getattr(self,"recovery_path",storage_path().with_name("recovery.json"))
         if not path.exists():
             return
         try:
-            snapshot=json.loads(path.read_text(encoding="utf-8"))
+            snapshot=decode_document(json.loads(path.read_text(encoding="utf-8")))
             has_moves=any(bool(items) for items in snapshot.get("moves",{}).values())
             has_running_clock=any(c.get("started") for c in snapshot.get("clocks",{}).values())
             if not has_moves and not has_running_clock:
@@ -691,7 +773,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.StandardButton.Yes,
             )
             if answer==QMessageBox.StandardButton.Yes:
-                storage_path().write_text(json.dumps(snapshot,ensure_ascii=False,indent=2),encoding="utf-8")
+                atomic_write_json(storage_path(),snapshot)
                 self.statusBar().showMessage("Recovery trovato: dati dell'ultima partita ripristinati.",5000)
             path.unlink(missing_ok=True)
         except Exception as exc:
@@ -3124,7 +3206,7 @@ class MainWindow(QMainWindow):
         path,_=QFileDialog.getOpenFileName(self,"Ripristina backup","","Backup torneo (*.json)")
         if not path: return
         try:
-            data=json.loads(Path(path).read_text(encoding="utf-8"))
+            data=decode_document(json.loads(Path(path).read_text(encoding="utf-8")))
             if data.get("schedule"):
                 schedule=[(g["id"],int(g["round"]),g["white"],g["black"]) for g in data["schedule"]]
                 validate_schedule(schedule)
@@ -3132,7 +3214,7 @@ class MainWindow(QMainWindow):
                 "I dati attuali verranno sostituiti dal backup selezionato. Continuare?",
                 QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,QMessageBox.StandardButton.No)
             if answer!=QMessageBox.StandardButton.Yes: return
-            shutil.copy2(path,storage_path())
+            atomic_write_json(storage_path(),data)
             self.boards.clear(); self._odds_cache_key=None; self._odds_cache=None
             self.results={}; self.penalties=[]; self.moves={}; self.clocks={}; self.audit_log=[]; self.match_notes={}
             self.load_state(); self.refresh_all()
