@@ -3196,15 +3196,25 @@ class MainWindow(QMainWindow):
                 QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No)
             if answer!=QMessageBox.StandardButton.Yes: return False
-            self.results.clear(); self.moves.clear(); self.boards.clear()
+            self.results.clear()
+            self.moves.clear()
+            self.boards.clear()
+            self.move_reviews.clear()
+            self.eval_history.clear()
+            self.move_annotations.clear()
+            self.match_notes.clear()
+            self.game_terminations.clear()
+            self.clocks.clear()
+            self.playoff_results.clear()
+            self.playoff_winners.clear()
+            self.round_closures.clear()
         GAMES[:]=proposed
         BYES.clear()
         for rnd in range(1,6):
             played=[p for g in GAMES if g[1]==rnd for p in (g[2],g[3])]
             BYES[rnd]=next(p for p in ORDER if p not in played)
-        self.save(); self.refresh_all()
-        self.round_closures.clear()
         self.log_operation("Calendario aggiornato", "", "Calendario precedente", "Nuovo calendario")
+        self.save(); self.refresh_all()
         self.statusBar().showMessage("Girone aggiornato e salvato sul PC.",3500)
         return True
 
