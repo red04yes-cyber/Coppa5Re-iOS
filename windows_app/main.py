@@ -732,6 +732,7 @@ class MainWindow(QMainWindow):
             for gid,clock in self.clocks.items():
                 if clock.get("started"):
                     clock["last_wall"]=now
+                    clock["turn_started_at"]=now
                     self._clock_runtime[gid]=time.monotonic()
             if fallback is not None:
                 QMessageBox.warning(self,"Archivio recuperato",
@@ -935,15 +936,19 @@ class MainWindow(QMainWindow):
             clock=self.clock_data(gid)
             elapsed=0.0
             if clock.get("started"):
+                turn_started=float(clock.get("turn_started_at",clock.get("last_wall",time.time())))
+                thinking_seconds=max(0.0,time.time()-turn_started)
                 side,remaining,elapsed=self._advance_clock(gid)
                 if remaining<=0:
                     self.tick_clocks(); return
                 self.move_times.setdefault(gid,[]).append({
                     "ply":len(b.move_stack)+1,"player":player_id,
-                    "seconds":round(elapsed,2),"recorded_at":datetime.now().isoformat(timespec="seconds")
+                    "seconds":round(thinking_seconds,2),"recorded_at":datetime.now().isoformat(timespec="seconds")
                 })
             b.push(move)
-            if clock.get("started"): clock[mover]+=self.increment_seconds(gid)
+            if clock.get("started"):
+                clock[mover]+=self.increment_seconds(gid)
+                clock["turn_started_at"]=time.time()
             self.moves[gid]=[x.uci() for x in b.move_stack]
             self.log_operation("Mossa",gid,"",uci)
             service=self.get_engine_service()
@@ -1125,7 +1130,7 @@ class MainWindow(QMainWindow):
     def start_clock(self,gid):
         if self.results.get(gid): return
         self.clock_data(gid)["started"]=True
-        self.clock_data(gid)["last_wall"]=time.time(); self._clock_runtime[gid]=time.monotonic()
+        self.clock_data(gid)["last_wall"]=time.time(); self.clock_data(gid)["turn_started_at"]=time.time(); self._clock_runtime[gid]=time.monotonic()
         self.log_operation("Orologio avviato",gid,"fermo",self.time_control_for_game(gid))
         self.save(); self.save_recovery(); self.refresh_all()
         self.statusBar().showMessage("Cronometro avviato.",2000)
