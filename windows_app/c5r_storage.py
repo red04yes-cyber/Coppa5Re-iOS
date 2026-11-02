@@ -9,7 +9,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class StorageIntegrityError(ValueError):
@@ -57,7 +57,7 @@ def decode_document(raw: Any) -> dict[str, Any]:
         "playoff_winners": {}, "eval_history": {}, "game_terminations": {},
         "move_reviews": {}, "withdrawn_players": {}, "move_annotations": {},
         "round_closures": {}, "ui_preferences": {},
-        "ui_profiles": {}, "incident_reports": [],
+        "ui_profiles": {}, "incident_reports": [], "player_bios": {},
     }
     for key, value in defaults.items():
         payload.setdefault(key, value.copy() if isinstance(value, (dict, list)) else value)
