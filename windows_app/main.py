@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, os, random, sys, shutil, hashlib, math, csv, time, subprocess, queue, threading, re, uuid
+import json, os, random, sys, shutil, hashlib, math, csv, time, subprocess, queue, threading, re, uuid, base64
 from datetime import datetime, timedelta
 from pathlib import Path
 from itertools import combinations
@@ -21,8 +21,8 @@ except ImportError:
         EvalBar, Avatar, label as ui_label, pill as ui_pill, set_pill, button as ui_button
     )
     from c5r_board import BoardWidget
-from PySide6.QtCore import Qt, QSize, Signal, QThread, QTimer, QRect, QUrl, QDateTime
-from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPdfWriter, QKeySequence, QShortcut, QDesktopServices
+from PySide6.QtCore import Qt, QSize, Signal, QThread, QTimer, QRect, QUrl, QDateTime, QByteArray, QBuffer, QIODevice
+from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPdfWriter, QKeySequence, QShortcut, QDesktopServices, QPixmap, QIntValidator
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QComboBox,
@@ -630,7 +630,7 @@ class MainWindow(QMainWindow):
         self.time_control="15+3"; self.clocks={}; self.audit_log=[]; self.match_notes={}; self.referee=""
         self.tie_break="Regolamento Art. 8"; self.playoff_results={}; self.eval_history={}; self.clock_ticks=0; self.board_theme=0
         self.game_terminations={}; self.move_reviews={}; self.withdrawn_players={}
-        self.move_annotations={}; self.round_closures={}; self.incident_reports=[]
+        self.move_annotations={}; self.round_closures={}; self.incident_reports=[]; self.player_bios={}
         self.ui_preferences={"theme":"dark","font_scale":1.0,"density":"comfortable"}; self.ui_profiles={}
         self._clock_runtime={}; self._last_clock_persist=time.monotonic()
         self._undo_stack=[]; self._redo_stack=[]; self._history_restoring=False; self._last_history_state=None
@@ -656,7 +656,7 @@ class MainWindow(QMainWindow):
             self.game_terminations=data.get("game_terminations",{}); self.move_reviews=data.get("move_reviews",{})
             self.withdrawn_players=data.get("withdrawn_players",{})
             self.move_annotations=data.get("move_annotations",{})
-            self.round_closures=data.get("round_closures",{}); self.incident_reports=data.get("incident_reports",[])
+            self.round_closures=data.get("round_closures",{}); self.incident_reports=data.get("incident_reports",[]); self.player_bios=data.get("player_bios",{})
             self.ui_preferences=data.get("ui_preferences",getattr(self,"ui_preferences",{}))
             self.ui_profiles=data.get("ui_profiles",getattr(self,"ui_profiles",{}))
             saved_schedule=data.get("schedule")
@@ -695,7 +695,7 @@ class MainWindow(QMainWindow):
             "game_terminations":self.game_terminations,"move_reviews":self.move_reviews,
             "withdrawn_players":self.withdrawn_players,
             "move_annotations":self.move_annotations,"round_closures":self.round_closures,
-            "ui_preferences":self.ui_preferences,"ui_profiles":self.ui_profiles,"incident_reports":self.incident_reports,
+            "ui_preferences":self.ui_preferences,"ui_profiles":self.ui_profiles,"incident_reports":self.incident_reports,"player_bios":self.player_bios,
             "saved_at":datetime.now().isoformat(timespec="seconds"),
         }
 
