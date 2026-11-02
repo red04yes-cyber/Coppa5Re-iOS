@@ -196,6 +196,8 @@ try:
     assert window.health_list.count() >= 1
 
     # Storage: schema migration, checksum verification and fallback to the last valid copy.
+    legacy_state = decode_document({"results": {}, "schedule": []})
+    assert legacy_state["incident_reports"] == []
     storage_test = Path(APPDATA) / "integrity-test.json"
     atomic_write_json(storage_test, {"results": {}, "schedule": []})
     atomic_write_json(storage_test, {"results": {"R1-M1": "1-0"}, "schedule": []})
