@@ -196,6 +196,233 @@ def storage_path():
     folder.mkdir(parents=True, exist_ok=True)
     return folder / "tournament.json"
 
+class LogoWidget(QWidget):
+    def __init__(self,width=100,height=110,parent=None):
+        super().__init__(parent)
+        self.setFixedSize(width,height)
+        base=Path(getattr(sys,"_MEIPASS",Path(__file__).resolve().parent))
+        logo=base/"assets"/"c5r-logo.svg"
+        if not logo.exists():
+            logo=Path(__file__).resolve().parent/"assets"/"c5r-logo.svg"
+        self.renderer=QSvgRenderer(str(logo))
+    def paintEvent(self,event):
+        painter=QPainter(self)
+        self.renderer.render(painter,self.rect())
+        painter.end()
+
+
+class StockfishService(QThread):
+    """Un solo processo Stockfish persistente per tutta la sessione dell'app."""
+    positionReady = Signal(str, int)
+    moveReady = Signal(str, dict)
+    gameReady = Signal(str, list)
+    analysisFailed = Signal(str, str)
+    moveFailed = Signal(str, str)
+
+    def __init__(self, engine_path, parent=None):
+        super().__init__(parent)
+        self.engine_path = engine_path
+        self.jobs = queue.Queue()
+        self.pending_positions = {}
+        self.scheduled_positions = set()
+        self.pending_lock = threading.Lock()
+        self.stop_event = threading.Event()
+
+    def request_position(self, game_id, board):
+        with self.pending_lock:
+            self.pending_positions[game_id] = board.copy(stack=True)
+            if game_id not in self.scheduled_positions:
+                self.scheduled_positions.add(game_id)
+                self.jobs.put(("position", game_id))
+
+    def request_move(self, game_id, board_before, move_uci, player_id, ply):
+        self.jobs.put(("move", game_id, board_before.copy(stack=True), move_uci, player_id, ply))
+
+    def request_game(self, game_id, moves):
+        self.jobs.put(("game", game_id, list(moves)))
+
+    def stop(self):
+        self.stop_event.set()
+        self.jobs.put(None)
+
+    def run(self):
+        engine = None
+        try:
+            import chess.engine
+            popen_args = {}
+            if os.name == "nt":
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+                popen_args = {
+                    "creationflags": subprocess.CREATE_NO_WINDOW,
+                    "startupinfo": startupinfo,
+                }
+            engine = chess.engine.SimpleEngine.popen_uci(
+                self.engine_path,
+                timeout=12,
+                cwd=str(Path(self.engine_path).parent),
+                **popen_args,
+            )
+            try:
+                engine.configure({"Threads": 2, "Hash": 96})
+            except Exception:
+                pass
+
+            while not self.stop_event.is_set():
+                try:
+                    job = self.jobs.get(timeout=0.25)
+                except queue.Empty:
+                    continue
+                if job is None:
+                    break
+
+                kind, game_id = job[0], job[1]
+                try:
+                    if kind == "position":
+                        with self.pending_lock:
+                            board = self.pending_positions.pop(game_id, None)
+                            self.scheduled_positions.discard(game_id)
+                        if board is None:
+                            continue
+                        info = engine.analyse(
+                            board,
+                            chess.engine.Limit(depth=12, time=1.0),
+                        )
+                        score = info["score"].white().score(mate_score=10000)
+                        if score is not None:
+                            self.positionReady.emit(game_id, int(score))
+
+                    elif kind == "move":
+                        board_before, move_uci, player_id, ply = job[2], job[3], job[4], job[5]
+                        move = chess.Move.from_uci(move_uci)
+                        if move not in board_before.legal_moves:
+                            raise ValueError(f"Mossa non valida: {move_uci}")
+                        mover_color = board_before.turn
+                        before_info = engine.analyse(
+                            board_before,
+                            chess.engine.Limit(time=0.30),
+                        )
+                        before_score = before_info["score"].pov(mover_color).score(mate_score=10000)
+                        best_move = before_info.get("pv", [None])[0]
+                        board_after = board_before.copy(stack=True)
+                        board_after.push(move)
+                        after_info = engine.analyse(
+                            board_after,
+                            chess.engine.Limit(time=0.30),
+                        )
+                        after_score = after_info["score"].pov(mover_color).score(mate_score=10000)
+                        before_ep = 1.0 / (1.0 + math.exp(-max(-4000, min(4000, before_score or 0)) / 400.0))
+                        after_ep = 1.0 / (1.0 + math.exp(-max(-4000, min(4000, after_score or 0)) / 400.0))
+                        ep_loss = max(0.0, before_ep - after_ep)
+                        mover_material_before = sum(
+                            len(board_before.pieces(piece_type, mover_color)) * value
+                            for piece_type, value in ((chess.PAWN, 1), (chess.KNIGHT, 3), (chess.BISHOP, 3),
+                                (chess.ROOK, 5), (chess.QUEEN, 9))
+                        ) - sum(
+                            len(board_before.pieces(piece_type, not mover_color)) * value
+                            for piece_type, value in ((chess.PAWN, 1), (chess.KNIGHT, 3), (chess.BISHOP, 3),
+                                (chess.ROOK, 5), (chess.QUEEN, 9))
+                        )
+                        mover_material_after = sum(
+                            len(board_after.pieces(piece_type, mover_color)) * value
+                            for piece_type, value in ((chess.PAWN, 1), (chess.KNIGHT, 3), (chess.BISHOP, 3),
+                                (chess.ROOK, 5), (chess.QUEEN, 9))
+                        ) - sum(
+                            len(board_after.pieces(piece_type, not mover_color)) * value
+                            for piece_type, value in ((chess.PAWN, 1), (chess.KNIGHT, 3), (chess.BISHOP, 3),
+                                (chess.ROOK, 5), (chess.QUEEN, 9))
+                        )
+                        sacrificed = mover_material_after - mover_material_before <= -3
+                        if sacrificed and best_move == move and after_score is not None and after_score > -100 and ep_loss <= 0.02:
+                            label = "BRILLANTE"
+                        elif best_move == move:
+                            label = "MIGLIORE"
+                        elif ep_loss <= 0.01:
+                            label = "OTTIMA"
+                        elif ep_loss <= 0.03:
+                            label = "BUONA"
+                        elif ep_loss <= 0.08:
+                            label = "IMPRECISIONE"
+                        elif ep_loss <= 0.20:
+                            label = "ERRORE"
+                        else:
+                            label = "GRAVE ERRORE"
+                        review = {
+                            "ply": ply, "player": player_id, "uci": move_uci,
+                            "label": label, "expected_points_loss": round(ep_loss, 4),
+                            "before_cp": int(before_score or 0), "after_cp": int(after_score or 0),
+                            "best_uci": best_move.uci() if best_move else "",
+                        }
+                        self.moveReady.emit(game_id, review)
+
+                    elif kind == "game":
+                        moves = job[2]
+                        board = chess.Board()
+                        positions = []
+                        _, _, white_player, black_player = game(game_id)
+                        for ply, uci in enumerate(moves, 1):
+                            if self.stop_event.is_set():
+                                break
+                            move = chess.Move.from_uci(uci)
+                            if move not in board.legal_moves:
+                                raise ValueError(f"Mossa PGN non valida al ply {ply}: {uci}")
+                            mover_color = board.turn
+                            player_id = white_player if mover_color else black_player
+                            before_info = engine.analyse(board, chess.engine.Limit(time=0.25))
+                            before_score = before_info["score"].pov(mover_color).score(mate_score=10000)
+                            best_move = before_info.get("pv", [None])[0]
+                            san = board.san(move)
+                            piece_values={chess.PAWN:1,chess.KNIGHT:3,chess.BISHOP:3,chess.ROOK:5,chess.QUEEN:9}
+                            material_before=sum(len(board.pieces(pt,mover_color))*val for pt,val in piece_values.items())-sum(len(board.pieces(pt,not mover_color))*val for pt,val in piece_values.items())
+                            board.push(move)
+                            after_info = engine.analyse(board, chess.engine.Limit(time=0.25))
+                            after_score = after_info["score"].pov(mover_color).score(mate_score=10000)
+                            before_ep = 1.0 / (1.0 + math.exp(-max(-4000, min(4000, before_score or 0)) / 400.0))
+                            after_ep = 1.0 / (1.0 + math.exp(-max(-4000, min(4000, after_score or 0)) / 400.0))
+                            ep_loss = max(0.0, before_ep-after_ep)
+                            material_after=sum(len(board.pieces(pt,mover_color))*val for pt,val in piece_values.items())-sum(len(board.pieces(pt,not mover_color))*val for pt,val in piece_values.items())
+                            apparent_sacrifice=(material_after-material_before)<=-3
+                            if apparent_sacrifice and best_move==move and after_score is not None and after_score>-100 and ep_loss<=0.02:
+                                label = "BRILLANTE"
+                            elif best_move == move:
+                                label = "MIGLIORE"
+                            elif ep_loss <= 0.01:
+                                label = "OTTIMA"
+                            elif ep_loss <= 0.03:
+                                label = "BUONA"
+                            elif ep_loss <= 0.08:
+                                label = "IMPRECISIONE"
+                            elif ep_loss <= 0.20:
+                                label = "ERRORE"
+                            else:
+                                label = "GRAVE ERRORE"
+                            positions.append({
+                                "ply": ply, "san": san, "score": int(after_score or 0),
+                                "fen": board.fen(), "player": player_id, "uci": uci,
+                                "label": label, "expected_points_loss": round(ep_loss, 4),
+                                "before_cp": int(before_score or 0), "after_cp": int(after_score or 0),
+                                "best_uci": best_move.uci() if best_move else "",
+                            })
+                        if not self.stop_event.is_set():
+                            self.gameReady.emit(game_id, positions)
+
+                except Exception as exc:
+                    if kind=="move":
+                        self.moveFailed.emit(game_id,str(exc))
+                    else:
+                        self.analysisFailed.emit(game_id, str(exc))
+
+        except Exception as exc:
+            self.analysisFailed.emit("", str(exc))
+        finally:
+            if engine is not None:
+                try:
+                    engine.quit()
+                except Exception:
+                    pass
+
+
 class BoardCard(QFrame):
     def __init__(self,app,slot,initial):
         super().__init__(); self.app=app; self.slot=slot; self.game_id=initial
