@@ -1211,10 +1211,37 @@ class MainWindow(QMainWindow):
         footer.setObjectName("Footnote")
         outer.addWidget(footer)
         self.setCentralWidget(root)
-        self.setMinimumSize(1180, 760)
+        self.setMinimumSize(920, 640)
         self.setStatusBar(ToastStatusBar())
+        self.header_saved = saved
+        self.header_timing = timing
         self.statusBar().showMessage("Pronto · seleziona una sezione per iniziare.")
         self._nav_keys = self._page_keys
+        self.setAccessibleName("Coppa dei 5 Re · Control Room")
+        self.setAccessibleDescription("Gestione locale del torneo, delle partite, della classifica e del registro arbitrale.")
+        for button in self.findChildren(QPushButton):
+            button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+            if not button.accessibleName():
+                button.setAccessibleName(button.text().replace("&", "").strip() or "Azione")
+            if not button.accessibleDescription():
+                button.setAccessibleDescription(button.toolTip() or button.accessibleName())
+        for field in self.findChildren(QLineEdit):
+            if not field.accessibleName():
+                field.setAccessibleName(field.placeholderText() or "Campo di testo")
+        for table in self.findChildren(QTableWidget):
+            table.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if not hasattr(self, "nav"):
+            return
+        compact = self.width() < 1180
+        if self.nav._collapsed != compact:
+            self.nav.set_collapsed(compact)
+        if hasattr(self, "header_timing"):
+            self.header_timing.setVisible(self.width() >= 1240)
+        if hasattr(self, "header_saved"):
+            self.header_saved.setVisible(self.width() >= 1360)
 
     def _navigate_to(self, key):
         if key in self._nav_keys:
@@ -1267,7 +1294,25 @@ class MainWindow(QMainWindow):
         progress_card.body.addWidget(self.dashboard_progress_detail)
         root.addWidget(progress_card)
 
-        chart_card = Card("Andamento dei punti", "Punti ottenuti nei round conclusi; le penalità sono mostrate separatamente in classifica.")
+        snapshot = QHBoxLayout()
+        snapshot.setSpacing(12)
+        upcoming = Card("Prossimi incontri", "Partite attive e prossime da disputare.")
+        self.dashboard_next_labels = []
+        for _ in range(3):
+            item = ui_label("In attesa del calendario.", "body", wrap=True)
+            self.dashboard_next_labels.append(item)
+            upcoming.body.addWidget(item)
+        ranking = Card("Podio provvisorio", "Classifica netta aggiornata dopo ogni risultato.")
+        self.dashboard_ranking_labels = []
+        for _ in range(3):
+            item = ui_label("—", "body", wrap=True)
+            self.dashboard_ranking_labels.append(item)
+            ranking.body.addWidget(item)
+        snapshot.addWidget(upcoming, 3)
+        snapshot.addWidget(ranking, 2)
+        root.addLayout(snapshot)
+
+        chart_card = Card("Andamento dei punti", "Punti cumulativi per round; le penalità restano separate e sono incluse nella classifica netta.")
         self.dashboard_chart = LineChart()
         self.dashboard_chart.setMinimumHeight(230)
         chart_card.body.addWidget(self.dashboard_chart)
@@ -1380,6 +1425,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(filters)
 
         toolbar = QHBoxLayout()
+        self.audit_count_label = ui_label("0 operazioni", "caption")
+        toolbar.addWidget(self.audit_count_label)
         toolbar.addStretch(1)
         export = QPushButton("ESPORTA REGISTRO CSV")
         export.setObjectName("PrimaryButton")
@@ -1445,6 +1492,24 @@ class MainWindow(QMainWindow):
         ))
         layout.addWidget(regulation)
 
+        guidance = Card("Accessibilità e scorciatoie", "Le azioni principali sono raggiungibili da tastiera; i controlli mantengono il focus visibile.")
+        shortcuts_grid = QGridLayout()
+        shortcuts_grid.setHorizontalSpacing(18)
+        shortcuts_grid.setVerticalSpacing(8)
+        shortcut_items = [
+            ("CTRL + S", "Salva lo stato del torneo"),
+            ("CTRL + E", "Esporta tutte le partite in PGN"),
+            ("CTRL + SHIFT + B", "Crea un backup"),
+            ("CTRL + 1 / 2 / 3", "Apri Live, Estrazione o Calendario"),
+            ("ALT + ← / →", "Scorri la cronologia della prima scacchiera"),
+            ("F2 / F3", "Ruota la scacchiera del tavolo 1 / 2"),
+        ]
+        for index, (key, description) in enumerate(shortcut_items):
+            shortcuts_grid.addWidget(ui_label(key, "mono"), index // 2, (index % 2) * 2)
+            shortcuts_grid.addWidget(ui_label(description, "muted", wrap=True), index // 2, (index % 2) * 2 + 1)
+        guidance.body.addLayout(shortcuts_grid)
+        layout.addWidget(guidance)
+
         roster = Card("Gestione giocatori", "Registra un ritiro secondo l'Art. 11. L'operazione modifica risultati e classifica.")
         self.withdraw_combo = QComboBox()
         for pid in ORDER:
@@ -1459,7 +1524,14 @@ class MainWindow(QMainWindow):
         layout.addWidget(roster)
 
         data_card = Card("Dati, backup ed esportazioni", "I dati del torneo sono salvati localmente su questo PC.")
+        self.settings_storage_label = ui_label(
+            f"Salvataggio automatico locale attivo · archivio: {storage_path().name} · nessuna sincronizzazione cloud.",
+            "muted", wrap=True
+        )
+        data_card.body.addWidget(self.settings_storage_label)
         actions = QGridLayout()
+        actions.setHorizontalSpacing(10)
+        actions.setVerticalSpacing(10)
         operations = [
             ("BACKUP DATI", self.export_backup), ("RIPRISTINA BACKUP", self.restore_backup),
             ("ESPORTA PGN TORNEO", self.export_all_pgn), ("CLASSIFICA CSV", self.export_standings_csv),
@@ -1507,49 +1579,73 @@ class MainWindow(QMainWindow):
     def refresh_dashboard(self):
         if not hasattr(self, "dashboard_tiles"):
             return
-        total = len(GAMES)
         done = sum(1 for gid, _, _, _ in GAMES if self.results.get(gid) not in (None, "VOID"))
         voided = sum(1 for gid, _, _, _ in GAMES if self.results.get(gid) == "VOID")
-        active = sum(
-            1 for gid, _, _, _ in GAMES
-            if not self.results.get(gid) and (self.clock_data(gid).get("started") or self.moves.get(gid))
-        )
-        retired = len(self.withdrawn_players)
-        pending = max(0, total - done - voided - active)
-        self.dashboard_tiles["done"].set(f"{done}/{total}", "Partite con risultato valido")
-        self.dashboard_tiles["live"].set(str(active), "Con mosse o cronometro avviato")
+        active_games = [
+            gid for gid, _, _, _ in GAMES
+            if self.results.get(gid) is None
+            and (self.clock_data(gid).get("started") or bool(self.moves.get(gid)))
+        ]
+        running = len(active_games)
+        pending = max(0, len(GAMES) - done - voided - running)
+        retired = sum(1 for player in ORDER if player in self.withdrawn_players)
+        self.dashboard_tiles["done"].set(str(done), f"{done}/10 risultati validi")
+        self.dashboard_tiles["live"].set(str(running), "Con cronometro o mosse registrate")
         self.dashboard_tiles["pending"].set(str(pending), "Ancora da iniziare")
         self.dashboard_tiles["retired"].set(str(retired), "Ritiri registrati")
-        progress = round((done + voided) / max(1, total) * 100)
-        self.dashboard_progress.setValue(progress)
+        closed = done + voided
+        self.dashboard_progress.setValue(round(closed * 100 / max(1, len(GAMES))))
         self.dashboard_progress_detail.setText(
-            f"{done} concluse · {voided} annullate · {active} in corso · {pending} da disputare"
+            f"{done} concluse · {voided} annullate · {pending} da iniziare · {running} in corso"
         )
         leader = self.standings()[0]
         self.dashboard_detail.setText(
-            f"LEADER ATTUALE  ·  {name(leader['id'])}  ·  {leader['points']:.1f} punti"
+            f"LEADER ATTUALE  ·  {name(leader['id'])}  ·  {leader['points']:.1f} punti netti"
             f"     |     ARBITRO  ·  {self.referee or 'non impostato'}"
         )
-
-        cumulative = {pid: 0.0 for pid in ORDER}
-        series = {pid: [0.0] for pid in ORDER}
+        upcoming_ids = active_games + [
+            gid for gid, _, _, _ in GAMES
+            if self.results.get(gid) is None and gid not in active_games
+        ]
+        for index, label in enumerate(self.dashboard_next_labels):
+            if index < len(upcoming_ids):
+                gid = upcoming_ids[index]
+                _, rnd, white, black = game(gid)
+                state = "IN CORSO" if gid in active_games else "DA DISPUTARE"
+                label.setText(f"R{rnd} · {gid}     {name(white)}  vs  {name(black)}     ·     {state}")
+            elif index == 0 and not upcoming_ids:
+                label.setText("Girone completato: non ci sono altre partite da disputare.")
+            else:
+                label.setText("—")
+        ranking_rows = self.standings()[:3]
+        for index, label in enumerate(self.dashboard_ranking_labels):
+            if index < len(ranking_rows):
+                row = ranking_rows[index]
+                label.setText(
+                    f"{index + 1}.  {name(row['id'])}     {row['points']:.1f} pt"
+                    f"     ·     {row['played']}/5 giocate"
+                )
+            else:
+                label.setText("—")
+        cumulative = {player: [] for player in ORDER}
+        running_points = {player: 0.0 for player in ORDER}
         for rnd in range(1, 6):
             for gid, game_round, white, black in GAMES:
                 if game_round != rnd:
                     continue
                 result = self.results.get(gid)
                 if result == "1-0":
-                    cumulative[white] += 1.0
+                    running_points[white] += 1.0
                 elif result == "0-1":
-                    cumulative[black] += 1.0
+                    running_points[black] += 1.0
                 elif result == "1/2-1/2":
-                    cumulative[white] += 0.5
-                    cumulative[black] += 0.5
-            for pid in ORDER:
-                series[pid].append(cumulative[pid])
+                    running_points[white] += 0.5
+                    running_points[black] += 0.5
+            for player in ORDER:
+                cumulative[player].append(running_points[player])
         self.dashboard_chart.set_data(
-            ["Inizio", "R1", "R2", "R3", "R4", "R5"],
-            [(name(pid), T.player_tint(ORDER.index(pid)), series[pid]) for pid in ORDER]
+            [f"R{rnd}" for rnd in range(1, 6)],
+            [(name(player), T.player_tint(ORDER.index(player)), cumulative[player]) for player in ORDER]
         )
 
     def archive_entries(self):
@@ -1613,69 +1709,53 @@ class MainWindow(QMainWindow):
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
-        query = self.audit_search.text().strip().casefold()
-        category = self.audit_action_filter.currentData()
+        query = self.audit_search.text().strip().casefold() if hasattr(self, "audit_search") else ""
+        action_filter = self.audit_action_filter.currentData() if hasattr(self, "audit_action_filter") else None
         entries = list(reversed(self.audit_log))
-        shown = 0
+        visible = []
         for entry in entries:
-            haystack = " ".join(str(entry.get(key, "")) for key in (
-                "time", "referee", "action", "entity", "before", "after", "detail"
-            )).casefold()
-            if query and query not in haystack:
+            action = str(entry.get("action", "Operazione"))
+            searchable = " ".join(
+                str(entry.get(key, "")) for key in
+                ("time", "referee", "action", "entity", "before", "after", "detail")
+            ).casefold()
+            if query and query not in searchable:
                 continue
-            action = str(entry.get("action", ""))
-            if category and category.casefold() not in action.casefold():
+            if action_filter and str(action_filter).casefold() not in action.casefold() \
+                    and str(action_filter).casefold() not in str(entry.get("detail", "")).casefold():
                 continue
-            card = QFrame()
-            card.setObjectName("Card")
-            row = QHBoxLayout(card)
-            row.setContentsMargins(14, 12, 16, 12)
-            row.setSpacing(14)
-            action_lower = action.casefold()
-            if "penalit" in action_lower:
-                icon_name, tone = "flag", T.C.warning
-            elif "risultato" in action_lower or "partita" in action_lower:
-                icon_name, tone = "check", T.C.success
-            elif "mossa" in action_lower:
-                icon_name, tone = "board", T.C.info
-            elif "ritir" in action_lower or "forfait" in action_lower:
-                icon_name, tone = "user", T.C.danger
-            elif "stockfish" in action_lower or "review" in action_lower:
-                icon_name, tone = "cpu", T.C.brass
-            else:
-                icon_name, tone = "log", T.C.text2
-            symbol = QLabel()
-            symbol.setPixmap(T.pixmap(icon_name, tone, 22))
-            symbol.setFixedWidth(30)
-            row.addWidget(symbol, 0, Qt.AlignmentFlag.AlignTop)
-            body = QVBoxLayout()
-            body.setSpacing(4)
-            title_row = QHBoxLayout()
-            title_row.addWidget(ui_label(action or "Operazione", "h3"))
-            title_row.addStretch(1)
-            title_row.addWidget(ui_label(entry.get("time", ""), "mono"))
-            body.addLayout(title_row)
-            body.addWidget(ui_label(
-                f"{entry.get('entity', '')}  ·  {entry.get('detail', '')}",
-                "muted", wrap=True
-            ))
-            body.addWidget(ui_label(
-                f"Prima: {entry.get('before', '—')}     →     Dopo: {entry.get('after', '—')}",
-                "caption", wrap=True
-            ))
-            referee = entry.get("referee", "")
-            if referee:
-                body.addWidget(ui_label(f"Arbitro: {referee}", "caption"))
-            row.addLayout(body, 1)
-            self.audit_events_layout.addWidget(card)
-            shown += 1
-        if shown == 0:
+            visible.append(entry)
+        self.audit_count_label.setText(
+            f"{len(visible)} operazioni visualizzate · {len(self.audit_log)} totali"
+        )
+        if not visible:
             self.audit_events_layout.addWidget(
-                EmptyState("search", "Nessuna operazione trovata",
-                           "Prova a cambiare il filtro o il testo di ricerca.")
+                EmptyState("info", "Nessuna operazione trovata", "Modifica i filtri oppure registra una nuova operazione.")
             )
-        else:
-            self.audit_events_layout.addWidget(ui_label(f"{shown} operazioni visualizzate", "caption"))
+            self.audit_events_layout.addStretch(1)
+            return
+        for entry in visible:
+            action = str(entry.get("action", "Operazione"))
+            tone = "danger" if "penalità" in action.casefold() or "ritiro" in action.casefold() else (
+                "success" if "risultato" in action.casefold() else "neutral"
+            )
+            card = Card(padding=14, spacing=7)
+            meta = QHBoxLayout()
+            meta.addWidget(ui_label(str(entry.get("time", "Ora non disponibile")), "mono"))
+            meta.addWidget(ui_pill(action.upper(), tone))
+            meta.addStretch(1)
+            meta.addWidget(ui_label(str(entry.get("referee") or "Arbitro non indicato"), "caption"))
+            card.body.addLayout(meta)
+            entity = str(entry.get("entity", "")).strip()
+            if entity:
+                card.body.addWidget(ui_label(entity, "h3"))
+            before = str(entry.get("before", "")).strip() or "—"
+            after = str(entry.get("after", "")).strip() or "—"
+            card.body.addWidget(ui_label(f"{before}   →   {after}", "body", wrap=True))
+            detail = str(entry.get("detail", "")).strip()
+            if detail:
+                card.body.addWidget(ui_label(detail, "muted", wrap=True))
+            self.audit_events_layout.addWidget(card)
         self.audit_events_layout.addStretch(1)
 
     def accuracy_for_player(self,gid,player_id):
@@ -1938,6 +2018,66 @@ class MainWindow(QMainWindow):
             table.selectRow(0)
             select_position(0)
 
+            review_toolbar = QHBoxLayout()
+            review_toolbar.addWidget(ui_label("MOSTRA", "field"))
+            quality_filter = QComboBox()
+            quality_filter.addItem("Tutte le mosse", "all")
+            quality_filter.addItem("Imprecisioni + errori", "mistakes")
+            quality_filter.addItem("Solo errori gravi", "blunders")
+            quality_filter.setAccessibleName("Filtro qualità delle mosse")
+            review_toolbar.addWidget(quality_filter)
+            review_count = ui_label(f"{len(positions)} posizioni analizzate", "caption")
+            review_toolbar.addWidget(review_count, 1)
+            previous_move = QPushButton("←  PRECEDENTE")
+            next_move = QPushButton("SUCCESSIVA  →")
+            previous_move.setToolTip("Seleziona la mossa precedente tra quelle visibili.")
+            next_move.setToolTip("Seleziona la mossa successiva tra quelle visibili.")
+            review_toolbar.addWidget(previous_move)
+            review_toolbar.addWidget(next_move)
+            root.addLayout(review_toolbar)
+
+            def visible_review_rows():
+                mode = quality_filter.currentData()
+                visible_rows = []
+                for index, move_item in enumerate(positions):
+                    label = str(move_item.get("label", "")).upper()
+                    if mode == "mistakes" and label not in ("IMPRECISIONE", "ERRORE", "GRAVE ERRORE"):
+                        continue
+                    if mode == "blunders" and label != "GRAVE ERRORE":
+                        continue
+                    visible_rows.append(index)
+                return visible_rows
+
+            def apply_review_filter():
+                rows_visible = visible_review_rows()
+                for row_index in range(len(positions)):
+                    table.setRowHidden(row_index, row_index not in rows_visible)
+                review_count.setText(f"{len(rows_visible)} mosse visibili · {len(positions)} analizzate")
+                previous_move.setEnabled(bool(rows_visible))
+                next_move.setEnabled(bool(rows_visible))
+                current = table.currentRow()
+                if rows_visible and current not in rows_visible:
+                    table.selectRow(rows_visible[0])
+                    select_position(rows_visible[0])
+
+            def move_review_selection(step):
+                rows_visible = visible_review_rows()
+                if not rows_visible:
+                    return
+                current = table.currentRow()
+                if current not in rows_visible:
+                    target = rows_visible[0]
+                else:
+                    target = rows_visible[(rows_visible.index(current) + step) % len(rows_visible)]
+                table.selectRow(target)
+                select_position(target)
+                table.scrollToItem(table.item(target, 0))
+
+            quality_filter.currentIndexChanged.connect(apply_review_filter)
+            previous_move.clicked.connect(lambda: move_review_selection(-1))
+            next_move.clicked.connect(lambda: move_review_selection(1))
+            apply_review_filter()
+
         footer = QHBoxLayout()
         footer.addWidget(ui_label(
             "Le valutazioni sono derivate da Stockfish e hanno finalità di analisi locale.",
@@ -2138,7 +2278,7 @@ class MainWindow(QMainWindow):
         for pid in ORDER:
             self.filter_player.addItem(name(pid), pid)
         self.filter_status = QComboBox()
-        self.filter_status.addItems(["Tutti gli stati", "In corso", "Concluse"])
+        self.filter_status.addItems(["Tutti gli stati", "Da disputare", "In corso", "Concluse", "Annullate"])
         for control in (self.calendar_search, self.filter_round, self.filter_player, self.filter_status):
             filters.addWidget(control, 2 if control is self.calendar_search else 1)
         filters_card.body.addLayout(filters)
@@ -2161,16 +2301,23 @@ class MainWindow(QMainWindow):
         self.calendar_status_labels = {}
         self.calendar_round_sections = {}
         self.calendar_round_progress = {}
+        self.calendar_round_bars = {}
         self.calendar_bye_labels = {}
 
         for rnd in range(1, 6):
             round_card = Card(f"ROUND {rnd:02d}", padding=16, spacing=10)
             header = QHBoxLayout()
-            progress_label = ui_label("0/2 partite concluse", "caption")
+            progress_label = ui_label("0/2 concluse", "caption")
+            progress_bar = QProgressBar()
+            progress_bar.setRange(0, 2)
+            progress_bar.setTextVisible(False)
+            progress_bar.setFixedWidth(112)
             header.addStretch(1)
             header.addWidget(progress_label)
+            header.addWidget(progress_bar)
             round_card.body.addLayout(header)
             self.calendar_round_progress[rnd] = progress_label
+            self.calendar_round_bars[rnd] = progress_bar
             for gid, game_round, white, black in [g for g in GAMES if g[1] == rnd]:
                 match_card = QFrame()
                 match_card.setObjectName("CardRaised")
@@ -2212,41 +2359,51 @@ class MainWindow(QMainWindow):
     def apply_calendar_filters(self):
         if not hasattr(self, "calendar_cards"):
             return
-        rnd_text = self.filter_round.currentText()
+        round_text = self.filter_round.currentText()
         selected_player = self.filter_player.currentData()
         state = self.filter_status.currentText()
         query = self.calendar_search.text().strip().casefold() if hasattr(self, "calendar_search") else ""
         visible_by_round = {rnd: 0 for rnd in range(1, 6)}
         for gid, card in self.calendar_cards.items():
             _, rnd, white, black = game(gid)
-            matches_round = rnd_text == "Tutti i turni" or rnd_text == f"Round {rnd}"
+            matches_round = round_text == "Tutti i turni" or round_text == f"Round {rnd}"
             matches_player = selected_player is None or selected_player in (white, black)
-            completed = bool(self.results.get(gid))
-            matches_state = (
+            result = self.results.get(gid)
+            is_void = result == "VOID"
+            is_done = result not in (None, "VOID")
+            is_running = not is_void and not is_done and (
+                self.clock_data(gid).get("started") or bool(self.moves.get(gid))
+            )
+            is_pending = not is_void and not is_done and not is_running
+            state_matches = (
                 state == "Tutti gli stati"
-                or (state == "Concluse" and completed)
-                or (state == "In corso" and not completed)
+                or (state == "Da disputare" and is_pending)
+                or (state == "In corso" and is_running)
+                or (state == "Concluse" and is_done)
+                or (state == "Annullate" and is_void)
             )
             match_text = f"{gid} {name(white)} {name(black)}".casefold()
             matches_query = not query or query in match_text
-            visible = matches_round and matches_player and matches_state and matches_query
+            visible = matches_round and matches_player and state_matches and matches_query
             card.setVisible(visible)
             if visible:
                 visible_by_round[rnd] += 1
         for rnd, section in self.calendar_round_sections.items():
-            section.setVisible(visible_by_round[rnd] > 0)
-            self.calendar_bye_labels[rnd].setVisible(visible_by_round[rnd] > 0)
+            visible = visible_by_round[rnd] > 0
+            section.setVisible(visible)
+            self.calendar_bye_labels[rnd].setVisible(visible)
         self._refresh_calendar_round_progress()
 
     def _refresh_calendar_round_progress(self):
         if not hasattr(self, "calendar_round_progress"):
             return
         for rnd in range(1, 6):
-            games = [g for g in GAMES if g[1] == rnd]
+            games = [game_row for game_row in GAMES if game_row[1] == rnd]
             done = sum(1 for gid, _, _, _ in games if self.results.get(gid) not in (None, "VOID"))
             voided = sum(1 for gid, _, _, _ in games if self.results.get(gid) == "VOID")
-            label = self.calendar_round_progress[rnd]
-            label.setText(f"{done}/2 concluse" + (f" · {voided} annullata/e" if voided else ""))
+            progress_label = self.calendar_round_progress[rnd]
+            progress_label.setText(f"{done}/2 concluse" + (f" · {voided} annullate" if voided else ""))
+            self.calendar_round_bars[rnd].setValue(done + voided)
             self.calendar_bye_labels[rnd].setText(f"RIPOSA  ·  {name(BYES[rnd])}")
 
     def build_standings(self):
@@ -2277,6 +2434,7 @@ class MainWindow(QMainWindow):
             top.addLayout(person, 1)
             card.body.addLayout(top)
             caption = ui_label("Posizione provvisoria", "caption")
+            caption.setWordWrap(True)
             card.body.addWidget(caption)
             self.podium_cards[rank] = {
                 "avatar": avatar, "name": player_label, "points": points_label,
@@ -2324,9 +2482,11 @@ class MainWindow(QMainWindow):
             top = QHBoxLayout()
             avatar = Avatar(name(pid)[:1], T.player_tint(ORDER.index(pid)), 38)
             player_label = ui_label(name(pid), "h3")
+            rank_label = ui_pill("—", "neutral")
             quota_label = ui_label("Quota equa —", "mono")
             top.addWidget(avatar)
             top.addWidget(player_label, 1)
+            top.addWidget(rank_label)
             top.addWidget(quota_label)
             row_card.body.addLayout(top)
             win_line = QHBoxLayout()
@@ -2343,7 +2503,7 @@ class MainWindow(QMainWindow):
             row_card.body.addLayout(top_line)
             self.odds_rows.append({
                 "player": pid, "card": row_card, "name": player_label,
-                "quota": quota_label, "win": win_bar, "top": top_bar,
+                "rank": rank_label, "quota": quota_label, "win": win_bar, "top": top_bar,
             })
             self.odds_rows_layout.addWidget(row_card)
         layout.addLayout(self.odds_rows_layout)
@@ -2407,6 +2567,13 @@ class MainWindow(QMainWindow):
         ))
         notice = Card("Regola dell'Armageddon", "In caso di patta nei playoff il pareggio resta registrato. Il vincitore dell'Armageddon va annotato separatamente secondo condizioni definite dal direttore di gara.", variant="CardAccent", padding=14)
         layout.addWidget(notice)
+
+        overview = Card("Percorso verso la finale", "Il tabellone si aggiorna in base alla classifica e ai risultati registrati.")
+        self.playoff_overview = ui_label("Semifinali in attesa delle prime quattro posizioni.", "body", wrap=True)
+        self.playoff_champion = ui_label("Vincitore del torneo: da definire", "h3", wrap=True)
+        overview.body.addWidget(self.playoff_overview)
+        overview.body.addWidget(self.playoff_champion)
+        layout.addWidget(overview)
 
         semi_row = QHBoxLayout()
         semi_row.setSpacing(14)
@@ -2626,13 +2793,13 @@ class MainWindow(QMainWindow):
     def refresh_standings(self):
         rows = self.standings()
         self.st_table.setRowCount(5)
-        previous, rank = None, 0
-        points_groups = {}
-        for row in rows:
-            points_groups.setdefault(row["points"], []).append(row["id"])
+        previous = None
+        rank = 0
         for i, row in enumerate(rows):
-            tied_ids = points_groups[row["points"]]
-            current_key = (row["points"], self.tie_break_value(row["id"], tied_ids))
+            current_key = (
+                row["points"],
+                self.tie_break_value(row["id"], [item["id"] for item in rows if item["points"] == row["points"]])
+            )
             if previous is None or current_key != previous:
                 rank = i + 1
             previous = current_key
@@ -2641,64 +2808,68 @@ class MainWindow(QMainWindow):
                 f"{rank}°", display_name, str(row["played"]), str(row["wins"]),
                 str(row["draws"]), str(row["losses"]),
                 f"{row['penalty']:+.1f}" if row["penalty"] else "—",
-                f"{row['points']:.1f}",
+                f"{row['points']:.1f}"
             ]
-            for col, value in enumerate(values):
-                item = QTableWidgetItem(value)
+            for column, value in enumerate(values):
+                prefix = "🥇 " if rank == 1 else "🥈 " if rank == 2 else "🥉 " if rank == 3 else ""
+                item = QTableWidgetItem(prefix + value if column == 0 else value)
                 item.setTextAlignment(
-                    Qt.AlignmentFlag.AlignCenter if col != 1
+                    Qt.AlignmentFlag.AlignCenter if column != 1
                     else Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
                 )
-                if col == 7:
-                    item.setFont(T.font(T.SERIF, 16, 600))
-                if col == 0:
-                    item.setForeground(QColor(T.C.brass_hi if rank == 1 else T.C.text2))
-                self.st_table.setItem(i, col, item)
-
+                if row["id"] == "simone":
+                    item.setForeground(QColor(GOLD))
+                if column == 7:
+                    item.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+                self.st_table.setItem(i, column, item)
         for position in (1, 2, 3):
+            podium = self.podium_cards.get(position)
+            if not podium:
+                continue
             row = rows[position - 1]
-            widgets = self.podium_cards[position]
-            tint = T.player_tint(ORDER.index(row["id"]))
-            widgets["avatar"].set_player(name(row["id"])[:1], tint)
-            widgets["name"].setText(name(row["id"]))
-            widgets["points"].setText(f"{row['points']:.1f} punti")
-            widgets["caption"].setText("Penalità applicate" if row["penalty"] else "Punteggio netto")
-
+            initials = "".join(part[0] for part in name(row["id"]).split()[:2]).upper()
+            podium["avatar"].set_player(initials or "?", T.player_tint(ORDER.index(row["id"])))
+            podium["name"].setText(name(row["id"]))
+            podium["points"].setText(f"{row['points']:.1f} punti netti")
+            podium["caption"].setText(
+                f"{row['played']}/5 partite · {row['wins']} vittorie · "
+                f"{row['draws']} patte · penalità {row['penalty']:+.1f}"
+            )
         concluded = sum(1 for value in self.results.values() if value not in (None, "VOID"))
         voided = sum(1 for value in self.results.values() if value == "VOID")
         unresolved_ties = False
         for points in {row["points"] for row in rows}:
-            group = [row for row in rows if row["points"] == points]
-            if len(group) > 1:
-                ids = [row["id"] for row in group]
-                values = [self.tie_break_value(pid, ids) for pid in ids]
+            point_group = [row for row in rows if row["points"] == points]
+            if len(point_group) > 1:
+                ids = [row["id"] for row in point_group]
+                values = [self.tie_break_value(player_id, ids) for player_id in ids]
                 if len(set(values)) < len(values):
                     unresolved_ties = True
                     break
-        note = " · SPAREGGIO ART. 8 DA DISPUTARE" if unresolved_ties else ""
         self.st_summary.setText(
-            f"PARTITE VALIDE  {concluded}/10  ·  ANNULLATE  {voided}  ·  PENALITÀ REGISTRATE  {len(self.penalties)}{note}"
+            f"PARTITE CONCLUSE  {concluded}/10  ·  ANNULLATE {voided}  ·  PENALITÀ {len(self.penalties)}"
+            + ("  ·  SPAREGGIO ART. 8 DA DISPUTARE" if unresolved_ties else "")
         )
 
     def refresh_odds(self):
         values = self.odds()
         ordered = sorted(PLAYERS, key=lambda player: values[player][0], reverse=True)
-        rank = {player: index + 1 for index, player in enumerate(ordered)}
         rows_by_player = {row["player"]: row for row in self.odds_rows}
-        for row in self.odds_rows:
-            pid = row["player"]
-            win, top = values[pid]
-            row["name"].setText(f"{rank[pid]}.  {name(pid)}")
-            row["quota"].setText("Quota equa  —" if win <= 0 else f"Quota equa  {1 / win:.2f}")
+        for rank, player in enumerate(ordered, 1):
+            win, top = values[player]
+            row = rows_by_player[player]
+            row["rank"].setText(f"#{rank}")
+            row["rank"].setProperty("tone", "brass" if rank == 1 else "neutral")
+            row["rank"].style().unpolish(row["rank"])
+            row["rank"].style().polish(row["rank"])
+            row["quota"].setText("Quota equa —" if win <= 0 else f"Quota equa  {1 / win:.2f}")
             row["win"].set(win, f"{win * 100:.1f}%")
-            row["top"].set(top, f"{top * 100:.1f}%", color=T.C.success)
-        for index, pid in enumerate(ordered):
-            widget = rows_by_player[pid]["card"]
-            self.odds_rows_layout.removeWidget(widget)
-            self.odds_rows_layout.insertWidget(index, widget)
+            row["top"].set(top, f"{top * 100:.1f}%")
+            self.odds_rows_layout.removeWidget(row["card"])
+            self.odds_rows_layout.insertWidget(rank - 1, row["card"])
         self.odds_footer.setText(
-            "15.000 scenari simulati · aggiornamento a ogni risultato, penalità o modifica del calendario. "
-            "Le percentuali sono stime illustrative, non quote di mercato."
+            "15.000 scenari Monte Carlo · calcolo deterministico aggiornato dopo risultati, penalità e calendario. "
+            "La quota equa è 1 / probabilità stimata: non è una quota bookmaker e non è una previsione certa."
         )
 
     def refresh_penalties(self):
@@ -2707,29 +2878,46 @@ class MainWindow(QMainWindow):
         for x in self.penalties:
             self.pen_list.addItem(f"{name(x.get('player',''))}   {x.get('points',0):+.1f} pt   ·   {x.get('reason','')}   ·   {x.get('time','')}")
     def refresh_playoffs(self):
-        if not hasattr(self,"playoff_cards"): return
-        rows=self.standings(); ids=[x["id"] for x in rows]
-        pair1=(ids[0],ids[3]); pair2=(ids[1],ids[2])
-        self.playoff_pairs={"sf1":pair1,"sf2":pair2}
-        winner1=self.playoff_pair_winner("sf1",pair1)
-        winner2=self.playoff_pair_winner("sf2",pair2)
-        loser1=next((p for p in pair1 if p and p!=winner1),None)
-        loser2=next((p for p in pair2 if p and p!=winner2),None)
-        final_pair=(winner1,winner2); third_pair=(loser1,loser2)
-        self.playoff_pairs.update({"final":final_pair,"third":third_pair})
-        labels={
-            "sf1":("SEMIFINALE 1",pair1),"sf2":("SEMIFINALE 2",pair2),
-            "final":("FINALE",final_pair),"third":("3° / 4° POSTO",third_pair)}
-        for key,card in self.playoff_cards.items():
-            title,pair=labels[key]
+        if not hasattr(self, "playoff_cards"):
+            return
+        rows = self.standings()
+        ids = [row["id"] for row in rows]
+        pair1 = (ids[0], ids[3])
+        pair2 = (ids[1], ids[2])
+        self.playoff_pairs = {"sf1": pair1, "sf2": pair2}
+        winner1 = self.playoff_pair_winner("sf1", pair1)
+        winner2 = self.playoff_pair_winner("sf2", pair2)
+        loser1 = next((player for player in pair1 if player and player != winner1), None)
+        loser2 = next((player for player in pair2 if player and player != winner2), None)
+        final_pair = (winner1, winner2)
+        third_pair = (loser1, loser2)
+        self.playoff_pairs.update({"final": final_pair, "third": third_pair})
+        labels = {
+            "sf1": ("SEMIFINALE 1", pair1),
+            "sf2": ("SEMIFINALE 2", pair2),
+            "final": ("FINALE", final_pair),
+            "third": ("3° / 4° POSTO", third_pair),
+        }
+        for key, card in self.playoff_cards.items():
+            title, pair = labels[key]
             card.labels[0].setText(title)
             card.labels[1].setText(name(pair[0]) if pair[0] else "Da definire")
             card.labels[2].setText(name(pair[1]) if pair[1] else "Da definire")
-            result=self.playoff_results.get(key)
+            result = self.playoff_results.get(key)
+            winner = self.playoff_pair_winner(key, pair) if all(pair) else None
+            for index, player in ((1, pair[0]), (2, pair[1])):
+                is_winner = bool(winner and player == winner)
+                color = T.C.brass_hi if is_winner else T.C.text
+                card.labels[index].setStyleSheet(
+                    f"color: {color}; font-weight: {'800' if is_winner else '600'};"
+                )
             if result == "1/2-1/2":
-                card.status_label.setText("PATTA · ARMAGEDDON DA REGISTRARE" if not self.playoff_winners.get(key) else "ARMAGEDDON REGISTRATO")
+                card.status_label.setText(
+                    "PATTA · ARMAGEDDON DA REGISTRARE"
+                    if not self.playoff_winners.get(key) else f"ARMAGEDDON · {name(self.playoff_winners[key])}"
+                )
             elif result in ("1-0", "0-1"):
-                card.status_label.setText("INCONTRO CONCLUSO")
+                card.status_label.setText(f"VINCITORE · {name(winner)}" if winner else "INCONTRO CONCLUSO")
             elif self.clock_data(key).get("started"):
                 card.status_label.setText("IN CORSO · OROLOGIO ATTIVO")
             elif all(pair):
@@ -2737,27 +2925,52 @@ class MainWindow(QMainWindow):
             else:
                 card.status_label.setText("IN ATTESA DELLE QUALIFICATE")
             card.result_box.blockSignals(True)
-            card.result_box.setCurrentIndex(max(0,card.result_box.findData(result)))
+            card.result_box.setCurrentIndex(max(0, card.result_box.findData(result)))
             card.result_box.blockSignals(False)
             card.result_box.setEnabled(all(pair))
-            card.winner_box.blockSignals(True); card.winner_box.clear()
-            card.winner_box.addItem("Vincitore da definire",None)
+            card.winner_box.blockSignals(True)
+            card.winner_box.clear()
+            card.winner_box.addItem("Vincitore da definire", None)
             for player in pair:
-                if player: card.winner_box.addItem(name(player),player)
-            chosen=self.playoff_winners.get(key)
+                if player:
+                    card.winner_box.addItem(name(player), player)
+            chosen = self.playoff_winners.get(key)
             if chosen not in pair:
-                self.playoff_winners.pop(key,None); chosen=None
-            card.winner_box.setCurrentIndex(max(0,card.winner_box.findData(chosen)))
-            card.winner_box.setEnabled(result=="1/2-1/2" and pair[0] is not None and pair[1] is not None)
+                self.playoff_winners.pop(key, None)
+                chosen = None
+            card.winner_box.setCurrentIndex(max(0, card.winner_box.findData(chosen)))
+            card.winner_box.setEnabled(result == "1/2-1/2" and pair[0] is not None and pair[1] is not None)
             card.winner_box.blockSignals(False)
             card.clock_label.setText(self.playoff_clock_text(key))
-            clock=self.clock_data(key)
-            active=bool(clock.get("started")) and result is None and all(pair)
+            clock = self.clock_data(key)
+            active = bool(clock.get("started")) and result is None and all(pair)
             card.clock_start_button.setEnabled(not active and result is None and all(pair))
             card.clock_switch_button.setEnabled(active)
             card.draw_button.setEnabled(result is None and all(pair))
             card.resign_button.setEnabled(result is None and all(pair))
             card.force_button.setEnabled(all(pair))
+        semi_ready = sum(1 for pair in (pair1, pair2) if all(pair))
+        completed = sum(
+            1 for key in ("sf1", "sf2", "final", "third")
+            if self.playoff_results.get(key) not in (None, "VOID")
+        )
+        self.playoff_overview.setText(
+            f"{semi_ready}/2 semifinali pronte · {completed}/4 incontri conclusi. "
+            "Le qualificate derivano dalla classifica corrente."
+        )
+        final_result = self.playoff_results.get("final")
+        champion = None
+        if all(final_pair):
+            if final_result == "1-0":
+                champion = final_pair[0]
+            elif final_result == "0-1":
+                champion = final_pair[1]
+            elif final_result == "1/2-1/2":
+                champion = self.playoff_winners.get("final")
+        self.playoff_champion.setText(
+            f"CAMPIONE · {name(champion)}" if champion else "Vincitore del torneo: da definire"
+        )
+
     def open_broadcast(self):
         if self.broadcast is None: self.broadcast=BroadcastWindow(self)
         self.broadcast.refresh_from_app()
