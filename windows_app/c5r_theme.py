@@ -10,26 +10,27 @@ from PySide6.QtSvg import QSvgRenderer
 
 
 class C:
-    bg = "#0A0F15"
-    sidebar = "#0D131A"
-    surface = "#121A23"
-    surface2 = "#18222D"
-    surface3 = "#202D3B"
-    well = "#0C1219"
-    line = "#263444"
-    line_soft = "#1A2530"
-    text = "#EDE7DA"
-    text2 = "#AAB2BD"
-    text3 = "#7C8899"
-    brass = "#C9A15B"
-    brass_hi = "#E3C07F"
-    brass_lo = "#8F7240"
-    on_brass = "#1A1307"
-    success = "#58B394"
-    danger = "#E0707A"
-    warning = "#E0A64B"
-    info = "#7FAEDD"
-    check = "#C2454F"
+    # Palette clubhouse: superfici fredde, testo caldo e oro ad alto contrasto.
+    bg = "#0B1017"
+    sidebar = "#0D141D"
+    surface = "#141D28"
+    surface2 = "#1A2633"
+    surface3 = "#243342"
+    well = "#0E151E"
+    line = "#304253"
+    line_soft = "#22303D"
+    text = "#F3EEE4"
+    text2 = "#BBC5D0"
+    text3 = "#929EAD"
+    brass = "#D0AA67"
+    brass_hi = "#E9C985"
+    brass_lo = "#9B7942"
+    on_brass = "#171106"
+    success = "#66C5A1"
+    danger = "#EA7D86"
+    warning = "#E8B15C"
+    info = "#88B9E5"
+    check = "#D0525E"
 
 
 class S:
@@ -190,7 +191,7 @@ _QSS = """
 * { outline: none; }
 QWidget { background: transparent; color: @text@; font-family: @sans@; font-size: 14px; }
 QMainWindow, QDialog { background: @bg@; }
-QToolTip { background: @surface3@; color: @text@; border: 1px solid @line@; border-radius: 6px; padding: 6px 8px; }
+QToolTip { background: @surface3@; color: @text@; border: 1px solid @line@; border-radius: 8px; padding: 7px 10px; }
 QLabel[role="display"] { font-family: @serif@; font-size: 40px; font-weight: 600; color: @text@; }
 QLabel[role="h1"] { font-family: @serif@; font-size: 30px; font-weight: 600; color: @text@; }
 QLabel[role="h2"] { font-family: @serif@; font-size: 22px; font-weight: 600; color: @text@; }
@@ -214,7 +215,9 @@ QLabel[pill="true"][tone="success"] { background: rgba(88,179,148,0.16); color: 
 QLabel[pill="true"][tone="danger"] { background: rgba(224,112,122,0.16); color: @danger@; }
 QLabel[pill="true"][tone="warning"] { background: rgba(224,166,75,0.16); color: @warning@; }
 QLabel[pill="true"][tone="info"] { background: rgba(127,174,221,0.16); color: @info@; }
-QPushButton { background: @surface2@; color: @text@; border: 1px solid @line@; border-radius: 8px; padding: 0 14px; min-height: 34px; font-weight: 600; }
+QPushButton { background: @surface2@; color: @text@; border: 1px solid @line@; border-radius: 9px; padding: 0 15px; min-height: 38px; font-weight: 600; }
+QPushButton:checked { border-color: @brass@; }
+QPushButton:disabled { color: @text3@; background: @surface@; border-color: @line_soft@; }
 QPushButton:hover { background: @surface3@; border-color: #35485D; }
 QPushButton:pressed { background: #26364A; }
 QPushButton:focus { border: 2px solid @brass_hi@; }
@@ -227,24 +230,39 @@ QPushButton[kind="ghost"] { background: transparent; border: 1px solid transpare
 QPushButton[kind="ghost"]:hover { background: @surface3@; color: @text@; }
 QPushButton[kind="danger"] { background: transparent; color: @danger@; border: 1px solid rgba(224,112,122,0.45); }
 QPushButton[size="sm"] { min-height: 28px; padding: 0 10px; font-size: 13px; }
-QPushButton[nav="true"] { background: transparent; border: 1px solid transparent; border-radius: 9px; text-align: left; padding: 0 12px; min-height: 40px; color: @text2@; font-weight: 500; }
-QPushButton[nav="true"]:hover { background: @surface2@; color: @text@; }
-QPushButton[nav="true"]:checked { background: rgba(201,161,91,0.13); color: @brass_hi@; font-weight: 700; }
+QPushButton[nav="true"] { background: transparent; border: 1px solid transparent; border-left: 3px solid transparent; border-radius: 9px; text-align: left; padding: 0 12px 0 9px; min-height: 42px; color: @text2@; font-weight: 500; }
+QPushButton[nav="true"]:hover { background: @surface2@; color: @text@; border-color: @line_soft@; border-left-color: @line@; }
+QPushButton[nav="true"]:checked { background: rgba(208,170,103,0.14); color: @brass_hi@; font-weight: 700; border: 1px solid rgba(208,170,103,0.20); border-left: 3px solid @brass@; padding-left: 9px; }
+QPushButton[nav="true"]:focus { border: 1px solid @brass_hi@; border-left: 3px solid @brass_hi@; }
 QPushButton[seg="true"] { background: transparent; border: none; border-radius: 6px; padding: 0 14px; min-height: 30px; color: @text2@; font-weight: 600; }
 QPushButton[seg="true"]:checked { background: @brass@; color: @on_brass@; }
 QFrame#SegBar { background: @well@; border: 1px solid @line_soft@; border-radius: 9px; }
-QLineEdit, QPlainTextEdit, QTextEdit, QDoubleSpinBox, QSpinBox, QComboBox { background: @well@; color: @text@; border: 1px solid @line@; border-radius: 8px; padding: 0 12px; min-height: 34px; selection-background-color: @brass_lo@; selection-color: @text@; }
+QLineEdit, QPlainTextEdit, QTextEdit, QDoubleSpinBox, QSpinBox, QComboBox { background: @well@; color: @text@; border: 1px solid @line@; border-radius: 9px; padding: 0 13px; min-height: 38px; selection-background-color: @brass_lo@; selection-color: @text@; }
+QPlainTextEdit, QTextEdit { padding: 9px 12px; }
+QCheckBox, QRadioButton { spacing: 9px; color: @text2@; min-height: 28px; }
+QCheckBox:hover, QRadioButton:hover { color: @text@; }
+QCheckBox::indicator, QRadioButton::indicator { width: 17px; height: 17px; }
+QCheckBox::indicator { border: 1px solid @line@; border-radius: 5px; background: @well@; }
+QCheckBox::indicator:checked { background: @brass@; border: 1px solid @brass_hi@; }
+QRadioButton::indicator { border: 1px solid @line@; border-radius: 9px; background: @well@; }
+QRadioButton::indicator:checked { background: @brass@; border: 4px solid @surface2@; }
 QLineEdit:focus, QPlainTextEdit:focus, QDoubleSpinBox:focus, QSpinBox:focus, QComboBox:focus { border-color: @brass@; }
 QComboBox QAbstractItemView { background: @surface2@; color: @text@; selection-background-color: @surface3@; selection-color: @brass_hi@; }
 QTableWidget, QTableView { background: @surface@; alternate-background-color: #141D27; border: 1px solid @line_soft@; border-radius: 12px; gridline-color: transparent; selection-background-color: rgba(201,161,91,0.14); selection-color: @text@; }
 QTableWidget::item, QTableView::item { padding: 0 12px; border-bottom: 1px solid @line_soft@; }
-QHeaderView::section { background: @surface@; color: @text2@; border: none; border-bottom: 1px solid @line@; padding: 10px 12px; font-size: 12px; font-weight: 600; }
+QHeaderView::section { background: @surface2@; color: @text2@; border: none; border-bottom: 1px solid @line@; padding: 12px 14px; font-size: 11px; font-weight: 700; letter-spacing: 0.7px; }
+QTableWidget::item:selected, QTableView::item:selected { background: rgba(208,170,103,0.20); color: @text@; }
+QTableWidget::item:hover, QTableView::item:hover { background: rgba(136,185,229,0.07); }
 QListWidget { background: transparent; border: none; padding: 0; }
 QListWidget#Sidebar { background: @sidebar@; border: 1px solid @line_soft@; border-radius: 12px; padding: 8px; }
 QListWidget#Sidebar::item { color: @text2@; padding: 13px 10px; border-radius: 8px; margin: 3px 0; }
 QListWidget#Sidebar::item:selected { background: @surface3@; color: @brass_hi@; border-left: 3px solid @brass@; }
 QScrollBar:vertical { background: transparent; width: 12px; margin: 2px; }
-QScrollBar::handle:vertical { background: #2C3B4D; border-radius: 4px; min-height: 36px; margin: 0 2px; }
+QScrollBar::handle:vertical { background: #34485C; border-radius: 5px; min-height: 36px; margin: 0 2px; }
+QScrollBar::handle:vertical:hover { background: #49617A; }
+QScrollBar:horizontal { background: transparent; height: 12px; margin: 2px; }
+QScrollBar::handle:horizontal { background: #34485C; border-radius: 5px; min-width: 36px; margin: 2px 0; }
+QScrollBar::handle:horizontal:hover { background: #49617A; }
 QStatusBar { background: @sidebar@; color: @text3@; border-top: 1px solid @line_soft@; font-size: 12px; }
 QProgressBar { background: @surface3@; border: none; border-radius: 4px; max-height: 8px; min-height: 8px; text-align: center; color: transparent; }
 QProgressBar::chunk { background: @brass@; border-radius: 4px; }
