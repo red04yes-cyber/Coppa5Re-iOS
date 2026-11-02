@@ -7,11 +7,11 @@ import chess
 import chess.pgn
 try:
     from . import c5r_theme as T
-    from .c5r_widgets import SideNav, ToastStatusBar
+    from .c5r_widgets import (SideNav, ToastStatusBar, Card, StatTile, EmptyState, ProbBar,\n        PillDelegate, style_table, table_card, LineChart, ClockChip, ResultPicker,\n        EvalBar, Avatar, label as ui_label, pill as ui_pill, set_pill, button as ui_button)
     from .c5r_board import BoardWidget
 except ImportError:
     import c5r_theme as T
-    from c5r_widgets import SideNav, ToastStatusBar
+    from c5r_widgets import (SideNav, ToastStatusBar, Card, StatTile, EmptyState, ProbBar,\n        PillDelegate, style_table, table_card, LineChart, ClockChip, ResultPicker,\n        EvalBar, Avatar, label as ui_label, pill as ui_pill, set_pill, button as ui_button)
     from c5r_board import BoardWidget
 from PySide6.QtCore import Qt, QSize, Signal, QThread, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPdfWriter, QKeySequence, QShortcut
@@ -982,34 +982,98 @@ class MainWindow(QMainWindow):
             self.tabs.setCurrentIndex(self._nav_keys.index(key))
 
     def build_dashboard(self):
-        page=QWidget(); root=QVBoxLayout(page)
-        hero=QFrame(); hero.setObjectName("Card"); hl=QHBoxLayout(hero)
-        crown=LogoWidget(170,190)
-        title=QLabel("<span style='font-size:27px;font-weight:900;color:#EEF1F5'>C5R · COPPA DEI 5 RE</span><br><span style='color:#D8B36A;letter-spacing:3px'>CHESS TOURNAMENT CONTROL ROOM</span>")
-        title.setTextFormat(Qt.TextFormat.RichText)
-        hl.addWidget(crown); hl.addWidget(title,1); root.addWidget(hero)
-        self.dashboard_summary=QLabel(); self.dashboard_summary.setObjectName("SectionTitle"); root.addWidget(self.dashboard_summary)
-        self.dashboard_detail=QLabel(); self.dashboard_detail.setObjectName("Muted"); root.addWidget(self.dashboard_detail)
-        actions=QGridLayout()
-        items=[("ESPORTA PGN TORNEO",self.export_all_pgn),("CLASSIFICA CSV",self.export_standings_csv),
-               ("CLASSIFICA PDF",self.export_standings_pdf),("BACKUP DATI",self.export_backup),
-               ("RIPRISTINA BACKUP",self.restore_backup)]
-        for i,(label,callback) in enumerate(items):
-            button=QPushButton(label); button.setObjectName("PrimaryButton" if i==0 else "")
-            button.clicked.connect(callback); actions.addWidget(button,i//3,i%3)
-        root.addLayout(actions)
-        referee_row=QHBoxLayout()
-        self.dashboard_match_combo=QComboBox()
-        for gid,rnd,white,black in GAMES:
-            self.dashboard_match_combo.addItem(f"R{rnd} · {name(white)} – {name(black)}",gid)
-        referee_row.addWidget(self.dashboard_match_combo,1)
-        draw=QPushButton("PATTA CONCORDATA"); draw.clicked.connect(lambda:self.offer_draw(self.dashboard_match_combo.currentData()))
-        resign=QPushButton("ABBANDONO"); resign.clicked.connect(lambda:self.resign_game(self.dashboard_match_combo.currentData()))
-        force=QPushButton("FORZA RISULTATO"); force.clicked.connect(lambda:self.force_game_result(self.dashboard_match_combo.currentData()))
-        referee_row.addWidget(draw); referee_row.addWidget(resign); referee_row.addWidget(force)
-        root.addLayout(referee_row)
-        tip=QLabel("Azioni arbitrali rapide: seleziona la partita, verifica la conferma di entrambi i giocatori per la patta o registra abbandono / decisione del direttore di gara. Usa LIVE ARENA per giocare e ARCHIVIO per consultare le partite concluse.")
-        tip.setObjectName("Muted"); tip.setWordWrap(True); root.addWidget(tip); root.addStretch()
+        page = QWidget()
+        root = QVBoxLayout(page)
+        root.setContentsMargins(26, 24, 26, 30)
+        root.setSpacing(18)
+
+        hero = QFrame()
+        hero.setObjectName("CardAccent")
+        hero_lay = QHBoxLayout(hero)
+        hero_lay.setContentsMargins(22, 18, 22, 18)
+        hero_lay.setSpacing(18)
+        hero_lay.addWidget(LogoWidget(104, 112))
+        hero_text = QVBoxLayout()
+        hero_text.setSpacing(5)
+        title = ui_label("Il torneo, sotto controllo.", "h1")
+        subtitle = ui_label("Panoramica in tempo reale della Coppa dei 5 Re.", "lead")
+        hero_text.addWidget(title)
+        hero_text.addWidget(subtitle)
+        hero_text.addStretch(1)
+        hero_lay.addLayout(hero_text, 1)
+        root.addWidget(hero)
+
+        metrics = QHBoxLayout()
+        metrics.setSpacing(12)
+        self.dashboard_tiles = {
+            "done": StatTile("PARTITE CONCLUSE", "check"),
+            "live": StatTile("IN CORSO", "clock"),
+            "pending": StatTile("DA DISPUTARE", "calendar"),
+            "retired": StatTile("RITIRI REGISTRATI", "user"),
+        }
+        for tile in self.dashboard_tiles.values():
+            metrics.addWidget(tile, 1)
+        root.addLayout(metrics)
+
+        progress_card = Card("Avanzamento del girone", "Completamento delle dieci partite di qualificazione.")
+        self.dashboard_progress = QProgressBar()
+        self.dashboard_progress.setRange(0, 100)
+        self.dashboard_progress.setTextVisible(True)
+        self.dashboard_progress.setFormat("%p% completato")
+        self.dashboard_progress.setFixedHeight(13)
+        progress_card.body.addWidget(self.dashboard_progress)
+        self.dashboard_progress_detail = ui_label("", "caption")
+        progress_card.body.addWidget(self.dashboard_progress_detail)
+        root.addWidget(progress_card)
+
+        chart_card = Card("Andamento dei punti", "Punti ottenuti nei round conclusi; le penalità sono mostrate separatamente in classifica.")
+        self.dashboard_chart = LineChart()
+        self.dashboard_chart.setMinimumHeight(230)
+        chart_card.body.addWidget(self.dashboard_chart)
+        root.addWidget(chart_card)
+
+        lower = QHBoxLayout()
+        lower.setSpacing(12)
+        actions = Card("Operazioni rapide", "Esportazione e sicurezza dei dati.")
+        action_grid = QGridLayout()
+        action_grid.setHorizontalSpacing(8)
+        action_grid.setVerticalSpacing(8)
+        items = [
+            ("ESPORTA PGN TORNEO", self.export_all_pgn),
+            ("CLASSIFICA CSV", self.export_standings_csv),
+            ("CLASSIFICA PDF", self.export_standings_pdf),
+            ("CREA BACKUP", self.export_backup),
+            ("RIPRISTINA BACKUP", self.restore_backup),
+        ]
+        for i, (text, callback) in enumerate(items):
+            btn = QPushButton(text)
+            btn.setObjectName("PrimaryButton" if i == 0 else "")
+            btn.setToolTip("Esporta o salva una copia dei dati del torneo.")
+            btn.clicked.connect(callback)
+            action_grid.addWidget(btn, i // 2, i % 2)
+        actions.body.addLayout(action_grid)
+        lower.addWidget(actions, 1)
+
+        referee = Card("Azioni arbitrali", "Seleziona una partita per registrare una patta concordata, un abbandono o una decisione arbitrale.")
+        self.dashboard_match_combo = QComboBox()
+        for gid, rnd, white, black in GAMES:
+            self.dashboard_match_combo.addItem(f"Round {rnd} · {name(white)} – {name(black)}", gid)
+        referee.body.addWidget(self.dashboard_match_combo)
+        row = QHBoxLayout()
+        draw = QPushButton("PATTA CONCORDATA")
+        draw.clicked.connect(lambda: self.offer_draw(self.dashboard_match_combo.currentData()))
+        resign = QPushButton("ABBANDONO")
+        resign.clicked.connect(lambda: self.resign_game(self.dashboard_match_combo.currentData()))
+        force = QPushButton("FORZA RISULTATO")
+        force.setObjectName("PrimaryButton")
+        force.clicked.connect(lambda: self.force_game_result(self.dashboard_match_combo.currentData()))
+        row.addWidget(draw)
+        row.addWidget(resign)
+        row.addWidget(force)
+        referee.body.addLayout(row)
+        lower.addWidget(referee, 1)
+        root.addLayout(lower)
+        root.addStretch(1)
         return page
 
     def build_archive(self):
@@ -1512,73 +1576,239 @@ class MainWindow(QMainWindow):
         self.apply_schedule(DEFAULT_GAMES)
 
     def build_calendar(self):
-        page=QWidget(); l=QVBoxLayout(page)
-        h=QLabel("PROGRAMMA E RISULTATI"); h.setObjectName("SectionTitle"); l.addWidget(h)
-        d=QLabel("Calendario round-robin già caricato. Ogni risultato aggiorna immediatamente classifica e simulazioni quote.")
-        d.setObjectName("Muted"); l.addWidget(d)
-        filters=QHBoxLayout()
-        self.filter_round=QComboBox(); self.filter_round.addItems(["Tutti i turni"]+[f"Round {r}" for r in range(1,6)])
-        self.filter_player=QComboBox(); self.filter_player.addItem("Tutti i giocatori",None)
-        for pid in ORDER: self.filter_player.addItem(name(pid),pid)
-        self.filter_status=QComboBox(); self.filter_status.addItems(["Tutti gli stati","In corso","Concluse"])
-        for control in (self.filter_round,self.filter_player,self.filter_status):
-            control.currentIndexChanged.connect(self.apply_calendar_filters); filters.addWidget(control)
-        l.addLayout(filters)
-        scroll=QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.Shape.NoFrame)
-        content=QWidget(); v=QVBoxLayout(content); self.calendar_combos={}; self.calendar_pairings={}; self.calendar_bye_labels={}; self.calendar_cards={}
-        for gid,r,w,b in GAMES:
-            card=QFrame(); card.setObjectName("Card"); row=QHBoxLayout(card)
-            tag=QLabel(f"ROUND {r}"); tag.setObjectName("Eyebrow"); tag.setFixedWidth(85)
-            matchup=QLabel(f"{name(w)}  <span style='color:{GOLD}'>vs</span>  {name(b)}"); matchup.setObjectName("MatchTitle")
-            self.calendar_pairings[gid]=matchup; self.calendar_cards[gid]=card
-            combo=QComboBox()
-            for val,label in RESULT_OPTIONS: combo.addItem(label,val)
-            combo.currentIndexChanged.connect(lambda i,gid=gid,cb=combo:self.set_result(gid,cb.itemData(i)))
-            self.calendar_combos[gid]=combo; row.addWidget(tag); row.addWidget(matchup,1); row.addWidget(combo); v.addWidget(card)
-        for r,p in BYES.items():
-            bye=QLabel(f"ROUND {r}  ·  Riposa: {name(p)}  ·  BYE"); bye.setObjectName("Muted")
-            self.calendar_bye_labels[r]=bye; v.addWidget(bye)
-        v.addStretch(); scroll.setWidget(content); l.addWidget(scroll,1); return page
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(26, 24, 26, 30)
+        layout.setSpacing(14)
+        layout.addWidget(ui_label("Programma e risultati", "h1"))
+        layout.addWidget(ui_label(
+            "Le partite sono raggruppate per turno. Usa i filtri per trovare un giocatore o controllare lo stato del girone.",
+            "lead", wrap=True
+        ))
+        filters_card = Card("Filtri del calendario", padding=14, spacing=10)
+        filters = QHBoxLayout()
+        self.calendar_search = QLineEdit()
+        self.calendar_search.setPlaceholderText("Cerca un giocatore o una partita…")
+        self.filter_round = QComboBox()
+        self.filter_round.addItems(["Tutti i turni"] + [f"Round {r}" for r in range(1, 6)])
+        self.filter_player = QComboBox()
+        self.filter_player.addItem("Tutti i giocatori", None)
+        for pid in ORDER:
+            self.filter_player.addItem(name(pid), pid)
+        self.filter_status = QComboBox()
+        self.filter_status.addItems(["Tutti gli stati", "In corso", "Concluse"])
+        for control in (self.calendar_search, self.filter_round, self.filter_player, self.filter_status):
+            filters.addWidget(control, 2 if control is self.calendar_search else 1)
+        filters_card.body.addLayout(filters)
+        for control in (self.calendar_search, self.filter_round, self.filter_player, self.filter_status):
+            signal = control.textChanged if control is self.calendar_search else control.currentIndexChanged
+            signal.connect(self.apply_calendar_filters)
+        layout.addWidget(filters_card)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        content = QWidget()
+        v = QVBoxLayout(content)
+        v.setContentsMargins(0, 0, 8, 0)
+        v.setSpacing(14)
+        self.calendar_combos = {}
+        self.calendar_pairings = {}
+        self.calendar_cards = {}
+        self.calendar_status_labels = {}
+        self.calendar_round_sections = {}
+        self.calendar_round_progress = {}
+        self.calendar_bye_labels = {}
+
+        for rnd in range(1, 6):
+            round_card = Card(f"ROUND {rnd:02d}", padding=16, spacing=10)
+            header = QHBoxLayout()
+            progress_label = ui_label("0/2 partite concluse", "caption")
+            header.addStretch(1)
+            header.addWidget(progress_label)
+            round_card.body.addLayout(header)
+            self.calendar_round_progress[rnd] = progress_label
+            for gid, game_round, white, black in [g for g in GAMES if g[1] == rnd]:
+                match_card = QFrame()
+                match_card.setObjectName("CardRaised")
+                row = QHBoxLayout(match_card)
+                row.setContentsMargins(14, 10, 14, 10)
+                row.setSpacing(12)
+                tag = ui_label(gid.replace(f"R{rnd}-", "TAVOLO "), "caption")
+                tag.setMinimumWidth(82)
+                matchup = ui_label(f"{name(white)}   vs   {name(black)}", "h3")
+                status = ui_pill("DA GIOCARE", "neutral")
+                combo = QComboBox()
+                for val, text in RESULT_OPTIONS:
+                    combo.addItem(text, val)
+                combo.setMinimumWidth(150)
+                combo.setToolTip("Registra o modifica il risultato della partita.")
+                combo.currentIndexChanged.connect(
+                    lambda i, gid=gid, cb=combo: self.set_result(gid, cb.itemData(i))
+                )
+                row.addWidget(tag)
+                row.addWidget(matchup, 1)
+                row.addWidget(status)
+                row.addWidget(combo)
+                self.calendar_pairings[gid] = matchup
+                self.calendar_cards[gid] = match_card
+                self.calendar_status_labels[gid] = status
+                self.calendar_combos[gid] = combo
+                round_card.body.addWidget(match_card)
+            bye = ui_label(f"Riposa: {name(BYES[rnd])}", "muted")
+            self.calendar_bye_labels[rnd] = bye
+            round_card.body.addWidget(bye)
+            self.calendar_round_sections[rnd] = round_card
+            v.addWidget(round_card)
+        v.addStretch(1)
+        scroll.setWidget(content)
+        layout.addWidget(scroll, 1)
+        self.apply_calendar_filters()
+        return page
+
     def apply_calendar_filters(self):
-        if not hasattr(self,"calendar_cards"): return
-        rnd_text=self.filter_round.currentText()
-        selected_player=self.filter_player.currentData()
-        state=self.filter_status.currentText()
-        for gid,card in self.calendar_cards.items():
-            _,rnd,white,black=game(gid)
-            matches_round=(rnd_text=="Tutti i turni" or rnd_text==f"Round {rnd}")
-            matches_player=(selected_player is None or selected_player in (white,black))
-            completed=bool(self.results.get(gid))
-            matches_state=(state=="Tutti gli stati" or (state=="Concluse" and completed) or (state=="In corso" and not completed))
-            card.setVisible(matches_round and matches_player and matches_state)
-        if hasattr(self,"calendar_bye_labels"):
-            for rnd,label in self.calendar_bye_labels.items():
-                label.setVisible(rnd_text=="Tutti i turni" or rnd_text==f"Round {rnd}")
+        if not hasattr(self, "calendar_cards"):
+            return
+        rnd_text = self.filter_round.currentText()
+        selected_player = self.filter_player.currentData()
+        state = self.filter_status.currentText()
+        query = self.calendar_search.text().strip().casefold() if hasattr(self, "calendar_search") else ""
+        visible_by_round = {rnd: 0 for rnd in range(1, 6)}
+        for gid, card in self.calendar_cards.items():
+            _, rnd, white, black = game(gid)
+            matches_round = rnd_text == "Tutti i turni" or rnd_text == f"Round {rnd}"
+            matches_player = selected_player is None or selected_player in (white, black)
+            completed = bool(self.results.get(gid))
+            matches_state = (
+                state == "Tutti gli stati"
+                or (state == "Concluse" and completed)
+                or (state == "In corso" and not completed)
+            )
+            match_text = f"{gid} {name(white)} {name(black)}".casefold()
+            matches_query = not query or query in match_text
+            visible = matches_round and matches_player and matches_state and matches_query
+            card.setVisible(visible)
+            if visible:
+                visible_by_round[rnd] += 1
+        for rnd, section in self.calendar_round_sections.items():
+            section.setVisible(visible_by_round[rnd] > 0)
+            self.calendar_bye_labels[rnd].setVisible(visible_by_round[rnd] > 0)
+        self._refresh_calendar_round_progress()
+
+    def _refresh_calendar_round_progress(self):
+        if not hasattr(self, "calendar_round_progress"):
+            return
+        for rnd in range(1, 6):
+            games = [g for g in GAMES if g[1] == rnd]
+            done = sum(1 for gid, _, _, _ in games if self.results.get(gid) not in (None, "VOID"))
+            voided = sum(1 for gid, _, _, _ in games if self.results.get(gid) == "VOID")
+            label = self.calendar_round_progress[rnd]
+            label.setText(f"{done}/2 concluse" + (f" · {voided} annullata/e" if voided else ""))
+            self.calendar_bye_labels[rnd].setText(f"RIPOSA  ·  {name(BYES[rnd])}")
 
     def build_standings(self):
-        page=QWidget(); l=QVBoxLayout(page)
-        h=QLabel("CLASSIFICA GENERALE"); h.setObjectName("SectionTitle"); l.addWidget(h)
-        d=QLabel("Vittoria 1 pt · patta 0,5 pt · sconfitta 0 pt · penalità sottratte. Spareggi Art. 8 in ordine: scontro diretto (solo due), Sonneborn–Berger, vittorie; poi Armageddon o mini-girone.")
-        d.setObjectName("Muted"); l.addWidget(d)
-        self.st_table=QTableWidget(0,8); self.st_table.setHorizontalHeaderLabels(["POS","GIOCATORE","G","V","X","P","PEN.","PT"])
-        self.st_table.verticalHeader().setVisible(False); self.st_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.st_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        self.st_table.horizontalHeader().setSectionResizeMode(1,QHeaderView.ResizeMode.Stretch)
-        for c in (0,2,3,4,5,6,7): self.st_table.horizontalHeader().setSectionResizeMode(c,QHeaderView.ResizeMode.ResizeToContents)
-        l.addWidget(self.st_table,1); self.st_summary=QLabel(); self.st_summary.setObjectName("Muted"); l.addWidget(self.st_summary)
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(26, 24, 26, 30)
+        layout.setSpacing(16)
+        layout.addWidget(ui_label("Classifica generale", "h1"))
+        layout.addWidget(ui_label(
+            "Il punteggio netto include le penalità. Gli spareggi seguono l'Art. 8: "
+            "scontro diretto tra due soli giocatori, Sonneborn–Berger e numero di vittorie.",
+            "lead", wrap=True
+        ))
+        podium_row = QHBoxLayout()
+        podium_row.setSpacing(12)
+        self.podium_cards = {}
+        for rank in (2, 1, 3):
+            variant = "CardAccent" if rank == 1 else "Card"
+            card = Card(f"{rank}° POSTO", variant=variant, padding=16, spacing=7)
+            top = QHBoxLayout()
+            avatar = Avatar("?", T.player_tint(rank - 1), 42)
+            top.addWidget(avatar)
+            person = QVBoxLayout()
+            player_label = ui_label("Da definire", "h3")
+            points_label = ui_label("0,0 punti", "numsm")
+            person.addWidget(player_label)
+            person.addWidget(points_label)
+            top.addLayout(person, 1)
+            card.body.addLayout(top)
+            caption = ui_label("Posizione provvisoria", "caption")
+            card.body.addWidget(caption)
+            self.podium_cards[rank] = {
+                "avatar": avatar, "name": player_label, "points": points_label,
+                "caption": caption
+            }
+            podium_row.addWidget(card, 1)
+        layout.addLayout(podium_row)
+
+        table_card_widget = Card("Dettaglio classifica", "G = giocate · V = vittorie · X = patte · P = sconfitte")
+        self.st_table = QTableWidget(0, 8)
+        self.st_table.setHorizontalHeaderLabels(["POS", "GIOCATORE", "G", "V", "X", "P", "PEN.", "PT NETTI"])
+        self.st_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        for col in (0, 2, 3, 4, 5, 6, 7):
+            self.st_table.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        style_table(self.st_table, row_height=48, selectable=False)
+        table_card_widget.body.addWidget(table_card(self.st_table))
+        layout.addWidget(table_card_widget, 1)
+        self.st_summary = ui_label("", "muted", wrap=True)
+        layout.addWidget(self.st_summary)
         return page
+
     def build_odds(self):
-        page=QWidget(); l=QVBoxLayout(page)
-        h=QLabel("QUOTE E PROBABILITÀ"); h.setObjectName("SectionTitle"); l.addWidget(h)
-        desc=QLabel("Le probabilità derivano da 15.000 simulazioni Monte Carlo: partono dai pronostici 1-X-2 di ciascun accoppiamento, correggono moderatamente la forma sui risultati registrati e sottraggono le penalità dal punteggio. Quota equa = 1 / probabilità stimata. Sono stime illustrative, non quote bookmaker.")
-        desc.setObjectName("Muted"); desc.setWordWrap(True); l.addWidget(desc)
-        self.odds_table=QTableWidget(0,4); self.odds_table.setHorizontalHeaderLabels(["GIOCATORE","VINCENTE TORNEO","QUOTA EQUA","TOP 4"])
-        self.odds_table.verticalHeader().setVisible(False); self.odds_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.odds_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        self.odds_table.horizontalHeader().setSectionResizeMode(0,QHeaderView.ResizeMode.Stretch)
-        for c in (1,2,3): self.odds_table.horizontalHeader().setSectionResizeMode(c,QHeaderView.ResizeMode.ResizeToContents)
-        l.addWidget(self.odds_table,1); self.odds_footer=QLabel(); self.odds_footer.setObjectName("Muted"); l.addWidget(self.odds_footer)
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(26, 24, 26, 30)
+        layout.setSpacing(16)
+        layout.addWidget(ui_label("Probabilità e scenari", "h1"))
+        layout.addWidget(ui_label(
+            "Stime Monte Carlo su 15.000 scenari, basate sui pronostici iniziali e sui risultati registrati. "
+            "La quota equa è il reciproco della probabilità stimata: non è una quota bookmaker.",
+            "lead", wrap=True
+        ))
+        disclaimer = Card("Come leggere i dati", "Le barre aiutano a confrontare le probabilità; non rappresentano previsioni certe.")
+        legend = QHBoxLayout()
+        legend.addWidget(ui_pill("Vittoria torneo", "brass"))
+        legend.addWidget(ui_pill("Accesso top 4", "success"))
+        legend.addStretch(1)
+        disclaimer.body.addLayout(legend)
+        layout.addWidget(disclaimer)
+        self.odds_rows = []
+        self.odds_rows_layout = QVBoxLayout()
+        self.odds_rows_layout.setSpacing(10)
+        for pid in ORDER:
+            row_card = Card(padding=14, spacing=8)
+            top = QHBoxLayout()
+            avatar = Avatar(name(pid)[:1], T.player_tint(ORDER.index(pid)), 38)
+            player_label = ui_label(name(pid), "h3")
+            quota_label = ui_label("Quota equa —", "mono")
+            top.addWidget(avatar)
+            top.addWidget(player_label, 1)
+            top.addWidget(quota_label)
+            row_card.body.addLayout(top)
+            win_line = QHBoxLayout()
+            win_line.addWidget(ui_label("VITTORIA", "field"))
+            win_bar = ProbBar(T.C.brass)
+            win_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            win_line.addWidget(win_bar, 1)
+            row_card.body.addLayout(win_line)
+            top_line = QHBoxLayout()
+            top_line.addWidget(ui_label("TOP 4", "field"))
+            top_bar = ProbBar(T.C.success)
+            top_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            top_line.addWidget(top_bar, 1)
+            row_card.body.addLayout(top_line)
+            self.odds_rows.append({
+                "player": pid, "card": row_card, "name": player_label,
+                "quota": quota_label, "win": win_bar, "top": top_bar,
+            })
+            self.odds_rows_layout.addWidget(row_card)
+        layout.addLayout(self.odds_rows_layout)
+        self.odds_footer = ui_label("", "caption", wrap=True)
+        layout.addWidget(self.odds_footer)
         return page
+
     def build_penalties(self):
         page=QWidget(); l=QVBoxLayout(page)
         h=QLabel("REGISTRO PENALITÀ"); h.setObjectName("SectionTitle"); l.addWidget(h)
