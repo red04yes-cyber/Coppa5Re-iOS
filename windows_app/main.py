@@ -2587,6 +2587,8 @@ class MainWindow(QMainWindow):
             "target":str(target),"source_key":str(source_key),"acknowledged":False,
         })
         self.operational_alerts=alerts[-150:]
+        if not getattr(self,"state_load_blocked",False):
+            self.save(automatic_snapshot=False)
         if hasattr(self,"notification_button"):
             self.refresh_notification_badge()
 
@@ -3644,7 +3646,7 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
         raise RuntimeError(message)
 
     def match_web_url(self,gid,host_override=None,public=False):
-        host,port=self.start_match_web_server("127.0.0.1" if public else host_override)
+        host,port=self.start_match_web_server(host_override)
         path="/match/"+urllib.parse.quote(gid,safe="")
         if public:
             if not self.public_base_url:
@@ -3655,7 +3657,7 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
         return base+path+"?token="+urllib.parse.quote(self.spectator_token,safe="")
 
     def portal_web_url(self,host_override=None,public=False):
-        host,port=self.start_match_web_server("127.0.0.1" if public else host_override)
+        host,port=self.start_match_web_server(host_override)
         if public:
             if not self.public_base_url:
                 raise ValueError("Configura prima un indirizzo pubblico HTTPS nelle Impostazioni.")
@@ -5961,13 +5963,13 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
             for gid,round_no,white,black in GAMES:
                 node=self.build_pgn_game(gid)
                 (pgn_dir/f"{gid}.pgn").write_text(
-                    node.accept(exporter),encoding="utf-8"
+                    node.accept(chess.pgn.StringExporter(headers=True,variations=False,comments=True)),encoding="utf-8"
                 )
                 pgn_count+=1
             for gid in ("sf1","sf2","third","final"):
                 node=self.build_playoff_pgn(gid)
                 (pgn_dir/f"{gid}.pgn").write_text(
-                    node.accept(exporter),encoding="utf-8"
+                    node.accept(chess.pgn.StringExporter(headers=True,variations=False,comments=True)),encoding="utf-8"
                 )
                 pgn_count+=1
 
