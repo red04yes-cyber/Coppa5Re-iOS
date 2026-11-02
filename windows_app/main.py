@@ -453,6 +453,8 @@ class BoardCard(QFrame):
         lay.addLayout(player_row)
         self.state_label=QLabel(); self.state_label.setObjectName("Eyebrow"); lay.addWidget(self.state_label)
         self.history_index=None
+        self._history_entries=[]
+        self._history_cache_ply=-1
         self.board=BoardWidget(True); self.board.moveRequested.connect(self.move); lay.addWidget(self.board,1)
         nav=QHBoxLayout()
         self.prev_move_btn=QPushButton("◀  Mossa precedente"); self.prev_move_btn.clicked.connect(self.previous_move)
@@ -598,6 +600,48 @@ class BoardCard(QFrame):
         else:
             label="PARI · 50%"
         self.eval_bar.setFormat(label)
+    def refresh_after_move(self,san,ply_before,mover_color):
+        """Refresh only volatile controls after an ordinary move."""
+        gid,_,_,_=game(self.game_id)
+        board=self.app.get_board(gid)
+        ply=len(board.move_stack)
+        finished=self.app.results.get(gid) is not None
+        clock_state=self.app.clock_data(gid)
+        self.history_index=ply
+        self.known_ply=ply
+        self.state_label.setText("CONCLUSA" if finished else ("IN CORSO" if clock_state.get("started") or ply else "LIVE"))
+        self.turn.setText("PARTITA CONCLUSA · SCACCHIERA BLOCCATA" if finished else
+                          f"AL MUOVERE: {'BIANCO' if board.turn else 'NERO'} · {board.fullmove_number}ª mossa")
+        self.board.set_position(board,finished)
+        self.update_evaluation(gid,board)
+        self.view_ply.setText(f"{ply} / {ply}")
+        self.prev_move_btn.setEnabled(ply>0)
+        self.next_move_btn.setEnabled(False)
+        self.white_strip.turn.setVisible(board.turn==chess.WHITE and not finished)
+        self.black_strip.turn.setVisible(board.turn==chess.BLACK and not finished)
+        self.refresh_clock()
+        self.refresh_move_quality()
+        if self._history_cache_ply==ply_before:
+            prefix=f"{ply_before//2+1}. " if mover_color==chess.WHITE else f"{ply_before//2+1}... "
+            self._history_entries.append(prefix+san)
+            self._history_entries=self._history_entries[-12:]
+            self._history_cache_ply=ply
+            self.history.setText("MOSSE  ·  "+"  ".join(self._history_entries))
+        else:
+            self._render_move_history(board,ply)
+        self.undo.setEnabled(bool(ply) and not finished)
+
+    def _render_move_history(self,board,ply):
+        replay=chess.Board()
+        entries=[]
+        for move in board.move_stack[:ply]:
+            prefix=f"{replay.fullmove_number}. " if replay.turn==chess.WHITE else f"{replay.fullmove_number}... "
+            entries.append(prefix+replay.san(move))
+            replay.push(move)
+        self._history_entries=entries[-12:]
+        self._history_cache_ply=ply
+        self.history.setText("MOSSE  ·  "+("  ".join(self._history_entries) if entries else "Nessuna mossa"))
+
     def refresh(self):
         self.refresh_selector()
         gid,r,w,b=game(self.game_id); board=self.app.get_board(gid)
@@ -621,11 +665,7 @@ class BoardCard(QFrame):
         self.next_move_btn.setEnabled(self.history_index<len(board.move_stack))
         self.refresh_clock()
         self.refresh_move_quality()
-        replay=chess.Board(); san=[]
-        for mv in board.move_stack[:self.history_index]:
-            prefix=f"{replay.fullmove_number}. " if replay.turn==chess.WHITE else f"{replay.fullmove_number}... "
-            san.append(prefix+replay.san(mv)); replay.push(mv)
-        self.history.setText("MOSSE  ·  "+("  ".join(san[-12:]) if san else "Nessuna mossa"))
+        self._render_move_history(visible,self.history_index)
         self.result.blockSignals(True); self.result.setCurrentIndex(max(0,self.result.findData(self.app.results.get(gid)))); self.result.blockSignals(False)
         self.undo.setEnabled(bool(board.move_stack) and not self.app.results.get(gid))
 
@@ -643,15 +683,18 @@ class SpectatorCard(QFrame):
         self.clock=QLabel(); self.clock.setObjectName("Muted")
         self.board=BoardWidget(False)
         lay.addWidget(self.tag); lay.addLayout(players); lay.addWidget(self.status); lay.addWidget(self.clock); lay.addWidget(self.board,1)
+    def update_position(self,app,gid):
+        result=app.results.get(gid); clock=app.clock_data(gid)
+        board=app.get_board(gid)
+        self.status.setText("CONCLUSA" if result else ("IN CORSO" if clock.get("started") or board.move_stack else "LIVE"))
+        self.clock.setText(app.clock_text(gid))
+        self.board.set_position(board,True)
     def update_game(self,app,gid):
         _,r,w,b=game(gid)
         self.white_name.setText(name(w)); self.black_name.setText(name(b))
         app.set_player_avatar_label(self.white_photo,w,34)
         app.set_player_avatar_label(self.black_photo,b,34)
-        result=app.results.get(gid); clock=app.clock_data(gid)
-        self.status.setText("CONCLUSA" if result else ("IN CORSO" if clock.get("started") or app.get_board(gid).move_stack else "LIVE"))
-        self.clock.setText(app.clock_text(gid))
-        self.board.set_position(app.get_board(gid),True)
+        self.update_position(app,gid)
 
 class BroadcastWindow(QWidget):
     def __init__(self,app):
@@ -669,6 +712,10 @@ class BroadcastWindow(QWidget):
     def refresh_from_app(self):
         for c,live in zip(self.cards,self.app.live_cards): c.update_game(self.app,live.game_id)
         self.footer.setText("CLASSIFICA     "+"   •   ".join(f"{name(x['id'])} {x['points']:.1f} pt" for x in self.app.standings()))
+    def refresh_game(self,gid):
+        for card,live in zip(self.cards,self.app.live_cards):
+            if live.game_id==gid:
+                card.update_position(self.app,gid)
     def keyPressEvent(self,event):
         if event.key()==Qt.Key.Key_Escape: self.close()
         else: super().keyPressEvent(event)
@@ -884,7 +931,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self,"Recovery non leggibile",f"Il file di ripristino non è valido: {exc}")
             path.unlink(missing_ok=True)
 
-    def save_recovery(self):
+    def save_recovery(self,persist=True):
         if getattr(self,"state_load_blocked",False):
             return
         active=any(
@@ -895,10 +942,25 @@ class MainWindow(QMainWindow):
         if not active:
             self.recovery_path.unlink(missing_ok=True)
             return
-        self.save()
+        if persist and not self.save():
+            return
         tmp=self.recovery_path.with_suffix(".tmp")
         shutil.copy2(storage_path(),tmp)
         tmp.replace(self.recovery_path)
+
+    def schedule_move_save(self):
+        """Coalesce rapid move writes; keep the in-memory game and UI immediate."""
+        if getattr(self,"state_load_blocked",False):
+            return
+        self._move_save_pending=True
+        self._move_save_timer.start()
+
+    def flush_move_save(self):
+        if not self._move_save_pending:
+            return
+        self._move_save_pending=False
+        if self.save():
+            self.save_recovery(persist=False)
 
     def toggle_engine(self):
         if not self.find_engine():
@@ -966,6 +1028,8 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("Mossa illegale: non registrata.",3000); return
             board_before=b.copy(stack=True)
             mover_color=b.turn
+            ply_before=len(board_before.move_stack)
+            san=board_before.san(move)
             white_player=game(gid)[2]; black_player=game(gid)[3]
             player_id=white_player if mover_color else black_player
             mover="white" if mover_color else "black"
@@ -985,9 +1049,18 @@ class MainWindow(QMainWindow):
             if outcome is not None:
                 clock["started"]=False
                 reason=outcome.termination.name.replace("_"," ").lower()
+                self._move_save_timer.stop()
+                self._move_save_pending=False
                 self.set_result(gid,b.result(claim_draw=True),confirm=False,detail=reason,termination="normal")
                 self.statusBar().showMessage("Partita terminata automaticamente: "+reason,5000)
-            self.save(); self.save_recovery(); self.refresh_all()
+                return
+            card=next((item for item in getattr(self,"live_cards",[]) if item.game_id==gid),None)
+            if card is not None:
+                card.refresh_after_move(san,ply_before,mover_color)
+            if self.broadcast and self.broadcast.isVisible():
+                self.broadcast.refresh_game(gid)
+            self.statusBar().showMessage(f"Mossa registrata · {gid} · {san}",1800)
+            self.schedule_move_save()
         except Exception as exc:
             self.statusBar().showMessage(f"Mossa non registrata: {exc}",4000)
     def undo(self,gid):
@@ -1112,7 +1185,7 @@ class MainWindow(QMainWindow):
                 title,f"{gid} · esito {value} · {detail}",
                 "danger" if timed_out else "warning","calendar",f"result:{gid}:{len(self.audit_log)}"
             )
-        self.save(); self.save_recovery(); self.refresh_all()
+        self.save(); self.save_recovery(persist=False); self.refresh_all()
         if value not in (None,"VOID") and self.moves.get(gid):
             service=self.get_engine_service()
             if service is not None:
@@ -3266,27 +3339,36 @@ class MainWindow(QMainWindow):
         else:
             return None
 
-        board=chess.Board()
-        move_text=[]
-        valid_uci=[]
-        for index,uci in enumerate(self.moves.get(gid,[]),1):
-            try:
-                move=chess.Move.from_uci(uci)
-                if move not in board.legal_moves:
+        moves_key=tuple(self.moves.get(gid,[]))
+        cached=self._web_match_cache.get(gid)
+        if cached is None or cached[0]!=moves_key:
+            board=chess.Board()
+            move_text=[]
+            valid_uci=[]
+            for index,uci in enumerate(moves_key,1):
+                try:
+                    move=chess.Move.from_uci(uci)
+                    if move not in board.legal_moves:
+                        break
+                    san=board.san(move)
+                    move_text.append((f"{(index+1)//2}. " if index%2 else "")+san)
+                    board.push(move)
+                    valid_uci.append(move.uci())
+                except Exception:
                     break
-                san=board.san(move)
-                move_text.append((f"{(index+1)//2}. " if index%2 else "")+san)
-                board.push(move)
-                valid_uci.append(move.uci())
-            except Exception:
-                break
+            snapshot={"fen":board.fen(),"last_move":valid_uci[-1] if valid_uci else "",
+                      "move_text":" ".join(move_text) or "Nessuna mossa registrata",
+                      "turn":"Bianco" if board.turn==chess.WHITE else "Nero","ply":len(valid_uci)}
+            self._web_match_cache[gid]=(moves_key,snapshot)
+        else:
+            snapshot=cached[1]
 
         clock=self.clocks.get(gid,{})
         base_seconds=30*60 if is_playoff else 15*60
         white_seconds=max(0.0,float(clock.get("white",base_seconds)))
         black_seconds=max(0.0,float(clock.get("black",base_seconds)))
         running=bool(clock.get("started") and result=="Da disputare")
-        clock_turn=clock.get("side_to_move","white") if is_playoff else ("white" if board.turn==chess.WHITE else "black")
+        clock_turn=clock.get("side_to_move","white") if is_playoff else ("white" if snapshot["turn"]=="Bianco" else "black")
         if running:
             try:
                 elapsed=min(43200.0,max(0.0,time.time()-float(clock.get("last_wall",time.time()))))
@@ -3312,16 +3394,16 @@ class MainWindow(QMainWindow):
             "white":name(white) if white else "Giocatore da definire",
             "black":name(black) if black else "Giocatore da definire",
             "result":str(result),
-            "fen":board.fen(),
-            "last_move":valid_uci[-1] if valid_uci else "",
-            "move_text":" ".join(move_text) or "Nessuna mossa registrata",
-            "turn":"Bianco" if board.turn==chess.WHITE else "Nero",
+            "fen":snapshot["fen"],
+            "last_move":snapshot["last_move"],
+            "move_text":snapshot["move_text"],
+            "turn":snapshot["turn"],
             "clock_text":clock_text,
             "clock_white":int(math.ceil(white_seconds)),
             "clock_black":int(math.ceil(black_seconds)),
             "clock_running":running,
             "clock_turn":clock_turn,
-            "ply":len(valid_uci),
+            "ply":snapshot["ply"],
             "status":"CONCLUSA" if result!="Da disputare" else ("IN CORSO" if running or valid_uci else "DA GIOCARE"),
             "is_playoff":is_playoff,
         }
@@ -3438,6 +3520,7 @@ const INITIAL_STATE={state_json};
 const STATE_URL={json.dumps(state_path)};
 const GLYPHS={{K:'♔',Q:'♕',R:'♖',B:'♗',N:'♘',P:'♙',k:'♚',q:'♛',r:'♜',b:'♝',n:'♞',p:'♟'}};
 const files='abcdefgh';
+let lastRenderedFen=null;
 function renderBoard(state){{
   const parts=String(state.fen||'').split(' ');
   const ranks=(parts[0]||'').split('/');
@@ -3477,7 +3560,10 @@ function renderBoard(state){{
   board.replaceChildren(fragment);
 }}
 function renderState(state){{
-  renderBoard(state);
+  if(state.fen!==lastRenderedFen){{
+    renderBoard(state);
+    lastRenderedFen=state.fen;
+  }}
   document.getElementById('result').textContent=state.result||'Da disputare';
   document.getElementById('clock').textContent=state.clock_text||'Orologio non avviato';
   document.getElementById('turn').textContent='Muove il '+(state.turn||'—');
@@ -3496,7 +3582,7 @@ async function poll(){{
   }}catch(error){{}}
   finally{{pollBusy=false;}}
 }}
-window.setInterval(poll,1000);
+window.setInterval(poll,350);
 document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}});
 </script></body></html>"""
 
@@ -7083,6 +7169,9 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
     def closeEvent(self,event):
         if hasattr(self,"clock_timer"): self.clock_timer.stop()
         if hasattr(self,"notification_timer"): self.notification_timer.stop()
+        if hasattr(self,"_move_save_timer"):
+            self._move_save_timer.stop()
+            self._move_save_pending=False
         probe=getattr(self,"_public_probe_thread",None)
         if probe is not None and probe.isRunning():
             probe.wait(6000)
