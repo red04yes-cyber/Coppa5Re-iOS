@@ -6,8 +6,12 @@ from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QPainter, QPainterPath, QPen, QRadialGradient, QTransform
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
-import c5r_theme as T
-from c5r_theme import C, SANS, SYMBOLS, font, with_alpha
+try:
+    from . import c5r_theme as T
+    from .c5r_theme import C, SANS, SYMBOLS, font, with_alpha
+except ImportError:
+    import c5r_theme as T
+    from c5r_theme import C, SANS, SYMBOLS, font, with_alpha
 
 BOARD_THEMES = [
     {"name":"Noce","light":"#E8DABD","dark":"#A67B58","hi":(240,200,90)},
