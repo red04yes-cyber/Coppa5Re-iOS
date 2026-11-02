@@ -4,7 +4,7 @@ from __future__ import annotations
 from PySide6.QtCore import QEvent, QEasingCurve, QObject, QPointF, QRect, QRectF, QSize, Qt, QPropertyAnimation, QTimer, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
-    QAbstractItemView, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QHeaderView, QLabel,
+    QAbstractItemView, QFrame, QGraphicsDropShadowEffect, QGraphicsOpacityEffect, QHBoxLayout, QHeaderView, QLabel,
     QLayout, QMenu, QPushButton, QScrollArea, QSizePolicy, QStatusBar,
     QStyledItemDelegate, QStyle, QStyleOptionViewItem, QTableWidget, QVBoxLayout, QWidget,
 )
