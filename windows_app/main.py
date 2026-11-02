@@ -5393,6 +5393,100 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
             painter.end()
         self.statusBar().showMessage("Classifica PDF esportata.",2500)
 
+    def export_player_report_pdf(self, player_id):
+        if player_id not in PLAYERS:
+            QMessageBox.warning(self, "Scheda giocatore", "Giocatore non riconosciuto.")
+            return
+        data = self.player_profile_data(player_id)
+        colors = data["colors"]
+        errors = {
+            key: sum(
+                1 for reviews in self.move_reviews.values() for item in reviews
+                if item.get("player") == player_id and str(item.get("label", "")).upper() == key
+            )
+            for key in ("IMPRECISIONE", "ERRORE", "GRAVE ERRORE")
+        }
+        timing = player_time_statistics(self.move_times, player_id)
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Esporta scheda personale PDF",
+            f"Scheda-{re.sub(r'[^A-Za-z0-9_-]+', '-', name(player_id))}.pdf", "PDF (*.pdf)"
+        )
+        if not path:
+            return
+        writer = QPdfWriter(path)
+        writer.setTitle(f"Scheda personale · {name(player_id)}")
+        writer.setCreator("Coppa dei 5 Re · Control Room")
+        writer.setResolution(150)
+        painter = QPainter(writer)
+        try:
+            margin = 170
+            width = writer.width() - margin * 2
+            y = margin
+            page_height = writer.height()
+
+            def write(text, size=10, bold=False, gap=14):
+                nonlocal y
+                font = QFont("Segoe UI", size, QFont.Weight.Bold if bold else QFont.Weight.Normal)
+                painter.setFont(font)
+                painter.setPen(QColor("#202A35"))
+                rect = painter.fontMetrics().boundingRect(
+                    0, 0, width, 1800, Qt.TextFlag.TextWordWrap, str(text)
+                )
+                height = max(size + 10, rect.height())
+                if y + height + gap > page_height - margin:
+                    writer.newPage()
+                    y = margin
+                painter.drawText(QRect(margin, y, width, height + 4), Qt.TextFlag.TextWordWrap, str(text))
+                y += height + gap
+
+            painter.setPen(QColor("#9A6A18"))
+            painter.setFont(QFont("Segoe UI", 20, QFont.Weight.Bold))
+            painter.drawText(QRect(margin, y, width, 48), Qt.AlignmentFlag.AlignLeft, "COPPA DEI 5 RE")
+            y += 62
+            write(f"SCHEDA PERSONALE · {name(player_id)}", 15, True, 8)
+            write(f"Generata il {datetime.now().strftime('%d/%m/%Y alle %H:%M')}")
+            write(f"Classifica attuale: {next(i for i, row in enumerate(self.standings(), 1) if row['id'] == player_id)}° posto · {data['points']:.1f} punti netti")
+            write(f"Partite: {data['played']} · Vittorie: {data['wins']} · Patte: {data['draws']} · Sconfitte: {data['losses']} · Penalità: {data['penalty']:+.1f}")
+            write("RENDIMENTO PER COLORE", 12, True, 6)
+            for color, label in (("white", "Bianco"), ("black", "Nero")):
+                row = colors[color]
+                total = row["played"]
+                if total:
+                    write(f"{label}: {row['wins']} vittorie ({row['wins']/total*100:.1f}%), "
+                          f"{row['draws']} patte ({row['draws']/total*100:.1f}%), "
+                          f"{row['losses']} sconfitte ({row['losses']/total*100:.1f}%) · {total} partite")
+                else:
+                    write(f"{label}: nessuna partita conclusa.")
+            write("GAME REVIEW STOCKFISH", 12, True, 6)
+            write(f"Precisione media disponibile: {'N/D' if data['accuracy'] is None else f'{data['accuracy']:.1f}%'} · "
+                  f"Mosse valutate: {data['reviewed_moves']}")
+            write(f"Imprecisioni: {errors['IMPRECISIONE']} · Errori: {errors['ERRORE']} · Gravi errori: {errors['GRAVE ERRORE']}")
+            write("TEMPI DI RIFLESSIONE", 12, True, 6)
+            if timing["average_seconds"] is None:
+                write("Dati non disponibili: la raccolta dei tempi per mossa è iniziata con questa versione.")
+            else:
+                write(f"Mosse cronometrate: {timing['moves']} · Media: {timing['average_seconds']:.1f} s · "
+                      f"Mediana: {timing['median_seconds']:.1f} s · Totale: {timing['total_seconds']/60:.1f} min")
+            write("ANDAMENTO TURNO PER TURNO", 12, True, 6)
+            performance = player_performance(GAMES, self.results, player_id)
+            write(" · ".join(f"{round_label}: {points:.1f} pt" for round_label, points in performance) or "Nessun risultato valido.")
+            write("APERTURE PIÙ GIOCATE", 12, True, 6)
+            openings = sorted(data["openings"].items(), key=lambda item: (-item[1], item[0]))
+            write(" · ".join(f"{opening}: {count}" for opening, count in openings[:8]) or "Nessuna apertura registrata.")
+            write("STORICO PARTITE", 12, True, 6)
+            for item in data["history"]:
+                result = item["outcome"]
+                accuracy = "N/D" if item["accuracy"] is None else f"{item['accuracy']:.1f}%"
+                write(f"Round {item['round']} · {item['gid']} · {item['color'].upper()} · "
+                      f"vs {name(item['opponent'])} · {result} · {item['opening']} · precisione {accuracy}", 9, gap=8)
+            painter.setPen(QColor("#7A8490"))
+            painter.setFont(QFont("Segoe UI", 8))
+            painter.drawText(QRect(margin, page_height - margin + 35, width, 24),
+                             "Documento statistico generato dai dati locali della Coppa dei 5 Re.")
+        finally:
+            painter.end()
+        self.statusBar().showMessage(f"Scheda personale PDF esportata per {name(player_id)}.", 3500)
+
     def export_tournament_report_pdf(self):
         path,_=QFileDialog.getSaveFileName(self,"Esporta report ufficiale","Report-Ufficiale-C5R.pdf","PDF (*.pdf)")
         if not path:
