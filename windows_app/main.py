@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox, QLineEdit, QVBoxLayout, QHBoxLayout, QGridLayout, QTabWidget,
     QTableWidget, QTableWidgetItem, QHeaderView, QScrollArea, QMessageBox,
     QListWidget, QListWidgetItem, QInputDialog, QFileDialog, QAbstractItemView, QSizePolicy,
-    QDialog, QDialogButtonBox, QProgressBar, QStackedWidget, QPlainTextEdit, QDateTimeEdit
+    QDialog, QDialogButtonBox, QProgressBar, QStackedWidget, QPlainTextEdit, QDateTimeEdit, QGraphicsOpacityEffect
 )
 
 try:
