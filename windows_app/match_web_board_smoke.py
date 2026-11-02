@@ -5,6 +5,8 @@ import os
 import sys
 import tempfile
 import urllib.request
+import urllib.parse
+import urllib.error
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -56,8 +58,16 @@ try:
     # Verify that the live JSON endpoint returns the same current position as the page model.
     _, port = window.start_match_web_server("127.0.0.1")
     server = window.match_http_server
+    # Spectator endpoints require the per-tournament bearer token.
+    endpoint = f"http://127.0.0.1:{port}/api/match/{game_id}"
+    try:
+        urllib.request.urlopen(endpoint, timeout=5)
+        raise AssertionError("QR API unexpectedly accepted a request without a token")
+    except urllib.error.HTTPError as exc:
+        assert exc.code == 403
     with urllib.request.urlopen(
-        f"http://127.0.0.1:{port}/api/match/{game_id}", timeout=5
+        endpoint + "?token=" + urllib.parse.quote(window.spectator_token, safe=""),
+        timeout=5
     ) as response:
         payload = json.loads(response.read().decode("utf-8"))
     assert payload["fen"] == next_state["fen"]
