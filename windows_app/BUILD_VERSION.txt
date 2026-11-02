@@ -1,2 +1,2 @@
-Coppa5Re Windows Desktop v1.0.1
-Build includes visible dashboard results and protected local recovery.
+Coppa5Re Windows Desktop v1.0.2
+Build includes secure public spectator portal, live all-table standings, referee alerts and final report package.
