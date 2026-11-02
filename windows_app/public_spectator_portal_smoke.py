@@ -17,7 +17,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import chess
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
-from windows_app.main import MainWindow
+from windows_app.main import MainWindow, GAMES
 
 app = QApplication([])
 window = MainWindow()
@@ -46,7 +46,7 @@ try:
     assert state["clock_turn"] == "white"
 
     portal = window.public_portal_state()
-    assert len(portal["matches"]) == len(window.GAMES) + 4 if hasattr(window, "GAMES") else len(portal["matches"]) >= 14
+    assert len(portal["matches"]) == len(GAMES) + 4
     assert len(portal["standings"]) == 5
     assert any(item["game_id"] == gid for item in portal["matches"])
     portal_html = window.portal_web_html()
@@ -89,6 +89,9 @@ try:
     with urllib.request.urlopen(base + "/match/" + gid + query, timeout=5) as response:
         match_page = response.read().decode("utf-8")
         assert "SCACCHIERA LIVE" in match_page and "token=" in match_page
+
+    # Public URL generation is independent of the operator's local address; no live tunnel is required in this test.
+    window.public_base_url = ""
 
     # Long-duration and result-review notices are generated for arbiters and persist until acknowledged.
     window.long_match_minutes = 30
