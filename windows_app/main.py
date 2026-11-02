@@ -696,6 +696,12 @@ class MainWindow(QMainWindow):
         self.resize(1500,950); self.setMinimumSize(980,680)
         self.results={}; self.penalties=[]; self.moves={}; self.boards={}; self.broadcast=None; self.engine_path=None; self.engine_enabled=True; self.engine_service=None; self.analysis_running_gid=None
         self._odds_cache_key=None; self._odds_cache=None
+        self._web_match_cache={}
+        self._move_save_pending=False
+        self._move_save_timer=QTimer(self)
+        self._move_save_timer.setSingleShot(True)
+        self._move_save_timer.setInterval(120)
+        self._move_save_timer.timeout.connect(self.flush_move_save)
         self.time_control="15+3"; self.clocks={}; self.audit_log=[]; self.match_notes={}; self.referee=""
         self.tie_break="Regolamento Art. 8"; self.playoff_results={}; self.eval_history={}; self.clock_ticks=0; self.board_theme=0
         self.game_terminations={}; self.move_reviews={}; self.withdrawn_players={}
