@@ -25,6 +25,26 @@ La build Windows scarica Stockfish 19 x86-64 universal durante la compilazione e
 
 La Game Review C5R assegna etichette alle mosse (brillante, migliore, ottima, buona, imprecisione, errore, grave errore), stima la perdita di punti attesi e calcola un indice di precisione locale. È un'analisi derivata da Stockfish, **non replica l'algoritmo proprietario CAPS2 né il punteggio ufficiale di Chess.com**. Le etichette e i dati disponibili vengono allegati come commenti e NAG al PGN.
 
+## Portale spettatori, accesso remoto e orologi live
+- Il pulsante QR di ogni tavolo può generare un link LAN oppure un link Internet HTTPS se è configurato un dominio pubblico.
+- Il QR "Portale spettatori" apre una pagina unica con tutte le partite di qualificazione e playoff, miniature delle scacchiere, nomi, stato, mosse, cronometri e classifica live.
+- La pagina di ogni tavolo mantiene la scacchiera sincronizzata con la posizione FEN, la cronologia SAN e i due orologi; le API vengono aggiornate ogni secondo.
+- Le pagine e le API spettatori richiedono un token casuale memorizzato nell'archivio locale. "Rinnova token" revoca tutti i vecchi QR e i link precedenti.
+- L'accesso Internet non è un servizio cloud incorporato: richiede un tunnel o reverse proxy HTTPS gestito dall'organizzazione. Imposta nelle Impostazioni l'origine HTTPS (solo schema + dominio) e inoltra la porta locale mostrata dall'app al PC Windows. Non configurare un port-forward WAN diretto verso il PC; mantieni attive autenticazione/token, HTTPS e firewall. La porta locale scelta è normalmente 8765, ma può variare se già occupata.
+- L'app verifica periodicamente l'endpoint di salute del dominio pubblico quando il server spettatori è attivo e crea un avviso se il collegamento remoto non risponde.
+
+## Notifiche operative agli arbitri
+- Il Centro notifiche conserva gli eventi non ancora verificati: nuovo risultato da controllare, caduta della bandierina/tempo esaurito, partita oltre la durata configurabile e indisponibilità del portale pubblico.
+- Gli avvisi di tempo residuo e di stato del torneo continuano a comparire nel centro notifiche; ogni avviso persistente può essere marcato come verificato.
+- La soglia predefinita per le partite troppo lunghe è 120 minuti ed è modificabile nelle Impostazioni.
+
+## Pacchetto finale del torneo
+Il comando "Pacchetto finale · PDF + PGN + dati" crea un unico ZIP con:
+- Report ufficiale PDF con classifica, risultati, statistiche individuali, mosse registrate, playoff, penalità, verbali, note e registro arbitrale.
+- File PGN separati per tutte le partite di qualificazione e playoff.
+- Classifica CSV, registro arbitrale CSV e riepilogo JSON.
+I recapiti privati dei giocatori non vengono inclusi nel pacchetto.
+
 ## Quote e probabilità
 Le percentuali sono stime Monte Carlo (15.000 scenari) basate sui pronostici 1-X-2 iniziali, corretti moderatamente in base ai risultati e alle penalità. Quota equa = 1 / probabilità stimata. Non sono quote bookmaker e non suggeriscono puntate.
 
@@ -32,7 +52,7 @@ Le percentuali sono stime Monte Carlo (15.000 scenari) basate sui pronostici 1-X
 - Registro di arbitro, note e incidenti; storico delle modifiche a risultati e penalità; penalità modificabili e annullabili.
 - Recupero dopo arresto anomalo: il file temporaneo `recovery.json` viene aggiornato durante le partite; al riavvio compare una richiesta di ripristino.
 - Filtri di calendario per turno, giocatore e stato della partita.
-- Esportazione PGN del torneo e dei playoff, classifica CSV/PDF, registro CSV e backup/ripristino JSON.
+- Esportazione PGN del torneo e dei playoff, classifica CSV/PDF, report ufficiale e pacchetto finale ZIP, registro CSV e backup/ripristino JSON.
 - Scorciatoie da tastiera e salvataggio automatico.
 
 ## Build Windows
