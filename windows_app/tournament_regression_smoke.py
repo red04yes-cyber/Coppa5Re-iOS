@@ -396,15 +396,11 @@ try:
     draft = window.selected_notification_draft()
     assert draft and draft["player_id"] == "jacopo"
     assert "Round 1" in draft["body"] and "Roberto" in draft["body"]
-    old_open_url = QDesktopServices.openUrl
-    opened_urls = []
-    QDesktopServices.openUrl = lambda url: opened_urls.append(url.toString()) or True
-    try:
-        window.open_selected_notification("whatsapp")
-        assert opened_urls and "wa.me/393331234567" in opened_urls[-1]
-        assert "Round+1" in opened_urls[-1] or "Round%201" in opened_urls[-1]
-    finally:
-        QDesktopServices.openUrl = old_open_url
+    whatsapp_url = window.notification_compose_url(draft,"whatsapp").toString()
+    assert "wa.me/393331234567" in whatsapp_url
+    assert "Round+1" in whatsapp_url or "Round%201" in whatsapp_url
+    email_url = window.notification_compose_url(draft,"email").toString()
+    assert email_url.startswith("mailto:jacopo@example.test")
     persisted_notifications, _ = read_document(storage_path())
     assert persisted_notifications["notification_drafts"]
     assert persisted_notifications["player_bios"]["jacopo"]["ratings"]["rapid"] == 1710
