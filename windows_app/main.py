@@ -666,7 +666,8 @@ class MainWindow(QMainWindow):
         self.time_control="15+3"; self.clocks={}; self.audit_log=[]; self.match_notes={}; self.referee=""
         self.tie_break="Regolamento Art. 8"; self.playoff_results={}; self.eval_history={}; self.clock_ticks=0; self.board_theme=0
         self.game_terminations={}; self.move_reviews={}; self.withdrawn_players={}
-        self.move_annotations={}; self.round_closures={}; self.incident_reports=[]; self.player_bios={}; self.notification_drafts=[]\n        self.match_http_server=None; self.match_http_thread=None; self.match_http_host=""; self.match_http_port=0
+        self.move_annotations={}; self.round_closures={}; self.incident_reports=[]; self.player_bios={}; self.notification_drafts=[]
+        self.match_http_server=None; self.match_http_thread=None; self.match_http_host=""; self.match_http_port=0
         self.ui_preferences={"theme":"dark","font_scale":1.0,"density":"comfortable"}; self.ui_profiles={}
         self._clock_runtime={}; self._last_clock_persist=time.monotonic()
         self._undo_stack=[]; self._redo_stack=[]; self._history_restoring=False; self._last_history_state=None
@@ -1346,7 +1347,8 @@ class MainWindow(QMainWindow):
             ("players", "Giocatori", "user"),
             ("compare", "Confronto", "versus"),
             ("openings", "Aperture", "chart"),
-            ("health", "Health Check", "info"),\n            ("communications", "Comunicazioni", "mail"),
+            ("health", "Health Check", "info"),
+            ("communications", "Comunicazioni", "mail"),
         ]
         self.nav.add_group("ANALISI E STRUMENTI")
         for key, text, icon_name in pro_items:
