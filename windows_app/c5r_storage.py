@@ -52,7 +52,7 @@ def decode_document(raw: Any) -> dict[str, Any]:
             raise StorageIntegrityError("Il controllo SHA-256 non corrisponde: il file potrebbe essere danneggiato.")
     # Migrazioni additive: i file delle versioni precedenti restano leggibili.
     defaults = {
-        "results": {}, "penalties": [], "moves": {}, "clocks": {},
+        "results": {}, "penalties": [], "moves": {}, "clocks": {}, "move_times": {},
         "audit_log": [], "match_notes": {}, "playoff_results": {},
         "playoff_winners": {}, "eval_history": {}, "game_terminations": {},
         "move_reviews": {}, "withdrawn_players": {}, "move_annotations": {},
