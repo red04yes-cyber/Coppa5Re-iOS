@@ -17,7 +17,7 @@ try:
     )
     from .c5r_board import BoardWidget
     from .c5r_analytics_page import TournamentAnalyticsPage
-    from .c5r_analytics import tournament_summary
+    from .c5r_analytics import tournament_summary, player_time_statistics, player_performance
 except ImportError:
     import c5r_theme as T
     from c5r_widgets import (
@@ -27,7 +27,7 @@ except ImportError:
     )
     from c5r_board import BoardWidget
     from c5r_analytics_page import TournamentAnalyticsPage
-    from c5r_analytics import tournament_summary
+    from c5r_analytics import tournament_summary, player_time_statistics, player_performance
 from PySide6.QtCore import Qt, QSize, Signal, QThread, QTimer, QRect, QUrl, QDateTime, QByteArray, QBuffer, QIODevice, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPdfWriter, QKeySequence, QShortcut, QDesktopServices, QPixmap, QIntValidator, QPainterPath
 from PySide6.QtSvg import QSvgRenderer
@@ -5458,8 +5458,8 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
                 else:
                     write(f"{label}: nessuna partita conclusa.")
             write("GAME REVIEW STOCKFISH", 12, True, 6)
-            write(f"Precisione media disponibile: {'N/D' if data['accuracy'] is None else f'{data['accuracy']:.1f}%'} · "
-                  f"Mosse valutate: {data['reviewed_moves']}")
+            accuracy_label = "N/D" if data["accuracy"] is None else f"{data['accuracy']:.1f}%"
+            write(f"Precisione media disponibile: {accuracy_label} · Mosse valutate: {data['reviewed_moves']}")
             write(f"Imprecisioni: {errors['IMPRECISIONE']} · Errori: {errors['ERRORE']} · Gravi errori: {errors['GRAVE ERRORE']}")
             write("TEMPI DI RIFLESSIONE", 12, True, 6)
             if timing["average_seconds"] is None:
@@ -5554,6 +5554,30 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
                     f"{row['played']:>2}  {row['wins']:>2}  {row['draws']:>2}  {row['losses']:>2}  "
                     f"{row['penalty']:>+6.1f}     {row['points']:>6.1f}")
                 write_line(line,9)
+            section("Analisi statistica del torneo")
+            summary = tournament_summary(
+                GAMES, self.results, self.moves, self.move_reviews, self.move_times,
+                {gid: self.opening_name(gid) for gid, *_ in GAMES}, self.game_terminations
+            )
+            openings = ", ".join(f"{opening} ({count})" for opening, count in summary["openings"][:8]) or "Non disponibili"
+            endings = ", ".join(f"{ending} ({count})" for ending, count in summary["endings"]) or "Non disponibili"
+            avg_move = "N/D" if summary["average_move_seconds"] is None else f"{summary['average_move_seconds']:.1f} secondi"
+            avg_game = "N/D" if summary["average_game_duration_seconds"] is None else f"{summary['average_game_duration_seconds']/60:.1f} minuti"
+            write_line(f"Aperture più giocate: {openings}")
+            write_line(f"Tipi di conclusione: {endings}")
+            write_line(
+                f"Game Review: {summary['reviewed_moves']} mosse valutate · "
+                f"{summary['errors']['IMPRECISIONE']} imprecisioni · {summary['errors']['ERRORE']} errori · "
+                f"{summary['errors']['GRAVE ERRORE']} gravi errori"
+            )
+            write_line(f"Tempo medio per mossa: {avg_move} · durata media misurata per partita: {avg_game} "
+                       f"({summary['games_with_timing']} partite con tempi disponibili)")
+            for player_id in ORDER:
+                color_stats = self.player_profile_data(player_id)["colors"]
+                def color_line(key):
+                    row = color_stats[key]
+                    return f"{row['wins']}/{row['draws']}/{row['losses']} in {row['played']} partite"
+                write_line(f"{name(player_id)} · Bianco {color_line('white')} · Nero {color_line('black')}", 8)
             section("Calendario e risultati")
             for gid,rnd,white,black in GAMES:
                 result=self.results.get(gid,"Da disputare")
