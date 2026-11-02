@@ -1,7 +1,9 @@
 from __future__ import annotations
-import json, os, random, sys, shutil, hashlib, math, csv, time, subprocess, queue, threading, re, uuid, base64
+import json, os, random, sys, shutil, hashlib, math, csv, time, subprocess, queue, threading, re, uuid, base64, socket, io, html
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlencode, quote, urlparse, unquote
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import combinations
 import chess
 import chess.pgn
@@ -660,7 +662,7 @@ class MainWindow(QMainWindow):
         self.time_control="15+3"; self.clocks={}; self.audit_log=[]; self.match_notes={}; self.referee=""
         self.tie_break="Regolamento Art. 8"; self.playoff_results={}; self.eval_history={}; self.clock_ticks=0; self.board_theme=0
         self.game_terminations={}; self.move_reviews={}; self.withdrawn_players={}
-        self.move_annotations={}; self.round_closures={}; self.incident_reports=[]; self.player_bios={}
+        self.move_annotations={}; self.round_closures={}; self.incident_reports=[]; self.player_bios={}; self.notification_drafts=[]\n        self.match_http_server=None; self.match_http_thread=None
         self.ui_preferences={"theme":"dark","font_scale":1.0,"density":"comfortable"}; self.ui_profiles={}
         self._clock_runtime={}; self._last_clock_persist=time.monotonic()
         self._undo_stack=[]; self._redo_stack=[]; self._history_restoring=False; self._last_history_state=None
@@ -686,7 +688,7 @@ class MainWindow(QMainWindow):
             self.game_terminations=data.get("game_terminations",{}); self.move_reviews=data.get("move_reviews",{})
             self.withdrawn_players=data.get("withdrawn_players",{})
             self.move_annotations=data.get("move_annotations",{})
-            self.round_closures=data.get("round_closures",{}); self.incident_reports=data.get("incident_reports",[]); self.player_bios=data.get("player_bios",{})
+            self.round_closures=data.get("round_closures",{}); self.incident_reports=data.get("incident_reports",[]); self.player_bios=data.get("player_bios",{}); self.notification_drafts=data.get("notification_drafts",[])
             self.ui_preferences=data.get("ui_preferences",getattr(self,"ui_preferences",{}))
             self.ui_profiles=data.get("ui_profiles",getattr(self,"ui_profiles",{}))
             saved_schedule=data.get("schedule")
@@ -725,7 +727,7 @@ class MainWindow(QMainWindow):
             "game_terminations":self.game_terminations,"move_reviews":self.move_reviews,
             "withdrawn_players":self.withdrawn_players,
             "move_annotations":self.move_annotations,"round_closures":self.round_closures,
-            "ui_preferences":self.ui_preferences,"ui_profiles":self.ui_profiles,"incident_reports":self.incident_reports,"player_bios":self.player_bios,
+            "ui_preferences":self.ui_preferences,"ui_profiles":self.ui_profiles,"incident_reports":self.incident_reports,"player_bios":self.player_bios,"notification_drafts":self.notification_drafts,
             "saved_at":datetime.now().isoformat(timespec="seconds"),
         }
 
@@ -1340,7 +1342,7 @@ class MainWindow(QMainWindow):
             ("players", "Giocatori", "user"),
             ("compare", "Confronto", "versus"),
             ("openings", "Aperture", "chart"),
-            ("health", "Health Check", "info"),
+            ("health", "Health Check", "info"),\n            ("communications", "Comunicazioni", "mail"),
         ]
         self.nav.add_group("ANALISI E STRUMENTI")
         for key, text, icon_name in pro_items:
@@ -1362,7 +1364,7 @@ class MainWindow(QMainWindow):
             self.build_dashboard(), self.build_live(), self.build_draw_page(),
             self.build_calendar(), self.build_standings(), self.build_odds(),
             self.build_penalties(), self.build_playoffs(),
-            self.build_players(), self.build_compare(), self.build_openings(), self.build_health(),
+            self.build_players(), self.build_compare(), self.build_openings(), self.build_health(), self.build_communications(),
             self.build_archive(), self.build_incidents(), self.build_h2h(), self.build_audit(), self.build_settings(),
         ]
         self._page_keys = [item[0] for item in nav_items + pro_items + archive_items]
@@ -2643,10 +2645,18 @@ class MainWindow(QMainWindow):
         age.setValidator(QIntValidator(1,120,dialog))
         chesscom=QLineEdit(str(current.get("chesscom_username") or ""))
         chesscom.setPlaceholderText("Username Chess.com")
+        email=QLineEdit(str(current.get("email") or ""))
+        email.setPlaceholderText("email@esempio.it")
+        whatsapp=QLineEdit(str(current.get("whatsapp") or ""))
+        whatsapp.setPlaceholderText("+39 3xx xxx xxxx · prefisso internazionale")
         fields.addWidget(ui_label("ETÀ","field"),0,0)
         fields.addWidget(age,0,1)
         fields.addWidget(ui_label("USERNAME CHESS.COM","field"),0,2)
         fields.addWidget(chesscom,0,3)
+        fields.addWidget(ui_label("EMAIL","field"),1,0)
+        fields.addWidget(email,1,1)
+        fields.addWidget(ui_label("WHATSAPP","field"),1,2)
+        fields.addWidget(whatsapp,1,3)
         root.addLayout(fields)
 
         ratings_card=Card("Rating Chess.com","Inserisci i rating attuali del profilo online. I campi possono restare vuoti finché non mi comunichi i valori.")
@@ -2705,9 +2715,19 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self,"Rating non valido",f"Il rating {kind.title()} deve essere tra 100 e 4000.")
                 return
             rating_values[kind]=int(raw) if raw else None
+        email_value=email.text().strip()
+        if email_value and not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+",email_value):
+            QMessageBox.warning(self,"Email non valida","Inserisci un indirizzo email valido oppure lascia il campo vuoto.")
+            return
+        whatsapp_value=whatsapp.text().strip()
+        if whatsapp_value and not re.fullmatch(r"\+?[0-9][0-9 ()-]{6,22}",whatsapp_value):
+            QMessageBox.warning(self,"Numero WhatsApp non valido","Usa il prefisso internazionale, ad esempio +39 3331234567.")
+            return
         self.player_bios[player_id]={
             "age":int(age.text()) if age.text().strip() else "",
             "bio":biography.toPlainText().strip(),
+            "email":email_value,
+            "whatsapp":whatsapp_value,
             "chesscom_username":chesscom.text().strip(),
             "ratings":rating_values,
             "photo_data":photo_data,
@@ -2854,6 +2874,283 @@ class MainWindow(QMainWindow):
                 if col in (0, 1, 3, 4, 6):
                     cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.profile_table.setItem(row, col, cell)
+
+    def build_communications(self):
+        page=QWidget()
+        layout=QVBoxLayout(page)
+        layout.setContentsMargins(26,24,26,30)
+        layout.setSpacing(14)
+        layout.addWidget(ui_label("Comunicazioni ai giocatori","h1"))
+        layout.addWidget(ui_label(
+            "Prepara convocazioni, variazioni e risultati con testi personalizzati per ogni giocatore. "
+            "L'app apre il compositore WhatsApp o email: l'invio resta sempre sotto il tuo controllo.",
+            "lead",wrap=True))
+        setup=Card("1 · Destinatari e contenuto","Compila i recapiti nelle schede giocatore. Seleziona uno o più destinatari.")
+        columns=QHBoxLayout()
+        left=QVBoxLayout()
+        left.addWidget(ui_label("DESTINATARI","field"))
+        self.notify_recipients=QListWidget()
+        for player_id in ORDER:
+            item=QListWidgetItem(name(player_id))
+            item.setData(Qt.ItemDataRole.UserRole,player_id)
+            item.setFlags(item.flags()|Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked)
+            contact=self.player_profile_info(player_id)
+            item.setToolTip(f"Email: {contact.get('email') or 'non inserita'} · WhatsApp: {contact.get('whatsapp') or 'non inserito'}")
+            self.notify_recipients.addItem(item)
+        left.addWidget(self.notify_recipients)
+        pick_buttons=QHBoxLayout()
+        all_btn=QPushButton("TUTTI")
+        none_btn=QPushButton("NESSUNO")
+        all_btn.clicked.connect(lambda:self.set_notification_recipients(True))
+        none_btn.clicked.connect(lambda:self.set_notification_recipients(False))
+        pick_buttons.addWidget(all_btn); pick_buttons.addWidget(none_btn)
+        left.addLayout(pick_buttons)
+        columns.addLayout(left,1)
+        right=QVBoxLayout()
+        self.notify_template=QComboBox()
+        self.notify_template.addItem("Convocazione partita","convocation")
+        self.notify_template.addItem("Variazione calendario","schedule")
+        self.notify_template.addItem("Risultato partita","result")
+        self.notify_template.addItem("Messaggio personalizzato","custom")
+        self.notify_game=QComboBox()
+        self.notify_game.addItem("Comunicazione generale","")
+        for gid,rnd,white,black in GAMES:
+            self.notify_game.addItem(f"Round {rnd} · {gid} · {name(white)} – {name(black)}",gid)
+        self.notify_game.addItem("Playoff · Semifinale 1","sf1")
+        self.notify_game.addItem("Playoff · Semifinale 2","sf2")
+        self.notify_game.addItem("Playoff · 3° / 4° posto","third")
+        self.notify_game.addItem("Playoff · Finale","final")
+        self.notify_datetime=QDateTimeEdit(QDateTime.currentDateTime())
+        self.notify_datetime.setCalendarPopup(True)
+        self.notify_datetime.setDisplayFormat("dd/MM/yyyy HH:mm")
+        right.addWidget(ui_label("TIPO DI COMUNICAZIONE","field"))
+        right.addWidget(self.notify_template)
+        right.addWidget(ui_label("PARTITA / TAVOLO","field"))
+        right.addWidget(self.notify_game)
+        right.addWidget(ui_label("DATA E ORA CONVOCAZIONE (SE PREVISTA)","field"))
+        right.addWidget(self.notify_datetime)
+        right.addWidget(ui_label("TESTO DEL MESSAGGIO","field"))
+        self.notify_message=QPlainTextEdit()
+        self.notify_message.setMinimumHeight(180)
+        self.notify_message.setPlaceholderText("Scrivi qui il messaggio da inviare ai giocatori…")
+        right.addWidget(self.notify_message,1)
+        generate=QPushButton("GENERA MESSAGGI PERSONALIZZATI")
+        generate.setObjectName("PrimaryButton")
+        generate.clicked.connect(self.generate_player_notifications)
+        right.addWidget(generate)
+        columns.addLayout(right,2)
+        setup.body.addLayout(columns)
+        layout.addWidget(setup)
+
+        outbox=Card("2 · Coda comunicazioni","Ogni messaggio viene preparato separatamente per il destinatario selezionato.")
+        self.notify_outbox_table=QTableWidget(0,5)
+        self.notify_outbox_table.setHorizontalHeaderLabels(["DESTINATARIO","TITOLO","EMAIL","WHATSAPP","STATO"])
+        self.notify_outbox_table.verticalHeader().setVisible(False)
+        self.notify_outbox_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.notify_outbox_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.notify_outbox_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.notify_outbox_table.horizontalHeader().setSectionResizeMode(1,QHeaderView.ResizeMode.Stretch)
+        for col in (0,2,3,4):
+            self.notify_outbox_table.horizontalHeader().setSectionResizeMode(col,QHeaderView.ResizeMode.ResizeToContents)
+        style_table(self.notify_outbox_table,row_height=42,selectable=True)
+        self.notify_outbox_table.itemSelectionChanged.connect(self.refresh_notification_preview)
+        outbox.body.addWidget(table_card(self.notify_outbox_table))
+        actions=QHBoxLayout()
+        self.notify_preview=ui_label("Seleziona un messaggio generato per visualizzarne il contenuto.", "muted",wrap=True)
+        preview_wrap=QVBoxLayout(); preview_wrap.addWidget(self.notify_preview)
+        actions.addLayout(preview_wrap,1)
+        copy_btn=QPushButton("COPIA TESTO")
+        copy_btn.clicked.connect(self.copy_selected_notification)
+        email_btn=QPushButton("APRI EMAIL")
+        email_btn.clicked.connect(lambda:self.open_selected_notification("email"))
+        whats_btn=QPushButton("APRI WHATSAPP")
+        whats_btn.setObjectName("PrimaryButton")
+        whats_btn.clicked.connect(lambda:self.open_selected_notification("whatsapp"))
+        actions.addWidget(copy_btn); actions.addWidget(email_btn); actions.addWidget(whats_btn)
+        outbox.body.addLayout(actions)
+        layout.addWidget(outbox,1)
+        self.notify_template.currentIndexChanged.connect(self.update_notification_template)
+        self.notify_game.currentIndexChanged.connect(self.update_notification_template)
+        self.update_notification_template()
+        return page
+
+    def set_notification_recipients(self,checked):
+        if not hasattr(self,"notify_recipients"):
+            return
+        state=Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+        for index in range(self.notify_recipients.count()):
+            self.notify_recipients.item(index).setCheckState(state)
+
+    def notification_context(self,gid):
+        if not gid:
+            return {"game":"","round":"","table":"","white":"","black":"","result":"","datetime":self.notify_datetime.dateTime().toString("dd/MM/yyyy HH:mm")}
+        if gid in ("sf1","sf2","third","final"):
+            labels={"sf1":"Semifinale 1","sf2":"Semifinale 2","third":"3° / 4° posto","final":"Finale"}
+            pair=getattr(self,"playoff_pairs",{}).get(gid,(None,None))
+            white,black=pair
+            return {"game":labels[gid],"round":"Playoff","table":labels[gid],
+                    "white":name(white) if white else "Da definire",
+                    "black":name(black) if black else "Da definire",
+                    "result":self.playoff_results.get(gid) or "Da disputare",
+                    "datetime":self.notify_datetime.dateTime().toString("dd/MM/yyyy HH:mm")}
+        match=next((item for item in GAMES if item[0]==gid),None)
+        if not match:
+            return {"game":gid,"round":"","table":gid,"white":"","black":"","result":"","datetime":""}
+        _gid,rnd,white,black=match
+        return {"game":gid,"round":f"Round {rnd}","table":gid,
+                "white":name(white),"black":name(black),
+                "result":self.results.get(gid) or "Da disputare",
+                "datetime":self.notify_datetime.dateTime().toString("dd/MM/yyyy HH:mm")}
+
+    def notification_message_for(self,player_id,template,gid,custom_text=""):
+        ctx=self.notification_context(gid)
+        opponent=""
+        if gid and gid not in ("sf1","sf2","third","final"):
+            match=next((item for item in GAMES if item[0]==gid),None)
+            if match:
+                opponent=name(match[3] if match[2]==player_id else match[2])
+        if template=="convocation":
+            if gid and ctx["white"] and ctx["black"]:
+                return (f"Ciao {name(player_id)}!\n"
+                    f"Sei convocato per {ctx['round']} · {ctx['table']}.\n"
+                    f"Partita: {ctx['white']} – {ctx['black']}.\n"
+                    f"Orario: {ctx['datetime']}.\n"
+                    f"Ricordati di essere pronto qualche minuto prima.\n"
+                    "Coppa dei 5 Re")
+            return f"Ciao {name(player_id)}! Ti ricordiamo la prossima attività della Coppa dei 5 Re. A presto!"
+        if template=="schedule":
+            return (f"Ciao {name(player_id)}, aggiornamento calendario Coppa dei 5 Re.\n"
+                f"{ctx['round']} · {ctx['table']} · {ctx['white']} – {ctx['black']}.\n"
+                f"Orario indicato: {ctx['datetime']}.\nControlla il calendario aggiornato.")
+        if template=="result":
+            return (f"Ciao {name(player_id)}!\nAggiornamento risultato {ctx['game']}: "
+                f"{ctx['white']} – {ctx['black']} · {ctx['result']}.\n"
+                f"Coppa dei 5 Re")
+        tokens={"nome":name(player_id),"avversario":opponent,"partita":ctx["game"],
+                "tavolo":ctx["table"],"orario":ctx["datetime"],"bianco":ctx["white"],
+                "nero":ctx["black"],"risultato":ctx["result"]}
+        message=str(custom_text or "")
+        for token,value in tokens.items():
+            message=message.replace("{"+token+"}",str(value))
+        return message
+
+    def update_notification_template(self):
+        if not hasattr(self,"notify_message"):
+            return
+        template=self.notify_template.currentData()
+        gid=self.notify_game.currentData()
+        self.notify_message.setPlainText(
+            self.notification_message_for(ORDER[0],template,gid,
+                "Ciao {nome}, ti scriviamo per {partita}. Tavolo: {tavolo}. Orario: {orario}.")
+        )
+
+    def generate_player_notifications(self):
+        if not hasattr(self,"notify_recipients"):
+            return
+        recipients=[self.notify_recipients.item(i).data(Qt.ItemDataRole.UserRole)
+            for i in range(self.notify_recipients.count())
+            if self.notify_recipients.item(i).checkState()==Qt.CheckState.Checked]
+        if not recipients:
+            QMessageBox.information(self,"Nessun destinatario","Seleziona almeno un giocatore.")
+            return
+        custom=self.notify_message.toPlainText().strip()
+        template=self.notify_template.currentData()
+        gid=self.notify_game.currentData() or ""
+        if not custom:
+            QMessageBox.warning(self,"Messaggio vuoto","Inserisci un testo prima di generare le comunicazioni.")
+            return
+        title=self.notify_template.currentText()
+        batch_id=uuid.uuid4().hex[:10]
+        created=datetime.now().isoformat(timespec="seconds")
+        generated=[]
+        for player_id in recipients:
+            profile=self.player_profile_info(player_id)
+            body=self.notification_message_for(player_id,template,gid,custom if template=="custom" else "")
+            if template=="custom" and not body.strip():
+                continue
+            draft={"id":uuid.uuid4().hex[:12],"batch":batch_id,"player_id":player_id,
+                   "title":title,"body":body,"email":profile.get("email",""),
+                   "whatsapp":profile.get("whatsapp",""),"created_at":created,"status":"Bozza"}
+            generated.append(draft)
+        if not generated:
+            QMessageBox.warning(self,"Nessun messaggio","Non è stato possibile generare i messaggi selezionati.")
+            return
+        self.notification_drafts.extend(generated)
+        self.log_operation("Comunicazioni preparate","", "—",f"{len(generated)} messaggi",title)
+        self.save()
+        self.refresh_communications()
+        self.notify_outbox_table.selectRow(0)
+        self.statusBar().showMessage(f"Preparati {len(generated)} messaggi: scegli email o WhatsApp per aprire il compositore.",4500)
+
+    def refresh_communications(self):
+        if not hasattr(self,"notify_outbox_table"):
+            return
+        drafts=self.notification_drafts[-250:][::-1]
+        self._visible_notification_drafts=drafts
+        self.notify_outbox_table.setRowCount(len(drafts))
+        for row,draft in enumerate(drafts):
+            values=[name(draft.get("player_id","")),draft.get("title",""),
+                    "Sì" if draft.get("email") else "No",
+                    "Sì" if draft.get("whatsapp") else "No",draft.get("status","Bozza")]
+            for col,value in enumerate(values):
+                item=QTableWidgetItem(str(value))
+                item.setData(Qt.ItemDataRole.UserRole,draft.get("id"))
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.notify_outbox_table.setItem(row,col,item)
+        self.refresh_notification_preview()
+
+    def selected_notification_draft(self):
+        if not hasattr(self,"notify_outbox_table"):
+            return None
+        rows=self.notify_outbox_table.selectionModel().selectedRows()
+        if not rows:
+            return None
+        row=rows[0].row()
+        if 0<=row<len(self._visible_notification_drafts):
+            return self._visible_notification_drafts[row]
+        return None
+
+    def refresh_notification_preview(self):
+        if not hasattr(self,"notify_preview"):
+            return
+        draft=self.selected_notification_draft()
+        self.notify_preview.setText(
+            f"{name(draft['player_id'])} · {draft['title']}\n\n{draft['body']}"
+            if draft else "Seleziona un messaggio generato per visualizzarne il contenuto."
+        )
+
+    def copy_selected_notification(self):
+        draft=self.selected_notification_draft()
+        if not draft:
+            QMessageBox.information(self,"Nessun messaggio","Seleziona una comunicazione generata.")
+            return
+        QApplication.clipboard().setText(draft["body"])
+        self.statusBar().showMessage("Testo copiato negli appunti.",2500)
+
+    def open_selected_notification(self,channel):
+        draft=self.selected_notification_draft()
+        if not draft:
+            QMessageBox.information(self,"Nessun messaggio","Seleziona una comunicazione generata.")
+            return
+        if channel=="email":
+            address=draft.get("email","")
+            if not address:
+                QMessageBox.warning(self,"Email mancante",
+                    f"Nella scheda di {name(draft['player_id'])} non è stato inserito un indirizzo email.")
+                return
+            url=QUrl("mailto:"+quote(address,safe="@.")+"?"+urlencode({"subject":"Coppa dei 5 Re · "+draft["title"],"body":draft["body"]}))
+        else:
+            number=re.sub(r"\D","",draft.get("whatsapp",""))
+            if not number:
+                QMessageBox.warning(self,"WhatsApp mancante",
+                    f"Nella scheda di {name(draft['player_id'])} non è stato inserito un numero WhatsApp.")
+                return
+            url=QUrl("https://wa.me/"+number+"?"+urlencode({"text":draft["body"]}))
+        QDesktopServices.openUrl(url)
+        draft["status"]="Compositore aperto"
+        self.save()
+        self.refresh_communications()
 
     def build_compare(self):
         page = QWidget()
