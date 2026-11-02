@@ -643,7 +643,8 @@ class MainWindow(QMainWindow):
         self.refresh_notification_badge()
     def load_state(self):
         path=storage_path()
-        if not path.exists():
+        backup_candidates=(path.with_suffix(path.suffix + ".bak"),path.with_suffix(path.suffix + ".bak.1"))
+        if not path.exists() and not any(candidate.exists() for candidate in backup_candidates):
             return
         try:
             data, fallback = read_document(path)
@@ -2605,7 +2606,7 @@ class MainWindow(QMainWindow):
                 for old,new in substitutions.items():
                     qss=qss.replace(old,new)
             if abs(scale-1.0)>0.001:
-                qss=re.sub(r"font-size:\\s*(\\d+)px",
+                qss=re.sub(r"font-size: *([0-9]+)px",
                     lambda match:f"font-size:{max(9,round(int(match.group(1))*scale))}px",qss)
             app.setStyleSheet(qss)
             app.setFont(T.font(T.SANS,round(14*scale)))
