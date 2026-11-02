@@ -3,10 +3,14 @@ name: Build Coppa dei 5 Re for Windows
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches: [ main, ui/redesign-c5r-desktop ]
     paths:
       - "windows_app/**"
       - ".github/workflows/build-windows.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -59,12 +63,17 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: python windows_app/stockfish_service_smoke.py
       - name: Check Python syntax
-        run: python -m compileall -q windows_app/main.py
+        run: python -m compileall -q windows_app
       - name: Smoke test Qt, chess and tournament draw
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
           python -c "import chess; from PySide6.QtWidgets import QApplication; from windows_app.main import MainWindow, make_random_schedule, validate_schedule, DEFAULT_GAMES; app=QApplication([]); assert len(list(chess.Board().legal_moves)) == 20; validate_schedule(DEFAULT_GAMES); [validate_schedule(make_random_schedule()) for _ in range(100)]; window=MainWindow(); assert len(window.standings()) == 5; window.close(); print('Qt, chess, schedule generator and desktop UI OK')"
+      - name: Verify redesigned desktop panels
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python -c "from PySide6.QtWidgets import QApplication; from windows_app.main import MainWindow; app=QApplication([]); w=MainWindow(); print('DIAG',len(w.podium_cards),len(w.odds_rows),len(w.calendar_round_bars),hasattr(w,'audit_events_layout'),len(w.profile_tiles),len(w.compare_tiles),w._page_keys,hasattr(w,'notification_button'),w.health_check(),flush=True); assert len(w.podium_cards)==3; assert len(w.odds_rows)==5; assert len(w.calendar_round_bars)==5; assert hasattr(w,'audit_events_layout'); assert len(w.profile_tiles)==4; assert len(w.compare_tiles)==2; assert len(w._page_keys)==19 and 'incidents' in w._page_keys and 'communications' in w._page_keys and 'history' in w._page_keys; assert hasattr(w,'notification_button'); assert not any(x[0]=='ERRORE' for x in w.health_check()); w.refresh_all(); print('AFTER_REFRESH',w.dashboard_progress.minimum(),w.dashboard_progress.maximum(),w.dashboard_progress.value(),flush=True); assert w.dashboard_progress.value()>=0; print('PLAYER_REFRESH',flush=True); w.refresh_player_profile(); print('COMPARE_REFRESH',flush=True); w.refresh_compare(); print('OPENINGS_REFRESH',flush=True); w.refresh_openings(); print('BADGE_REFRESH',flush=True); w.refresh_notification_badge(); w.close(); print('Dashboard, podium, calendar, odds, playoffs, audit and pro tools OK')"
       - name: Test odds and streaming controls
         env:
           QT_QPA_PLATFORM: offscreen
