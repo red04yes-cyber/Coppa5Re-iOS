@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, os, random, sys, shutil, hashlib, math, csv, time, subprocess, queue, threading, re, uuid, base64, socket, io, html, urllib.parse
+import json, os, random, sys, shutil, hashlib, math, csv, time, subprocess, queue, threading, re, uuid, base64, socket, io, html, urllib.parse, secrets, hmac, zipfile, tempfile, urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlencode, quote, urlparse, unquote
@@ -677,6 +677,23 @@ class BroadcastWindow(QWidget):
         if event.key()==Qt.Key.Key_Escape: self.close()
         else: super().keyPressEvent(event)
 
+class PublicReachabilityProbe(QThread):
+    probeFinished=Signal(bool,str)
+    def __init__(self,url,parent=None):
+        super().__init__(parent)
+        self.url=url
+    def run(self):
+        try:
+            request=urllib.request.Request(self.url,headers={"Cache-Control":"no-cache","User-Agent":"Coppa5Re-Windows"})
+            with urllib.request.urlopen(request,timeout=5) as response:
+                body=response.read(256).decode("utf-8","replace")
+                if response.status!=200 or "C5R local match server OK" not in body:
+                    raise RuntimeError(f"Risposta HTTP inattesa ({response.status}).")
+            self.probeFinished.emit(True,"Connessione pubblica raggiungibile.")
+        except Exception as exc:
+            self.probeFinished.emit(False,str(exc))
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__(); self.setWindowTitle("Coppa dei 5 Re · Control Room")
@@ -688,6 +705,13 @@ class MainWindow(QMainWindow):
         self.game_terminations={}; self.move_reviews={}; self.withdrawn_players={}; self.move_times={}
         self.move_annotations={}; self.round_closures={}; self.incident_reports=[]; self.player_bios={}; self.notification_drafts=[]
         self.match_http_server=None; self.match_http_thread=None; self.match_http_host=""; self.match_http_port=0
+        self.public_base_url=os.environ.get("C5R_PUBLIC_BASE_URL","").strip().rstrip("/")
+        self.spectator_token=secrets.token_urlsafe(32)
+        self.operational_alerts=[]
+        self.long_match_minutes=120
+        self._public_probe_thread=None
+        self._last_public_probe=0.0
+        self._public_connection_state=None
         self.ui_preferences={"theme":"dark","font_scale":1.0,"density":"comfortable"}; self.ui_profiles={}
         self._clock_runtime={}; self._last_clock_persist=time.monotonic()
         self._undo_stack=[]; self._redo_stack=[]; self._history_restoring=False; self._last_history_state=None
@@ -697,6 +721,11 @@ class MainWindow(QMainWindow):
         self.load_state(); self._last_history_state=self._history_snapshot(self.state_payload()); self.build_ui(); self.apply_ui_preferences(); self.refresh_all()
         self.clock_timer=QTimer(self); self.clock_timer.timeout.connect(self.tick_clocks); self.clock_timer.start(1000)
         self.notification_timer=QTimer(self); self.notification_timer.timeout.connect(self.refresh_notification_badge); self.notification_timer.start(30000)
+        self.refresh_spectator_config_hint()
+        if self.public_base_url:
+            try:self.start_match_web_server()
+            except Exception as exc:
+                self.record_operational_alert("Server spettatori non avviato",str(exc),"danger","settings","local-server-start")
         self.install_shortcuts()
         self.refresh_notification_badge()
     def load_state(self):
@@ -717,6 +746,10 @@ class MainWindow(QMainWindow):
             self.round_closures=data.get("round_closures",{}); self.incident_reports=data.get("incident_reports",[]); self.player_bios=data.get("player_bios",{}); self.notification_drafts=data.get("notification_drafts",[])
             self.ui_preferences=data.get("ui_preferences",getattr(self,"ui_preferences",{}))
             self.ui_profiles=data.get("ui_profiles",getattr(self,"ui_profiles",{}))
+            self.public_base_url=str(data.get("public_base_url",self.public_base_url)).strip().rstrip("/")
+            self.spectator_token=str(data.get("spectator_token") or self.spectator_token)
+            self.operational_alerts=data.get("operational_alerts",[])
+            self.long_match_minutes=int(data.get("long_match_minutes",120) or 120)
             saved_schedule=data.get("schedule")
             if saved_schedule:
                 parsed=[(g["id"],int(g["round"]),g["white"],g["black"]) for g in saved_schedule]
@@ -756,13 +789,15 @@ class MainWindow(QMainWindow):
             "withdrawn_players":self.withdrawn_players,
             "move_annotations":self.move_annotations,"round_closures":self.round_closures,
             "ui_preferences":self.ui_preferences,"ui_profiles":self.ui_profiles,"incident_reports":self.incident_reports,"player_bios":self.player_bios,"notification_drafts":self.notification_drafts,
+            "public_base_url":self.public_base_url,"spectator_token":self.spectator_token,
+            "operational_alerts":self.operational_alerts,"long_match_minutes":self.long_match_minutes,
             "saved_at":datetime.now().isoformat(timespec="seconds"),
         }
 
     def _history_snapshot(self,payload=None):
         data=dict(payload or self.state_payload())
         # Clocks and engine evaluations evolve without operator actions.
-        for key in ("clocks","eval_history","saved_at"):
+        for key in ("clocks","eval_history","saved_at","operational_alerts","spectator_token","public_base_url","long_match_minutes"):
             data.pop(key,None)
         return json.loads(json.dumps(data,ensure_ascii=False,sort_keys=True,default=str))
 
@@ -934,11 +969,10 @@ class MainWindow(QMainWindow):
             player_id=white_player if mover_color else black_player
             mover="white" if mover_color else "black"
             clock=self.clock_data(gid)
-            elapsed=0.0
             if clock.get("started"):
                 turn_started=float(clock.get("turn_started_at",clock.get("last_wall",time.time())))
                 thinking_seconds=max(0.0,time.time()-turn_started)
-                side,remaining,elapsed=self._advance_clock(gid)
+                side,remaining,_=self._advance_clock(gid)
                 if remaining<=0:
                     self.tick_clocks(); return
                 self.move_times.setdefault(gid,[]).append({
@@ -1080,6 +1114,13 @@ class MainWindow(QMainWindow):
             self.log_operation("Turno riaperto", f"Round {round_key}", previous_closure, "Riaperto",
                                "Un risultato del turno è stato modificato.")
         self.log_operation("Risultato",gid,old or "In corso",value or "In corso",detail)
+        if value not in (None,"VOID"):
+            timed_out=termination=="time forfeit" or "bandierina" in detail.lower() or "tempo esaurito" in detail.lower()
+            title="Tempo esaurito · risultato da validare" if timed_out else "Risultato da verificare"
+            self.record_operational_alert(
+                title,f"{gid} · esito {value} · {detail}",
+                "danger" if timed_out else "warning","calendar",f"result:{gid}:{len(self.audit_log)}"
+            )
         self.save(); self.save_recovery(); self.refresh_all()
         if value not in (None,"VOID") and self.moves.get(gid):
             service=self.get_engine_service()
@@ -1101,6 +1142,10 @@ class MainWindow(QMainWindow):
             self.clocks[gid].setdefault("black",seconds)
             self.clocks[gid].setdefault("started",False)
             self.clocks[gid].setdefault("last_wall",time.time())
+            self.clocks[gid].setdefault("started_at",None)
+            self.clocks[gid].setdefault("overlong_alerted",False)
+        self.clocks[gid].setdefault("started_at",None)
+        self.clocks[gid].setdefault("overlong_alerted",False)
         return self.clocks[gid]
 
     def _advance_clock(self,gid,side=None):
@@ -1129,8 +1174,11 @@ class MainWindow(QMainWindow):
         return f"BIANCO {fmt(math.ceil(c['white']))}   ·   NERO {fmt(math.ceil(c['black']))}"
     def start_clock(self,gid):
         if self.results.get(gid): return
-        self.clock_data(gid)["started"]=True
-        self.clock_data(gid)["last_wall"]=time.time(); self.clock_data(gid)["turn_started_at"]=time.time(); self._clock_runtime[gid]=time.monotonic()
+        clock=self.clock_data(gid)
+        clock["started"]=True
+        clock["started_at"]=clock.get("started_at") or time.time()
+        clock["overlong_alerted"]=bool(clock.get("overlong_alerted",False))
+        clock["last_wall"]=time.time(); clock["turn_started_at"]=time.time(); self._clock_runtime[gid]=time.monotonic()
         self.log_operation("Orologio avviato",gid,"fermo",self.time_control_for_game(gid))
         self.save(); self.save_recovery(); self.refresh_all()
         self.statusBar().showMessage("Cronometro avviato.",2000)
@@ -1138,7 +1186,34 @@ class MainWindow(QMainWindow):
         # I controlli sono vincolati all'Art. 5: 15+3 in qualificazione, 30+10 nei playoff.
         self.time_control="15+3"
         self.statusBar().showMessage("Cadenze fissate dal regolamento: qualificazione 15+3, playoff 30+10.",3500)
+    def check_long_match_alerts(self):
+        threshold=max(15,int(getattr(self,"long_match_minutes",120) or 120))*60
+        active=[]
+        for gid,_,white,black in GAMES:
+            if self.results.get(gid) is None:active.append((gid,name(white),name(black),"calendar"))
+        for key in ("sf1","sf2","final","third"):
+            if self.playoff_results.get(key) is None:
+                pair=getattr(self,"playoff_pairs",{}).get(key,(None,None))
+                active.append((key,name(pair[0]) if pair[0] else "Da definire",
+                               name(pair[1]) if pair[1] else "Da definire","playoffs"))
+        now=time.time()
+        for gid,white,black,target in active:
+            clock=self.clock_data(gid)
+            started_at=clock.get("started_at")
+            if not clock.get("started") or not started_at or clock.get("overlong_alerted"):
+                continue
+            duration=max(0.0,now-float(started_at))
+            if duration>=threshold:
+                clock["overlong_alerted"]=True
+                minutes=int(duration//60)
+                self.record_operational_alert(
+                    "Partita ancora in corso oltre la durata prevista",
+                    f"{gid} · {white} vs {black} · attiva da circa {minutes} minuti.",
+                    "warning",target,f"overlong:{gid}:{int(float(started_at))}"
+                )
+
     def tick_clocks(self):
+        self.check_long_match_alerts()
         changed=False; timed_out=[]
         for gid,_,white,black in GAMES:
             clock=self.clock_data(gid)
@@ -1179,6 +1254,8 @@ class MainWindow(QMainWindow):
         if self.playoff_results.get(key): return
         clock=self.clock_data(key)
         clock["started"]=True
+        clock["started_at"]=clock.get("started_at") or time.time()
+        clock.setdefault("overlong_alerted",False)
         clock.setdefault("side_to_move","white")
         clock["last_wall"]=time.time(); self._clock_runtime[key]=time.monotonic()
         self.log_operation("Orologio playoff avviato",key,"fermo","30+10")
@@ -2545,52 +2622,121 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Ripristino non riuscito", str(exc))
             return False
 
+    def record_operational_alert(self,title,detail,severity="warning",target="calendar",source_key=""):
+        alerts=getattr(self,"operational_alerts",[])
+        if source_key and any(item.get("source_key")==source_key and not item.get("acknowledged") for item in alerts):
+            return
+        alerts.append({
+            "id":uuid.uuid4().hex,
+            "time":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "title":str(title),"detail":str(detail),"severity":str(severity),
+            "target":str(target),"source_key":str(source_key),"acknowledged":False,
+        })
+        self.operational_alerts=alerts[-150:]
+        if not getattr(self,"state_load_blocked",False):
+            self.save(automatic_snapshot=False)
+        if hasattr(self,"notification_button"):
+            self.refresh_notification_badge()
+
+    def acknowledge_operational_alert(self,alert_id):
+        changed=False
+        for item in self.operational_alerts:
+            if item.get("id")==alert_id and not item.get("acknowledged"):
+                item["acknowledged"]=True
+                item["acknowledged_at"]=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                changed=True
+        if changed:
+            self.log_operation("Avviso arbitrale verificato",alert_id,"Da verificare","Verificato")
+            self.save()
+            self.refresh_notification_badge()
+
+    def maybe_probe_public_connection(self):
+        if not self.public_base_url or self.match_http_server is None:
+            return
+        worker=getattr(self,"_public_probe_thread",None)
+        if worker is not None and worker.isRunning():
+            return
+        if time.monotonic()-self._last_public_probe<60:
+            return
+        self._last_public_probe=time.monotonic()
+        worker=PublicReachabilityProbe(self.public_base_url+"/health",self)
+        worker.probeFinished.connect(self.on_public_connection_probe)
+        self._public_probe_thread=worker
+        worker.start()
+
+    def on_public_connection_probe(self,ok,detail):
+        previous=self._public_connection_state
+        self._public_connection_state=bool(ok)
+        if not ok and previous is not False:
+            self.record_operational_alert(
+                "Connessione al portale pubblico non disponibile",
+                f"{self.public_base_url} · {detail}. Verifica tunnel HTTPS, rete e porta locale.",
+                "danger","settings","public-connection-down"
+            )
+            self.statusBar().showMessage("Portale pubblico non raggiungibile: controlla tunnel e rete.",6000)
+        elif ok and previous is False:
+            self.record_operational_alert(
+                "Connessione al portale pubblico ripristinata",
+                f"{self.public_base_url} risponde correttamente.",
+                "success","settings","public-connection-restored"
+            )
+            self.statusBar().showMessage("Portale pubblico nuovamente raggiungibile.",4000)
+        self.refresh_notification_badge()
+
     def collect_notifications(self):
-        notices = []
-        for gid, _, white, black in GAMES:
-            clock = self.clock_data(gid)
+        notices=[]
+        self.maybe_probe_public_connection()
+        for alert in reversed(getattr(self,"operational_alerts",[])):
+            if alert.get("acknowledged"):
+                continue
+            notices.append((
+                alert.get("severity","warning"),alert.get("title","Avviso"),
+                alert.get("detail",""),alert.get("target","calendar"),alert.get("id")
+            ))
+        for gid,_,white,black in GAMES:
+            clock=self.clock_data(gid)
             if clock.get("started") and self.results.get(gid) is None:
-                low = min(int(clock.get("white", 0)), int(clock.get("black", 0)))
-                if low <= 60:
+                low=min(int(clock.get("white",0)),int(clock.get("black",0)))
+                if low<=60:
                     notices.append((
-                        "warning", f"Tempo quasi esaurito · {gid}",
-                        f"{name(white)} vs {name(black)} · almeno un orologio è a {max(0, low)} secondi.",
-                        "live"
+                        "warning",f"Tempo quasi esaurito · {gid}",
+                        f"{name(white)} vs {name(black)} · almeno un orologio è a {max(0,low)} secondi.",
+                        "live",None
                     ))
-        for key in ("sf1", "sf2", "final", "third"):
-            if self.playoff_results.get(key) == "1/2-1/2" and not self.playoff_winners.get(key):
+        for key in ("sf1","sf2","final","third"):
+            if self.playoff_results.get(key)=="1/2-1/2" and not self.playoff_winners.get(key):
                 notices.append((
-                    "warning", f"Armageddon da registrare · {key.upper()}",
+                    "warning",f"Armageddon da registrare · {key.upper()}",
                     "La partita playoff è patta: seleziona il vincitore dell'Armageddon.",
-                    "playoffs"
+                    "playoffs",None
                 ))
-        for round_key, closed_at in self.round_closures.items():
+        for round_key,closed_at in self.round_closures.items():
             try:
-                rnd = int(round_key)
-                pending = [gid for gid, game_round, _, _ in GAMES if game_round == rnd and self.results.get(gid) is None]
+                rnd=int(round_key)
+                pending=[gid for gid,game_round,_,_ in GAMES if game_round==rnd and self.results.get(gid) is None]
                 if pending:
                     notices.append((
-                        "danger", f"Round {rnd} da riaprire",
-                        "Sono stati rilevati risultati mancanti dopo la chiusura: " + ", ".join(pending),
-                        "calendar"
+                        "danger",f"Round {rnd} da riaprire",
+                        "Sono stati rilevati risultati mancanti dopo la chiusura: "+", ".join(pending),
+                        "calendar",None
                     ))
-            except (TypeError, ValueError):
-                notices.append(("danger", "Chiusura round non valida", str(round_key), "health"))
-        findings = getattr(self, "_health_findings", None)
+            except (TypeError,ValueError):
+                notices.append(("danger","Chiusura round non valida",str(round_key),"health",None))
+        findings=getattr(self,"_health_findings",None)
         if findings:
-            errors = sum(1 for severity, _, _ in findings if severity == "ERRORE")
+            errors=sum(1 for severity,_,_ in findings if severity=="ERRORE")
             if errors:
                 notices.append((
-                    "danger", "Health Check: anomalie da risolvere",
+                    "danger","Health Check: anomalie da risolvere",
                     f"L'ultimo controllo ha rilevato {errors} errori. Apri Tournament Health Check.",
-                    "health"
+                    "health",None
                 ))
         return notices
 
     def refresh_notification_badge(self):
-        if not hasattr(self, "notification_button"):
+        if not hasattr(self,"notification_button"):
             return
-        notices = self.collect_notifications()
+        notices=self.collect_notifications()
         self.notification_button.setText(f"AVVISI · {len(notices)}")
         self.notification_button.setToolTip(
             "Nessuna notifica operativa." if not notices else
@@ -2598,32 +2744,49 @@ class MainWindow(QMainWindow):
         )
 
     def open_notifications(self):
-        notices = self.collect_notifications()
-        dialog = QDialog(self)
+        notices=self.collect_notifications()
+        dialog=QDialog(self)
         dialog.setWindowTitle("Centro notifiche C5R")
-        dialog.resize(700, 480)
-        root = QVBoxLayout(dialog)
-        root.addWidget(ui_label("Centro notifiche", "h1"))
+        dialog.resize(760,520)
+        root=QVBoxLayout(dialog)
+        root.addWidget(ui_label("Centro notifiche arbitri","h1"))
         root.addWidget(ui_label(
-            "Avvisi operativi generati dallo stato corrente del torneo. Doppio clic per aprire la sezione collegata.",
-            "muted", wrap=True
+            "Eventi registrati e controlli operativi. Gli avvisi persistenti restano in elenco finché non vengono verificati.",
+            "muted",wrap=True
         ))
-        items = QListWidget()
-        for severity, title, detail, target in notices:
+        items=QListWidget()
+        for severity,title,detail,target,alert_id in notices:
             items.addItem(f"[{severity.upper()}]  {title}\n{detail}")
-            items.item(items.count() - 1).setData(Qt.ItemDataRole.UserRole, target)
+            items.item(items.count()-1).setData(Qt.ItemDataRole.UserRole,{"target":target,"alert_id":alert_id})
         if not notices:
             items.addItem("Tutto regolare · nessun avviso operativo.")
-        root.addWidget(items, 1)
-        def open_target(item):
-            target = item.data(Qt.ItemDataRole.UserRole)
-            if target:
-                self.navigate_to_page(target)
+        root.addWidget(items,1)
+        actions=QHBoxLayout()
+        verify=QPushButton("SEGNA COME VERIFICATO")
+        verify.setObjectName("PrimaryButton")
+        open_section=QPushButton("APRI SEZIONE COLLEGATA")
+        close=QPushButton("CHIUDI")
+        def selected_payload():
+            selected=items.selectedItems()
+            return selected[0].data(Qt.ItemDataRole.UserRole) if selected else None
+        def mark_verified():
+            payload=selected_payload()
+            if payload and payload.get("alert_id"):
+                self.acknowledge_operational_alert(payload["alert_id"])
                 dialog.accept()
-        items.itemDoubleClicked.connect(open_target)
-        close = QPushButton("CHIUDI")
+                self.open_notifications()
+            else:
+                self.statusBar().showMessage("Seleziona prima un avviso persistente da verificare.",2500)
+        def navigate_selected():
+            payload=selected_payload()
+            if payload and payload.get("target"):
+                self.navigate_to_page(payload["target"])
+                dialog.accept()
+        verify.clicked.connect(mark_verified)
+        open_section.clicked.connect(navigate_selected)
         close.clicked.connect(dialog.accept)
-        root.addWidget(close, 0, Qt.AlignmentFlag.AlignRight)
+        actions.addWidget(verify);actions.addWidget(open_section);actions.addStretch(1);actions.addWidget(close)
+        root.addLayout(actions)
         dialog.exec()
 
     def open_command_palette(self):
@@ -3100,11 +3263,12 @@ class MainWindow(QMainWindow):
 
     def match_web_state(self,gid):
         match=next((item for item in GAMES if item[0]==gid),None)
+        is_playoff=gid in ("sf1","sf2","third","final")
         if match:
             _,rnd,white,black=match
             round_label=f"Round {rnd}"
             result=self.results.get(gid) or "Da disputare"
-        elif gid in ("sf1","sf2","third","final"):
+        elif is_playoff:
             label={"sf1":"Semifinale 1","sf2":"Semifinale 2","third":"3° / 4° posto","final":"Finale"}[gid]
             white,black=getattr(self,"playoff_pairs",{}).get(gid,(None,None))
             round_label="Playoff · "+label
@@ -3112,26 +3276,46 @@ class MainWindow(QMainWindow):
         else:
             return None
 
-        board=self.get_board(gid)
+        board=chess.Board()
         move_text=[]
         valid_uci=[]
-        notation_board=chess.Board()
         for index,uci in enumerate(self.moves.get(gid,[]),1):
             try:
                 move=chess.Move.from_uci(uci)
-                if move not in notation_board.legal_moves:
+                if move not in board.legal_moves:
                     break
-                san=notation_board.san(move)
+                san=board.san(move)
                 move_text.append((f"{(index+1)//2}. " if index%2 else "")+san)
-                notation_board.push(move)
+                board.push(move)
                 valid_uci.append(move.uci())
             except Exception:
                 break
 
         clock=self.clocks.get(gid,{})
-        clock_text=""
-        if clock:
-            clock_text=f"Bianco {math.ceil(float(clock.get('white',0)))}s · Nero {math.ceil(float(clock.get('black',0)))}s"
+        base_seconds=30*60 if is_playoff else 15*60
+        white_seconds=max(0.0,float(clock.get("white",base_seconds)))
+        black_seconds=max(0.0,float(clock.get("black",base_seconds)))
+        running=bool(clock.get("started") and result=="Da disputare")
+        clock_turn=clock.get("side_to_move","white") if is_playoff else ("white" if board.turn==chess.WHITE else "black")
+        if running:
+            try:
+                elapsed=min(43200.0,max(0.0,time.time()-float(clock.get("last_wall",time.time()))))
+            except (TypeError,ValueError):
+                elapsed=0.0
+            if clock_turn=="white":
+                white_seconds=max(0.0,white_seconds-elapsed)
+            else:
+                black_seconds=max(0.0,black_seconds-elapsed)
+        def fmt_clock(seconds):
+            value=max(0,int(math.ceil(seconds)))
+            return f"{value//60:02d}:{value%60:02d}"
+        clock_text=f"Bianco {fmt_clock(white_seconds)} · Nero {fmt_clock(black_seconds)}"
+        if running:
+            clock_text+=" · IN CORSO"
+        elif result!="Da disputare":
+            clock_text+=" · CONCLUSO"
+        else:
+            clock_text+=" · FERMO"
         return {
             "game_id":gid,
             "round":round_label,
@@ -3143,8 +3327,43 @@ class MainWindow(QMainWindow):
             "move_text":" ".join(move_text) or "Nessuna mossa registrata",
             "turn":"Bianco" if board.turn==chess.WHITE else "Nero",
             "clock_text":clock_text,
+            "clock_white":int(math.ceil(white_seconds)),
+            "clock_black":int(math.ceil(black_seconds)),
+            "clock_running":running,
+            "clock_turn":clock_turn,
             "ply":len(valid_uci),
+            "status":"CONCLUSA" if result!="Da disputare" else ("IN CORSO" if running or valid_uci else "DA GIOCARE"),
+            "is_playoff":is_playoff,
         }
+
+    def public_portal_state(self):
+        states=[]
+        for gid,_,_,_ in GAMES:
+            state=self.match_web_state(gid)
+            if state:states.append(state)
+        for gid in ("sf1","sf2","third","final"):
+            state=self.match_web_state(gid)
+            if state:states.append(state)
+        rows=[]
+        for position,row in enumerate(self.standings(),1):
+            rows.append({
+                "position":position,"player":name(row["id"]),
+                "played":row["played"],"wins":row["wins"],"draws":row["draws"],
+                "losses":row["losses"],"penalty":row["penalty"],"points":row["points"],
+            })
+        return {
+            "tournament":"Coppa dei 5 Re",
+            "as_of":datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+            "matches":states,
+            "standings":rows,
+            "completed":sum(1 for item in states if item["result"] not in ("Da disputare","VOID")),
+            "live":sum(1 for item in states if item["status"]=="IN CORSO"),
+        }
+
+    def valid_spectator_token(self,token):
+        candidate=str(token or "")
+        expected=str(getattr(self,"spectator_token",""))
+        return bool(candidate and expected and hmac.compare_digest(candidate,expected))
 
     def match_web_html(self,gid):
         state=self.match_web_state(gid)
@@ -3174,7 +3393,7 @@ class MainWindow(QMainWindow):
 
         title=f"{html.escape(state['round'])} · {html.escape(gid)}"
         state_json=json.dumps(state,ensure_ascii=True).replace("<","\\u003c").replace(">","\\u003e").replace("&","\\u0026")
-        state_path="/api/match/"+urllib.parse.quote(gid,safe="")
+        state_path="/api/match/"+urllib.parse.quote(gid,safe="")+"?token="+urllib.parse.quote(self.spectator_token,safe="")
         return f"""<!doctype html><html lang='it'><head><meta charset='utf-8'>
 <meta name='viewport' content='width=device-width,initial-scale=1'>
 <meta name='theme-color' content='#101720'>
@@ -3282,7 +3501,7 @@ async function poll(){{
   if(pollBusy||document.hidden)return;
   pollBusy=true;
   try{{
-    const response=await fetch(STATE_URL+'?t='+Date.now(),{{cache:'no-store'}});
+    const response=await fetch(STATE_URL+'&t='+Date.now(),{{cache:'no-store'}});
     if(response.ok)renderState(await response.json());
   }}catch(error){{}}
   finally{{pollBusy=false;}}
@@ -3291,32 +3510,153 @@ window.setInterval(poll,1000);
 document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}});
 </script></body></html>"""
 
+    def portal_web_html(self):
+        initial=self.public_portal_state()
+        state_json=json.dumps(initial,ensure_ascii=True).replace("<","\\u003c").replace(">","\\u003e").replace("&","\\u0026")
+        api_path="/api/portal?token="+urllib.parse.quote(self.spectator_token,safe="")
+        return f"""<!doctype html><html lang='it'><head><meta charset='utf-8'>
+<meta name='viewport' content='width=device-width,initial-scale=1'><meta name='theme-color' content='#101720'>
+<title>Coppa dei 5 Re · Portale LIVE</title><style>
+:root{{color-scheme:dark;--bg:#101720;--panel:#1b2633;--line:#344252;--gold:#e3c07f;--muted:#aab5c2}}
+*{{box-sizing:border-box}}body{{margin:0;padding:clamp(12px,3vw,28px);background:var(--bg);color:#edf1f5;font-family:Segoe UI,Arial,sans-serif}}
+main{{max-width:1500px;margin:auto}}header{{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px}}
+.brand{{color:#c9a15b;font-weight:900;letter-spacing:2px}}.live{{color:#78d6a0;font-weight:900;font-size:13px}}
+.summary{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:14px 0}}
+.metric,.card{{background:var(--panel);border:1px solid var(--line);border-radius:15px;padding:16px}}
+.metric b{{display:block;color:var(--gold);font-size:24px}}.metric span{{color:var(--muted);font-size:11px;letter-spacing:1px}}
+.section-title{{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:24px 0 12px}}
+.games{{display:grid;grid-template-columns:repeat(auto-fit,minmax(285px,1fr));gap:14px}}
+.game{{background:var(--panel);border:1px solid var(--line);border-radius:15px;padding:14px;text-decoration:none;color:inherit;display:block;transition:border-color .15s,transform .15s}}
+.game:hover{{border-color:var(--gold);transform:translateY(-2px)}}.game-head{{display:flex;justify-content:space-between;gap:8px;align-items:center;color:var(--muted);font-size:12px}}
+.status{{font-weight:800;font-size:10px;letter-spacing:.7px;color:#9bd8b3}}.status.done{{color:var(--gold)}}.status.wait{{color:var(--muted)}}
+.names{{display:flex;justify-content:space-between;gap:8px;margin:10px 0 6px;font-weight:800;font-size:14px}}.score{{color:var(--gold);text-align:center;font-weight:900;margin-bottom:8px}}
+.mini{{width:min(100%,180px);margin:8px auto 10px;display:grid;grid-template-columns:repeat(8,1fr);aspect-ratio:1;overflow:hidden;border:2px solid #35465a;border-radius:5px}}
+.sq{{display:grid;place-items:center;font:clamp(13px,2vw,21px) 'Segoe UI Symbol','DejaVu Sans',serif;line-height:1}}.light{{background:#f0d9b5;color:#fff}}.dark{{background:#b58863;color:#171717}}
+.clock{{display:flex;justify-content:space-between;gap:8px;color:#d4dce4;font:12px ui-monospace,Consolas,monospace;margin-top:8px}}
+.move{{font-size:11px;color:var(--muted);margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+.standings{{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}}
+.standings th,.standings td{{padding:11px 9px;border-bottom:1px solid var(--line);text-align:left;font-size:13px}}
+.standings th{{color:var(--gold);font-size:10px;letter-spacing:.8px}}.standings td:last-child,.standings th:last-child{{text-align:right;font-weight:900}}
+.muted{{color:var(--muted);font-size:12px}}.footer{{text-align:center;color:var(--muted);font-size:11px;padding:22px}}
+@media(max-width:560px){{.summary{{gap:7px}}.metric{{padding:10px}}.metric b{{font-size:19px}}.metric span{{font-size:9px}}.standings th,.standings td{{padding:9px 5px;font-size:11px}}}}
+</style></head><body><main>
+<header><div><div class='brand'>COPPA DEI 5 RE</div><div class='muted'>Portale pubblico · Tutti i tavoli</div></div><div class='live'>● LIVE · AGGIORNAMENTO AUTOMATICO</div></header>
+<div class='summary'><div class='metric'><b id='live-count'>{initial['live']}</b><span>PARTITE IN CORSO</span></div><div class='metric'><b id='done-count'>{initial['completed']}</b><span>PARTITE CONCLUSE</span></div><div class='metric'><b id='updated'>{html.escape(initial['as_of'])}</b><span>ULTIMO AGGIORNAMENTO</span></div></div>
+<div class='section-title'><strong>TUTTI I TAVOLI</strong><span class='muted'>Apri una partita per la scacchiera grande</span></div>
+<div id='games' class='games'></div>
+<div class='section-title'><strong>CLASSIFICA LIVE</strong><span class='muted'>Punti netti e risultati registrati</span></div>
+<div class='card' style='padding:0;overflow:auto'><table class='standings'><thead><tr><th>POS</th><th>GIOCATORE</th><th>G</th><th>V</th><th>X</th><th>P</th><th>PUNTI</th></tr></thead><tbody id='ranking'></tbody></table></div>
+<div class='footer'>Vista spettatore in sola lettura · Orologi e mosse provengono dalla Control Room Windows.</div>
+</main><script>
+const INITIAL={state_json};
+const API={json.dumps(api_path)};
+const GLYPHS={{K:'♔',Q:'♕',R:'♖',B:'♗',N:'♘',P:'♙',k:'♚',q:'♛',r:'♜',b:'♝',n:'♞',p:'♟'}};
+const tokenQuery={json.dumps("?token="+urllib.parse.quote(self.spectator_token,safe=""))};
+function miniBoard(fen){{
+ const ranks=String(fen||'').split(' ')[0].split('/');
+ const board=document.createElement('div');board.className='mini';
+ ranks.forEach((rank,row)=>{{
+  const cells=[];
+  for(const token of rank){{
+   if(/[1-8]/.test(token))for(let n=0;n<Number(token);n++)cells.push('');
+   else cells.push(token);
+  }}
+  while(cells.length<8)cells.push('');
+  cells.slice(0,8).forEach((token,col)=>{{
+   const cell=document.createElement('div');cell.className='sq '+(((row+col)%2===1)?'dark':'light');
+   cell.textContent=GLYPHS[token]||'';board.appendChild(cell);
+  }});
+ }});
+ return board;
+}}
+function render(data){{
+ document.getElementById('live-count').textContent=data.live||0;
+ document.getElementById('done-count').textContent=data.completed||0;
+ document.getElementById('updated').textContent=data.as_of||'—';
+ const games=document.getElementById('games');games.replaceChildren();
+ (data.matches||[]).forEach(match=>{{
+  const link=document.createElement('a');link.className='game';
+  link.href='/match/'+encodeURIComponent(match.game_id)+tokenQuery;
+  const head=document.createElement('div');head.className='game-head';
+  const round=document.createElement('span');round.textContent=match.round+' · '+match.game_id;
+  const status=document.createElement('span');status.className='status '+(match.status==='CONCLUSA'?'done':(match.status==='DA GIOCARE'?'wait':''));
+  status.textContent=match.status;
+  head.append(round,status);link.append(head);
+  const names=document.createElement('div');names.className='names';
+  const white=document.createElement('span');white.textContent=match.white;
+  const black=document.createElement('span');black.textContent=match.black;
+  names.append(white,black);link.append(names);
+  const score=document.createElement('div');score.className='score';score.textContent=match.result;
+  link.append(score,miniBoard(match.fen));
+  const clock=document.createElement('div');clock.className='clock';
+  const wc=document.createElement('span');wc.textContent='B '+formatTime(match.clock_white);
+  const bc=document.createElement('span');bc.textContent='N '+formatTime(match.clock_black);
+  clock.append(wc,bc);link.append(clock);
+  const moves=document.createElement('div');moves.className='move';moves.textContent=match.move_text;
+  link.append(moves);games.append(link);
+ }});
+ const ranking=document.getElementById('ranking');ranking.replaceChildren();
+ (data.standings||[]).forEach(row=>{{
+  const tr=document.createElement('tr');
+  [row.position,row.player,row.played,row.wins,row.draws,row.losses,Number(row.points).toFixed(1)].forEach((value,index)=>{{
+   const td=document.createElement('td');td.textContent=String(value);tr.append(td);
+  }});
+  ranking.append(tr);
+ }});
+}}
+function formatTime(seconds){{
+ const n=Math.max(0,Math.ceil(Number(seconds)||0));
+ return String(Math.floor(n/60)).padStart(2,'0')+':'+String(n%60).padStart(2,'0');
+}}
+render(INITIAL);
+let busy=false;
+async function poll(){{
+ if(busy||document.hidden)return;busy=true;
+ try{{const response=await fetch(API+'&t='+Date.now(),{{cache:'no-store'}});if(response.ok)render(await response.json());}}
+ catch(error){{}}
+ finally{{busy=false;}}
+}}
+setInterval(poll,1000);
+document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}});
+</script></body></html>"""
+
     def start_match_web_server(self,host_hint=None):
         if self.match_http_server is not None:
             return self.match_http_host,self.match_http_port
         app=self
         class MatchHandler(BaseHTTPRequestHandler):
+            def send_content(self,status,content,content_type):
+                body=content.encode("utf-8") if isinstance(content,str) else content
+                self.send_response(status)
+                self.send_header("Content-Type",content_type)
+                self.send_header("Content-Length",str(len(body)))
+                self.send_header("Cache-Control","no-store, max-age=0")
+                self.send_header("X-Content-Type-Options","nosniff")
+                self.end_headers()
+                self.wfile.write(body)
             def do_GET(self):
                 parsed=urllib.parse.urlparse(self.path)
                 if parsed.path=="/health":
-                    body=b"C5R local match server OK"
-                    self.send_response(200)
-                    self.send_header("Content-Type","text/plain; charset=utf-8")
-                    self.send_header("Content-Length",str(len(body)))
-                    self.end_headers(); self.wfile.write(body); return
+                    self.send_content(200,b"C5R local match server OK","text/plain; charset=utf-8")
+                    return
+                query=urllib.parse.parse_qs(parsed.query)
+                token=query.get("token",[""])[0]
+                if not app.valid_spectator_token(token):
+                    self.send_error(403,"Link spettatore non valido o scaduto")
+                    return
+                if parsed.path=="/portal":
+                    self.send_content(200,app.portal_web_html(),"text/html; charset=utf-8")
+                    return
+                if parsed.path=="/api/portal":
+                    self.send_content(200,json.dumps(app.public_portal_state(),ensure_ascii=True),"application/json; charset=utf-8")
+                    return
                 if parsed.path.startswith("/api/match/"):
                     gid=urllib.parse.unquote(parsed.path[len("/api/match/"):])
                     state=app.match_web_state(gid)
                     if state is None:
                         self.send_error(404,"Partita non trovata")
                         return
-                    body=json.dumps(state,ensure_ascii=True).encode("utf-8")
-                    self.send_response(200)
-                    self.send_header("Content-Type","application/json; charset=utf-8")
-                    self.send_header("Content-Length",str(len(body)))
-                    self.send_header("Cache-Control","no-store")
-                    self.end_headers()
-                    self.wfile.write(body)
+                    self.send_content(200,json.dumps(state,ensure_ascii=True),"application/json; charset=utf-8")
                     return
                 if parsed.path.startswith("/match/"):
                     gid=urllib.parse.unquote(parsed.path[len("/match/"):])
@@ -3324,13 +3664,7 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
                     if page is None:
                         self.send_error(404,"Partita non trovata")
                         return
-                    body=page.encode("utf-8")
-                    self.send_response(200)
-                    self.send_header("Content-Type","text/html; charset=utf-8")
-                    self.send_header("Content-Length",str(len(body)))
-                    self.send_header("Cache-Control","no-store")
-                    self.end_headers()
-                    self.wfile.write(body)
+                    self.send_content(200,page,"text/html; charset=utf-8")
                     return
                 self.send_error(404,"Not found")
             def log_message(self,format,*args):
@@ -3353,42 +3687,114 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
                 return self.match_http_host,self.match_http_port
             except OSError as exc:
                 last_error=exc
-        raise RuntimeError(f"Non è stato possibile avviare il server locale sulle porte 8765–8774: {last_error}")
+        message=f"Non è stato possibile avviare il server locale sulle porte 8765–8774: {last_error}"
+        self.record_operational_alert("Server spettatori non disponibile",message,"danger","settings","local-server-bind-failed")
+        raise RuntimeError(message)
 
-    def match_web_url(self,gid,host_override=None):
+    def match_web_url(self,gid,host_override=None,public=False):
         host,port=self.start_match_web_server(host_override)
-        return f"http://{host}:{port}/match/{urllib.parse.quote(gid,safe='')}"
+        path="/match/"+urllib.parse.quote(gid,safe="")
+        if public:
+            if not self.public_base_url:
+                raise ValueError("Configura prima un indirizzo pubblico HTTPS nelle Impostazioni.")
+            base=self.public_base_url
+        else:
+            base=f"http://{host}:{port}"
+        return base+path+"?token="+urllib.parse.quote(self.spectator_token,safe="")
+
+    def portal_web_url(self,host_override=None,public=False):
+        host,port=self.start_match_web_server(host_override)
+        if public:
+            if not self.public_base_url:
+                raise ValueError("Configura prima un indirizzo pubblico HTTPS nelle Impostazioni.")
+            base=self.public_base_url
+        else:
+            base=f"http://{host}:{port}"
+        return base+"/portal?token="+urllib.parse.quote(self.spectator_token,safe="")
 
     def show_match_qr_dialog(self,gid):
         try:
-            url=self.match_web_url(gid)
             dialog=QDialog(self)
             dialog.setWindowTitle(f"QR · {gid}")
-            dialog.resize(420,480)
+            dialog.resize(440,560)
             layout=QVBoxLayout(dialog)
             layout.addWidget(ui_label(f"QR TAVOLO · {gid}","h2",align=Qt.AlignmentFlag.AlignCenter))
-            image=QLabel()
-            image.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            image.setPixmap(self.make_qr_pixmap(url,270))
+            mode=QComboBox()
+            mode.addItem("Rete Wi-Fi / LAN","local")
+            if self.public_base_url:
+                mode.addItem("Internet · HTTPS protetto","public")
+                mode.setCurrentIndex(1)
+            layout.addWidget(mode)
+            image=QLabel(); image.setAlignment(Qt.AlignmentFlag.AlignCenter)
             layout.addWidget(image)
-            link=QLineEdit(url); link.setReadOnly(True)
+            link=QLineEdit(); link.setReadOnly(True); link.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             layout.addWidget(link)
-            layout.addWidget(ui_label(
-                "Scansiona il codice con il telefono collegato alla stessa rete Wi-Fi/LAN. "
-                "La pagina mostra scacchiera e cronologia mosse in sola lettura; la posizione si aggiorna automaticamente ogni secondo.",
-                "muted",wrap=True))
+            hint=ui_label("Accesso da Internet disponibile solo quando il tunnel HTTPS è attivo e inoltra alla porta locale indicata nelle Impostazioni.","muted",wrap=True)
+            layout.addWidget(hint)
+            def update_link():
+                try:
+                    is_public=mode.currentData()=="public"
+                    url=self.match_web_url(gid,public=is_public)
+                    link.setText(url);image.setPixmap(self.make_qr_pixmap(url,270))
+                    hint.setText(
+                        f"Link pubblico HTTPS · token privato. Inoltra la porta locale {self.match_http_port} al PC arbitro."
+                        if is_public else "Il telefono deve essere collegato alla stessa rete Wi-Fi/LAN del PC Windows."
+                    )
+                except Exception as exc:
+                    link.clear();image.clear();hint.setText(str(exc))
+            mode.currentIndexChanged.connect(update_link)
+            update_link()
             buttons=QHBoxLayout()
             copy=QPushButton("COPIA LINK")
-            copy.clicked.connect(lambda:QApplication.clipboard().setText(url))
+            copy.clicked.connect(lambda:QApplication.clipboard().setText(link.text()))
             open_local=QPushButton("APRI SUL PC")
-            open_local.clicked.connect(lambda:QDesktopServices.openUrl(QUrl(url)))
-            close=QPushButton("CHIUDI")
-            close.clicked.connect(dialog.accept)
-            buttons.addWidget(copy); buttons.addWidget(open_local); buttons.addWidget(close)
+            open_local.clicked.connect(lambda:QDesktopServices.openUrl(QUrl(link.text())) if link.text() else None)
+            close=QPushButton("CHIUDI");close.clicked.connect(dialog.accept)
+            buttons.addWidget(copy);buttons.addWidget(open_local);buttons.addWidget(close)
             layout.addLayout(buttons)
             dialog.exec()
         except Exception as exc:
             QMessageBox.warning(self,"QR non disponibile",str(exc))
+
+    def show_portal_qr_dialog(self):
+        try:
+            dialog=QDialog(self)
+            dialog.setWindowTitle("QR · Portale di tutti i tavoli")
+            dialog.resize(440,560)
+            layout=QVBoxLayout(dialog)
+            layout.addWidget(ui_label("PORTALE SPETTATORI","h2",align=Qt.AlignmentFlag.AlignCenter))
+            layout.addWidget(ui_label("Un solo link per tutte le scacchiere, i cronometri e la classifica live.","muted",wrap=True))
+            mode=QComboBox()
+            mode.addItem("Rete Wi-Fi / LAN","local")
+            if self.public_base_url:
+                mode.addItem("Internet · HTTPS protetto","public")
+                mode.setCurrentIndex(1)
+            layout.addWidget(mode)
+            image=QLabel();image.setAlignment(Qt.AlignmentFlag.AlignCenter);layout.addWidget(image)
+            link=QLineEdit();link.setReadOnly(True);layout.addWidget(link)
+            hint=ui_label("L'accesso remoto richiede un tunnel o reverse proxy HTTPS attivo verso il PC Windows.","muted",wrap=True)
+            layout.addWidget(hint)
+            def update_link():
+                try:
+                    is_public=mode.currentData()=="public"
+                    url=self.portal_web_url(public=is_public)
+                    link.setText(url);image.setPixmap(self.make_qr_pixmap(url,280))
+                    hint.setText(
+                        f"Portale HTTPS pubblico · inoltra la porta locale {self.match_http_port}; ogni accesso richiede il token privato."
+                        if is_public else "Scansiona dalla stessa rete Wi-Fi/LAN del PC Windows."
+                    )
+                except Exception as exc:
+                    link.clear();image.clear();hint.setText(str(exc))
+            mode.currentIndexChanged.connect(update_link)
+            update_link()
+            buttons=QHBoxLayout()
+            copy=QPushButton("COPIA LINK");copy.clicked.connect(lambda:QApplication.clipboard().setText(link.text()))
+            open_btn=QPushButton("APRI SUL PC");open_btn.clicked.connect(lambda:QDesktopServices.openUrl(QUrl(link.text())) if link.text() else None)
+            close=QPushButton("CHIUDI");close.clicked.connect(dialog.accept)
+            buttons.addWidget(copy);buttons.addWidget(open_btn);buttons.addWidget(close);layout.addLayout(buttons)
+            dialog.exec()
+        except Exception as exc:
+            QMessageBox.warning(self,"Portale non disponibile",str(exc))
 
     def export_all_match_qr_pdf(self):
         try:
@@ -3414,7 +3820,7 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
                 painter.setPen(QPen(QColor("#C9A15B"),3))
                 painter.setBrush(QColor("#FFFFFF"))
                 painter.drawRoundedRect(QRect(x,y,cell_w,cell_h),18,18)
-                url=f"http://{host}:{port}/match/{urllib.parse.quote(gid,safe='')}"
+                url=f"http://{host}:{port}/match/{urllib.parse.quote(gid,safe='')}?token={urllib.parse.quote(self.spectator_token,safe='')}"
                 pix=self.make_qr_pixmap(url,260)
                 qr_size=min(300,cell_h-90)
                 painter.drawPixmap(QRect(x+18,y+22,qr_size,qr_size),pix)
@@ -4452,6 +4858,39 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
         referee.body.addWidget(self.referee_input)
         layout.addWidget(referee)
 
+        spectator = Card(
+            "Portale spettatori · rete locale e Internet",
+            "Il portale pubblica tavoli, scacchiere, orologi e classifica. Per l'accesso da Internet configura un tunnel o reverse proxy HTTPS verso la porta locale indicata; l'EXE non apre porte sul router."
+        )
+        self.public_base_url_input=QLineEdit(self.public_base_url)
+        self.public_base_url_input.setPlaceholderText("https://live.tuodominio.it")
+        spectator.body.addWidget(ui_label("INDIRIZZO PUBBLICO HTTPS (OPZIONALE)", "field"))
+        spectator.body.addWidget(self.public_base_url_input)
+        self.long_match_combo=QComboBox()
+        for minutes,label in ((60,"60 minuti"),(90,"90 minuti"),(120,"120 minuti"),(180,"180 minuti"),(240,"4 ore")):
+            self.long_match_combo.addItem(label,minutes)
+        current_long=self.long_match_combo.findData(self.long_match_minutes)
+        if current_long>=0:self.long_match_combo.setCurrentIndex(current_long)
+        spectator.body.addWidget(ui_label("AVVISO PARTITA OLTRE DURATA", "field"))
+        spectator.body.addWidget(self.long_match_combo)
+        remote_actions=QHBoxLayout()
+        portal_qr=QPushButton("QR PORTALE · TUTTI I TAVOLI")
+        portal_qr.setObjectName("PrimaryButton")
+        portal_qr.clicked.connect(self.show_portal_qr_dialog)
+        rotate_token=QPushButton("RINNOVA TOKEN DI ACCESSO")
+        rotate_token.clicked.connect(self.rotate_spectator_token)
+        remote_actions.addWidget(portal_qr)
+        remote_actions.addWidget(rotate_token)
+        remote_actions.addStretch(1)
+        spectator.body.addLayout(remote_actions)
+        self.spectator_config_hint=ui_label(
+            f"Token privato attivo · server non avviato · {self.public_base_url or 'accesso Internet non configurato'}. "
+            "Il link pubblico richiede HTTPS e un tunnel attivo verso il PC arbitro.",
+            "muted",wrap=True
+        )
+        spectator.body.addWidget(self.spectator_config_hint)
+        layout.addWidget(spectator)
+
         regulation = Card("Regolamento applicato", "Le cadenze sono vincolate alle regole della competizione.")
         timing = QHBoxLayout()
         for heading, value in [("QUALIFICAZIONE", "15 + 3"), ("SEMIFINALI E FINALI", "30 + 10")]:
@@ -4523,6 +4962,7 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
             ("BACKUP DATI", self.export_backup), ("RIPRISTINA BACKUP", self.restore_backup),
             ("ESPORTA PGN TORNEO", self.export_all_pgn), ("CLASSIFICA CSV", self.export_standings_csv),
             ("CLASSIFICA PDF", self.export_standings_pdf), ("REPORT UFFICIALE PDF", self.export_tournament_report_pdf),
+            ("PACCHETTO FINALE · PDF + PGN + DATI", self.export_final_report_package),
             ("REGISTRO CSV", self.export_audit_csv),
         ]
         for index, (text, callback) in enumerate(operations):
@@ -4638,12 +5078,55 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
         self.statusBar().showMessage(f"Profilo '{profile_name}' applicato.",2500)
 
     def save_settings(self):
+        public_url=self.public_base_url_input.text().strip().rstrip("/")
+        if public_url:
+            parsed=urlparse(public_url)
+            if parsed.scheme!="https" or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ("","/"):
+                QMessageBox.warning(
+                    self,"Indirizzo pubblico non valido",
+                    "Inserisci un'origine HTTPS senza credenziali, query o percorso, ad esempio https://live.tuodominio.it. "
+                    "Il dominio deve essere instradato al server locale tramite tunnel o reverse proxy."
+                )
+                return
         self.referee=self.referee_input.text().strip()
+        self.public_base_url=public_url
+        self.long_match_minutes=int(self.long_match_combo.currentData() or 120)
         self._read_ui_preferences()
         self.tie_break="Regolamento Art. 8"
-        self.log_operation("Impostazioni torneo","","",f"arbitro={self.referee}; spareggio={self.tie_break}")
+        self.log_operation("Impostazioni torneo","","",f"arbitro={self.referee}; spareggio={self.tie_break}; portale={self.public_base_url or 'solo LAN'}")
         self.save(); self.refresh_all()
+        if self.public_base_url:
+            try:
+                self.start_match_web_server()
+            except Exception as exc:
+                self.record_operational_alert("Server spettatori non avviato",str(exc),"danger","settings","local-server-start")
+                QMessageBox.warning(self,"Portale non avviato",str(exc))
+        self.refresh_spectator_config_hint()
+        self.refresh_notification_badge()
         self.statusBar().showMessage("Impostazioni torneo salvate.",2500)
+
+    def refresh_spectator_config_hint(self):
+        label=getattr(self,"spectator_config_hint",None)
+        if label is None:return
+        local=f"Server attivo su {self.match_http_host}:{self.match_http_port}" if self.match_http_server is not None else "Server in attesa del primo QR"
+        remote=self.public_base_url or "accesso Internet non configurato"
+        label.setText(
+            f"Token di accesso privato attivo · {local} · {remote}. "
+            "Per l'accesso remoto il tunnel HTTPS deve inoltrare la porta locale del server e restare attivo."
+        )
+
+    def rotate_spectator_token(self):
+        answer=QMessageBox.question(
+            self,"Rinnovare il token spettatori?",
+            "Tutti i QR e i link già distribuiti smetteranno di funzionare. I nuovi link useranno una chiave casuale diversa.",
+            QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if answer!=QMessageBox.StandardButton.Yes:return
+        self.spectator_token=secrets.token_urlsafe(32)
+        self.log_operation("Token spettatori rinnovato","","","Link precedenti revocati")
+        self.save()
+        self.statusBar().showMessage("Token rinnovato: ristampa o ridistribuisci i QR.",4500)
 
     def install_shortcuts(self):
         shortcuts=[("Ctrl+S",self.save),("Ctrl+E",self.export_all_pgn),
@@ -5401,10 +5884,8 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
         profile_info = self.player_profile_info(player_id)
         colors = data["colors"]
         errors = {
-            key: sum(
-                1 for reviews in self.move_reviews.values() for item in reviews
-                if item.get("player") == player_id and str(item.get("label", "")).upper() == key
-            )
+            key: sum(1 for reviews in self.move_reviews.values() for item in reviews
+                     if item.get("player") == player_id and str(item.get("label", "")).upper() == key)
             for key in ("IMPRECISIONE", "ERRORE", "GRAVE ERRORE")
         }
         timing = player_time_statistics(self.move_times, player_id)
@@ -5420,50 +5901,37 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
         writer.setResolution(150)
         painter = QPainter(writer)
         try:
-            margin = 170
-            width = writer.width() - margin * 2
-            y = margin
+            margin, width, y = 170, writer.width() - 340, 170
             page_height = writer.height()
-
             def write(text, size=10, bold=False, gap=14):
                 nonlocal y
                 font = QFont("Segoe UI", size, QFont.Weight.Bold if bold else QFont.Weight.Normal)
-                painter.setFont(font)
-                painter.setPen(QColor("#202A35"))
-                rect = painter.fontMetrics().boundingRect(
-                    0, 0, width, 1800, Qt.TextFlag.TextWordWrap, str(text)
-                )
+                painter.setFont(font); painter.setPen(QColor("#202A35"))
+                rect = painter.fontMetrics().boundingRect(0, 0, width, 1800, Qt.TextFlag.TextWordWrap, str(text))
                 height = max(size + 10, rect.height())
                 if y + height + gap > page_height - margin:
-                    writer.newPage()
-                    y = margin
+                    writer.newPage(); y = margin
                 painter.drawText(QRect(margin, y, width, height + 4), Qt.TextFlag.TextWordWrap, str(text))
                 y += height + gap
-
-            painter.setPen(QColor("#9A6A18"))
-            painter.setFont(QFont("Segoe UI", 20, QFont.Weight.Bold))
-            painter.drawText(QRect(margin, y, width, 48), Qt.AlignmentFlag.AlignLeft, "COPPA DEI 5 RE")
-            y += 62
+            painter.setPen(QColor("#9A6A18")); painter.setFont(QFont("Segoe UI", 20, QFont.Weight.Bold))
+            painter.drawText(QRect(margin, y, width, 48), Qt.AlignmentFlag.AlignLeft, "COPPA DEI 5 RE"); y += 62
             write(f"SCHEDA PERSONALE · {name(player_id)}", 15, True, 8)
             write(f"Generata il {datetime.now().strftime('%d/%m/%Y alle %H:%M')}")
-            write(f"Classifica attuale: {next(i for i, row in enumerate(self.standings(), 1) if row['id'] == player_id)}° posto · {data['points']:.1f} punti netti")
+            position = next(i for i, row in enumerate(self.standings(), 1) if row["id"] == player_id)
+            write(f"Classifica attuale: {position}° posto · {data['points']:.1f} punti netti")
             write(f"Partite: {data['played']} · Vittorie: {data['wins']} · Patte: {data['draws']} · Sconfitte: {data['losses']} · Penalità: {data['penalty']:+.1f}")
             ratings = profile_info.get("ratings", {})
-            rating_text = " · ".join(
-                f"{label}: {ratings.get(key) if ratings.get(key) is not None else 'N/D'}"
-                for label, key in (("Bullet", "bullet"), ("Blitz", "blitz"), ("Rapid", "rapid"))
-            )
+            rating_text = " · ".join(f"{label}: {ratings.get(key) if ratings.get(key) is not None else 'N/D'}"
+                                     for label, key in (("Bullet", "bullet"), ("Blitz", "blitz"), ("Rapid", "rapid")))
             write(f"Rating Chess.com · {rating_text}")
             write("RENDIMENTO PER COLORE", 12, True, 6)
             for color, label in (("white", "Bianco"), ("black", "Nero")):
-                row = colors[color]
-                total = row["played"]
+                row = colors[color]; total = row["played"]
                 if total:
                     write(f"{label}: {row['wins']} vittorie ({row['wins']/total*100:.1f}%), "
                           f"{row['draws']} patte ({row['draws']/total*100:.1f}%), "
                           f"{row['losses']} sconfitte ({row['losses']/total*100:.1f}%) · {total} partite")
-                else:
-                    write(f"{label}: nessuna partita conclusa.")
+                else: write(f"{label}: nessuna partita conclusa.")
             write("GAME REVIEW STOCKFISH", 12, True, 6)
             accuracy_label = "N/D" if data["accuracy"] is None else f"{data['accuracy']:.1f}%"
             write(f"Precisione media disponibile: {accuracy_label} · Mosse valutate: {data['reviewed_moves']}")
@@ -5482,22 +5950,21 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
             write(" · ".join(f"{opening}: {count}" for opening, count in openings[:8]) or "Nessuna apertura registrata.")
             write("STORICO PARTITE", 12, True, 6)
             for item in data["history"]:
-                result = item["outcome"]
                 accuracy = "N/D" if item["accuracy"] is None else f"{item['accuracy']:.1f}%"
                 write(f"Round {item['round']} · {item['gid']} · {item['color'].upper()} · "
-                      f"vs {name(item['opponent'])} · {result} · {item['opening']} · precisione {accuracy}", 9, gap=8)
-            painter.setPen(QColor("#7A8490"))
-            painter.setFont(QFont("Segoe UI", 8))
+                      f"vs {name(item['opponent'])} · {item['outcome']} · {item['opening']} · precisione {accuracy}", 9, gap=8)
+            painter.setPen(QColor("#7A8490")); painter.setFont(QFont("Segoe UI", 8))
             painter.drawText(QRect(margin, page_height - margin + 35, width, 24),
                              "Documento statistico generato dai dati locali della Coppa dei 5 Re.")
-        finally:
-            painter.end()
+        finally: painter.end()
         self.statusBar().showMessage(f"Scheda personale PDF esportata per {name(player_id)}.", 3500)
 
-    def export_tournament_report_pdf(self):
-        path,_=QFileDialog.getSaveFileName(self,"Esporta report ufficiale","Report-Ufficiale-C5R.pdf","PDF (*.pdf)")
+    def export_tournament_report_pdf(self,destination=None,announce=True):
+        path=destination
+        if path is None:
+            path,_=QFileDialog.getSaveFileName(self,"Esporta report ufficiale","Report-Ufficiale-C5R.pdf","PDF (*.pdf)")
         if not path:
-            return
+            return None
         writer=QPdfWriter(path)
         writer.setTitle("Report ufficiale · Coppa dei 5 Re")
         writer.setCreator("Coppa dei 5 Re · Control Room")
@@ -5554,6 +6021,10 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
             write_line("Cadenze regolamentari: qualificazione 15+3 · semifinali e finali 30+10")
             write_line(f"Spareggi: {self.tie_break or 'Regolamento Art. 8'}")
             write_line(f"Generato il: {datetime.now().strftime('%d/%m/%Y alle %H:%M:%S')}")
+            completed=sum(1 for value in self.results.values() if value not in (None,"VOID"))+sum(1 for value in self.playoff_results.values() if value not in (None,"VOID"))
+            valid_void=sum(1 for value in self.results.values() if value=="VOID")
+            total_moves=sum(len(value) for value in self.moves.values())
+            write_line(f"Quadro torneo: {completed} partite concluse · {valid_void} annullate/escluse · {total_moves} mosse registrate · {len(self.incident_reports)} verbali/incidenti.")
             section("Classifica generale")
             write_line("POS.   GIOCATORE                         G   V   X   P   PEN.       PUNTI NETTI",9,True)
             for position,row in enumerate(self.standings(),1):
@@ -5561,6 +6032,17 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
                     f"{row['played']:>2}  {row['wins']:>2}  {row['draws']:>2}  {row['losses']:>2}  "
                     f"{row['penalty']:>+6.1f}     {row['points']:>6.1f}")
                 write_line(line,9)
+            section("Statistiche individuali")
+            raw,played,wins,draws,losses=self.raw_stats()
+            for row in self.standings():
+                player=row["id"]
+                rate=(wins[player]/played[player]*100.0) if played[player] else 0.0
+                write_line(
+                    f"{name(player)} · {played[player]} partite · {wins[player]} vittorie · "
+                    f"{draws[player]} patte · {losses[player]} sconfitte · {rate:.1f}% vittorie · "
+                    f"{row['points']:.1f} punti netti",
+                    9
+                )
             section("Analisi statistica del torneo")
             summary = tournament_summary(
                 GAMES, self.results, self.moves, self.move_reviews, self.move_times,
@@ -5593,6 +6075,17 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
                 elif result is None:
                     result="Da disputare"
                 write_line(f"Round {rnd} · {gid}   |   {name(white)} – {name(black)}   |   {result}")
+            section("Mosse e partite")
+            for gid,rnd,white,black in GAMES:
+                if not self.moves.get(gid):
+                    continue
+                try:
+                    pgn_node=self.build_pgn_game(gid)
+                    sans=pgn_node.accept(chess.pgn.StringExporter(headers=False,variations=False,comments=False)).strip()
+                    write_line(f"Round {rnd} · {gid} · {name(white)} – {name(black)}",9,True)
+                    write_line(sans or "Nessuna mossa SAN disponibile",8,gap=7)
+                except Exception as exc:
+                    write_line(f"{gid} · PGN non disponibile: {exc}",8)
             section("Playoff")
             for key,label in (("sf1","Semifinale 1"),("sf2","Semifinale 2"),("third","3°/4° posto"),("final","Finale")):
                 result=self.playoff_results.get(key,"Da disputare")
@@ -5614,6 +6107,14 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
             for item in self.audit_log[-80:]:
                 write_line(f"{item.get('time','')} · {item.get('action','')} · {item.get('entity','')} · "
                     f"{item.get('before','')} → {item.get('after','')} · {item.get('detail','')}",8)
+            section("Verbali e note arbitrali")
+            if not self.incident_reports and not self.match_notes:
+                write_line("Nessun verbale o nota arbitrale registrati.")
+            for incident in self.incident_reports:
+                write_line("Verbale · "+json.dumps(incident,ensure_ascii=False,default=str),8)
+            for gid,notes in self.match_notes.items():
+                for note in notes:
+                    write_line(f"Nota · {gid} · {note.get('time','')} · {note.get('referee','')} · {note.get('kind','Nota')} · {note.get('text','')}",8)
             section("Attestazione")
             write_line("Il presente documento riepiloga i dati registrati nella Control Room alla data di generazione. "
                 "Eventuali rettifiche successive devono essere annotate nel registro arbitrale.")
@@ -5621,7 +6122,104 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
             write_line("Data: ____________________________     Firma: ______________________________",10)
         finally:
             painter.end()
-        self.statusBar().showMessage("Report ufficiale PDF esportato.",3000)
+        if announce:
+            self.statusBar().showMessage("Report ufficiale PDF esportato.",3000)
+        return str(path)
+
+    def export_final_report_package(self):
+        destination,_=QFileDialog.getSaveFileName(
+            self,"Crea pacchetto finale del torneo","Pacchetto-Finale-C5R.zip","Archivio ZIP (*.zip)"
+        )
+        if not destination:
+            return
+        if not destination.lower().endswith(".zip"):
+            destination += ".zip"
+        temp_root=Path(tempfile.mkdtemp(prefix="c5r-final-report-"))
+        try:
+            report_path=temp_root/"Report-Ufficiale-C5R.pdf"
+            self.export_tournament_report_pdf(str(report_path),announce=False)
+            pgn_dir=temp_root/"PGN"
+            pgn_dir.mkdir(parents=True,exist_ok=True)
+            exporter=chess.pgn.StringExporter(headers=True,variations=False,comments=True)
+            pgn_count=0
+            for gid,round_no,white,black in GAMES:
+                node=self.build_pgn_game(gid)
+                (pgn_dir/f"{gid}.pgn").write_text(
+                    node.accept(chess.pgn.StringExporter(headers=True,variations=False,comments=True)),encoding="utf-8"
+                )
+                pgn_count+=1
+            for gid in ("sf1","sf2","third","final"):
+                node=self.build_playoff_pgn(gid)
+                (pgn_dir/f"{gid}.pgn").write_text(
+                    node.accept(chess.pgn.StringExporter(headers=True,variations=False,comments=True)),encoding="utf-8"
+                )
+                pgn_count+=1
+
+            standings_path=temp_root/"Classifica.csv"
+            with standings_path.open("w",newline="",encoding="utf-8-sig") as stream:
+                writer=csv.writer(stream,delimiter=";")
+                writer.writerow(["Posizione","Giocatore","Partite","Vittorie","Patte","Sconfitte","Penalita","Punti netti"])
+                for position,row in enumerate(self.standings(),1):
+                    writer.writerow([position,name(row["id"]),row["played"],row["wins"],row["draws"],
+                                     row["losses"],row["penalty"],row["points"]])
+
+            audit_path=temp_root/"Registro-arbitrale.csv"
+            with audit_path.open("w",newline="",encoding="utf-8-sig") as stream:
+                writer=csv.writer(stream,delimiter=";")
+                writer.writerow(["Data","Arbitro","Azione","Oggetto","Prima","Dopo","Dettagli"])
+                for entry in self.audit_log:
+                    writer.writerow([entry.get(key,"") for key in
+                        ("time","referee","action","entity","before","after","detail")])
+
+            matches=[]
+            for gid,round_no,white,black in GAMES:
+                node=self.build_pgn_game(gid)
+                moves=node.accept(chess.pgn.StringExporter(headers=False,variations=False,comments=False)).strip()
+                matches.append({"id":gid,"round":round_no,"white":name(white),"black":name(black),
+                                "result":self.results.get(gid),"moves":moves})
+            summary={
+                "tournament":"Coppa dei 5 Re",
+                "generated_at":datetime.now().isoformat(timespec="seconds"),
+                "referee":self.referee,
+                "time_controls":{"qualification":"15+3","playoffs":"30+10"},
+                "standings":[
+                    {"position":position,"player":name(row["id"]),"played":row["played"],
+                     "wins":row["wins"],"draws":row["draws"],"losses":row["losses"],
+                     "penalty":row["penalty"],"points":row["points"]}
+                    for position,row in enumerate(self.standings(),1)
+                ],
+                "matches":matches,
+                "playoff_results":self.playoff_results,
+                "playoff_winners":self.playoff_winners,
+                "penalties":self.penalties,
+                "incidents":self.incident_reports,
+                "notes":self.match_notes,
+                "total_moves":sum(len(value) for value in self.moves.values()),
+            }
+            (temp_root/"Riepilogo.json").write_text(
+                json.dumps(summary,ensure_ascii=False,indent=2,default=str),encoding="utf-8"
+            )
+            manifest={
+                "files":["Report-Ufficiale-C5R.pdf","Classifica.csv","Registro-arbitrale.csv",
+                         "Riepilogo.json","PGN/*.pgn"],
+                "pgn_files":pgn_count,
+                "generated_at":summary["generated_at"],
+            }
+            (temp_root/"LEGGIMI.txt").write_text(
+                "Pacchetto finale Coppa dei 5 Re\nContiene report PDF, classifica, registro arbitrale, "
+                "riepilogo JSON e PGN individuali per qualificazione e playoff.\n"
+                "I recapiti privati dei giocatori non sono inclusi.\n",
+                encoding="utf-8"
+            )
+            with zipfile.ZipFile(destination,"w",compression=zipfile.ZIP_DEFLATED,compresslevel=7) as archive:
+                for item in temp_root.rglob("*"):
+                    if item.is_file():
+                        archive.write(item,item.relative_to(temp_root).as_posix())
+            self.statusBar().showMessage(f"Pacchetto finale creato · {pgn_count} PGN inclusi.",5000)
+        except Exception as exc:
+            QMessageBox.critical(self,"Report finale non creato",f"Errore durante la generazione del pacchetto: {exc}")
+        finally:
+            shutil.rmtree(temp_root,ignore_errors=True)
 
     def export_audit_csv(self):
         path,_=QFileDialog.getSaveFileName(self,"Esporta registro","Registro-C5R.csv","CSV (*.csv)")
@@ -6199,6 +6797,13 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
             if value!="1/2-1/2":
                 self.playoff_winners.pop(key,None)
         self.log_operation("Risultato playoff",key,old or "In corso",value or "In corso",detail)
+        if value not in (None,"VOID"):
+            timed_out="bandierina" in detail.lower() or "tempo" in detail.lower()
+            self.record_operational_alert(
+                "Tempo playoff esaurito · risultato da validare" if timed_out else "Risultato playoff da verificare",
+                f"{key.upper()} · esito {value} · {detail}",
+                "danger" if timed_out else "warning","playoffs",f"playoff:{key}:{len(self.audit_log)}"
+            )
         if key in ("sf1","sf2") and old is not None and old!=value:
             for downstream in ("final","third"):
                 previous=self.playoff_results.pop(downstream,None)
@@ -6598,6 +7203,10 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
         self.broadcast.activateWindow()
     def closeEvent(self,event):
         if hasattr(self,"clock_timer"): self.clock_timer.stop()
+        if hasattr(self,"notification_timer"): self.notification_timer.stop()
+        probe=getattr(self,"_public_probe_thread",None)
+        if probe is not None and probe.isRunning():
+            probe.wait(6000)
         server=getattr(self,"match_http_server",None)
         if server is not None:
             try:
