@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QComboBox,
     QDoubleSpinBox, QLineEdit, QVBoxLayout, QHBoxLayout, QGridLayout, QTabWidget,
     QTableWidget, QTableWidgetItem, QHeaderView, QScrollArea, QMessageBox,
-    QListWidget, QInputDialog, QFileDialog, QAbstractItemView, QSizePolicy,
+    QListWidget, QListWidgetItem, QInputDialog, QFileDialog, QAbstractItemView, QSizePolicy,
     QDialog, QDialogButtonBox, QProgressBar, QStackedWidget, QPlainTextEdit
 )
 
