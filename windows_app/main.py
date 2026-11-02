@@ -780,7 +780,7 @@ class MainWindow(QMainWindow):
     def _history_snapshot(self,payload=None):
         data=dict(payload or self.state_payload())
         # Clocks and engine evaluations evolve without operator actions.
-        for key in ("clocks","eval_history","saved_at"):
+        for key in ("clocks","eval_history","saved_at","operational_alerts","spectator_token","public_base_url","long_match_minutes"):
             data.pop(key,None)
         return json.loads(json.dumps(data,ensure_ascii=False,sort_keys=True,default=str))
 
@@ -5049,7 +5049,14 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
         self.tie_break="Regolamento Art. 8"
         self.log_operation("Impostazioni torneo","","",f"arbitro={self.referee}; spareggio={self.tie_break}; portale={self.public_base_url or 'solo LAN'}")
         self.save(); self.refresh_all()
+        if self.public_base_url:
+            try:
+                self.start_match_web_server()
+            except Exception as exc:
+                self.record_operational_alert("Server spettatori non avviato",str(exc),"danger","settings","local-server-start")
+                QMessageBox.warning(self,"Portale non avviato",str(exc))
         self.refresh_spectator_config_hint()
+        self.refresh_notification_badge()
         self.statusBar().showMessage("Impostazioni torneo salvate.",2500)
 
     def refresh_spectator_config_hint(self):
@@ -7017,6 +7024,10 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
         self.broadcast.activateWindow()
     def closeEvent(self,event):
         if hasattr(self,"clock_timer"): self.clock_timer.stop()
+        if hasattr(self,"notification_timer"): self.notification_timer.stop()
+        probe=getattr(self,"_public_probe_thread",None)
+        if probe is not None and probe.isRunning():
+            probe.wait(6000)
         server=getattr(self,"match_http_server",None)
         if server is not None:
             try:
