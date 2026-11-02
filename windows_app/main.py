@@ -1386,12 +1386,15 @@ class MainWindow(QMainWindow):
         self.nav.finish()
 
         self.tabs = QStackedWidget()
+        # Keep page construction in exactly the same order as nav_items + pro_items + archive_items.
+        # A mismatch here routes "Testa a testa" to incident reports and vice versa.
         pages = [
             self.build_dashboard(), self.build_live(), self.build_draw_page(),
             self.build_calendar(), self.build_standings(), self.build_odds(),
             self.build_penalties(), self.build_playoffs(),
             self.build_players(), self.build_compare(), self.build_openings(), self.build_health(), self.build_communications(),
-            self.build_archive(), self.build_history(), self.build_incidents(), self.build_h2h(), self.build_audit(), self.build_settings(),
+            self.build_history(), self.build_archive(), self.build_h2h(), self.build_incidents(),
+            self.build_audit(), self.build_settings(),
         ]
         self._page_keys = [item[0] for item in nav_items + pro_items + archive_items]
         for page in pages:
