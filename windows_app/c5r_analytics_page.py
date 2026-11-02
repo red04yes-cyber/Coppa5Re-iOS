@@ -206,6 +206,14 @@ class TournamentAnalyticsPage(QWidget):
     def refresh_simulation(self):
         hypothetical = dict(self.app.results)
         for gid, combo in self.simulation_controls.items():
+            official_result = self.app.results.get(gid)
+            if official_result is not None:
+                combo.blockSignals(True)
+                combo.setCurrentIndex(0)
+                combo.blockSignals(False)
+                combo.setEnabled(False)
+                continue
+            combo.setEnabled(True)
             value = combo.currentData()
             if value:
                 hypothetical[gid] = value
