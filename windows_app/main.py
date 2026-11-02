@@ -3051,7 +3051,7 @@ class MainWindow(QMainWindow):
         finally:
             probe.close()
 
-    def match_web_html(self,gid):
+    def match_web_state(self,gid):
         match=next((item for item in GAMES if item[0]==gid),None)
         if match:
             _,rnd,white,black=match
@@ -3064,12 +3064,57 @@ class MainWindow(QMainWindow):
             result=self.playoff_results.get(gid) or "Da disputare"
         else:
             return None
-        def player_box(player_id):
+
+        board=self.get_board(gid)
+        move_text=[]
+        valid_uci=[]
+        notation_board=chess.Board()
+        for index,uci in enumerate(self.moves.get(gid,[]),1):
+            try:
+                move=chess.Move.from_uci(uci)
+                if move not in notation_board.legal_moves:
+                    break
+                san=notation_board.san(move)
+                move_text.append((f"{(index+1)//2}. " if index%2 else "")+san)
+                notation_board.push(move)
+                valid_uci.append(move.uci())
+            except Exception:
+                break
+
+        clock=self.clocks.get(gid,{})
+        clock_text=""
+        if clock:
+            clock_text=f"Bianco {math.ceil(float(clock.get('white',0)))}s · Nero {math.ceil(float(clock.get('black',0)))}s"
+        return {
+            "game_id":gid,
+            "round":round_label,
+            "white":name(white) if white else "Giocatore da definire",
+            "black":name(black) if black else "Giocatore da definire",
+            "result":str(result),
+            "fen":board.fen(),
+            "last_move":valid_uci[-1] if valid_uci else "",
+            "move_text":" ".join(move_text) or "Nessuna mossa registrata",
+            "turn":"Bianco" if board.turn==chess.WHITE else "Nero",
+            "clock_text":clock_text,
+            "ply":len(valid_uci),
+        }
+
+    def match_web_html(self,gid):
+        state=self.match_web_state(gid)
+        if state is None:
+            return None
+        match=next((item for item in GAMES if item[0]==gid),None)
+        if match:
+            white,black=match[2],match[3]
+        else:
+            white,black=getattr(self,"playoff_pairs",{}).get(gid,(None,None))
+
+        def player_box(player_id,side):
             if not player_id:
-                return "<div class='player'>Giocatore da definire</div>"
+                return f"<div class='player'><div class='avatar initials'>?</div><div><strong>{html.escape(state[side])}</strong><span>Da definire</span></div></div>"
             profile=self.player_profile_info(player_id)
             photo=profile.get("photo_data","")
-            avatar=(f"<img class='avatar' src='data:image/jpeg;base64,{photo}'>" if photo
+            avatar=(f"<img class='avatar' src='data:image/jpeg;base64,{photo}' alt=''>" if photo
                     else f"<div class='avatar initials'>{html.escape(name(player_id)[:1])}</div>")
             ratings=profile.get("ratings",{})
             rating_text=" · ".join(f"{label} {ratings[kind]}" for label,kind in
@@ -3079,37 +3124,128 @@ class MainWindow(QMainWindow):
             return (f"<div class='player'>{avatar}<div><strong>{html.escape(name(player_id))}</strong>"
                 f"<span>{html.escape(rating_text or 'Rating non inseriti')}</span>"
                 f"<a href='{chess_link}'>Chess.com · {html.escape(username)}</a></div></div>")
-        move_text=[]
-        if match is not None:
-            board=chess.Board()
-            for index,uci in enumerate(self.moves.get(gid,[]),1):
-                try:
-                    move=chess.Move.from_uci(uci)
-                    san=board.san(move)
-                    move_text.append((f"{(index+1)//2}. " if index%2 else "")+san)
-                    board.push(move)
-                except Exception:
-                    break
-        clock=self.clocks.get(gid,{})
-        clock_text=""
-        if clock:
-            clock_text=f"Bianco {math.ceil(float(clock.get('white',0)))}s · Nero {math.ceil(float(clock.get('black',0)))}s"
-        title=f"{html.escape(round_label)} · {html.escape(gid)}"
+
+        title=f"{html.escape(state['round'])} · {html.escape(gid)}"
+        state_json=json.dumps(state,ensure_ascii=True).replace("<","\\u003c").replace(">","\\u003e").replace("&","\\u0026")
+        state_path="/api/match/"+urllib.parse.quote(gid,safe="")
         return f"""<!doctype html><html lang='it'><head><meta charset='utf-8'>
-<meta name='viewport' content='width=device-width,initial-scale=1'><meta http-equiv='refresh' content='15'>
+<meta name='viewport' content='width=device-width,initial-scale=1'>
+<meta name='theme-color' content='#101720'>
 <title>Coppa dei 5 Re · {title}</title><style>
-body{{margin:0;padding:22px;background:#101720;color:#edf1f5;font-family:Segoe UI,Arial,sans-serif}}
-main{{max-width:760px;margin:auto}}.brand{{color:#c9a15b;font-weight:800;letter-spacing:2px}}
-.card{{background:#1b2633;border:1px solid #344252;border-radius:16px;padding:18px;margin:14px 0}}
-.player{{display:flex;gap:14px;align-items:center;margin:14px 0}}.avatar{{width:76px;height:76px;border-radius:50%;object-fit:cover}}
-.initials{{display:grid;place-items:center;background:#40566e;font-size:32px}}
-span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
-.result{{font-size:24px;font-weight:800;color:#e3c07f}}.muted{{color:#aab5c2}}
-</style></head><body><main><div class='brand'>COPPA DEI 5 RE · LIVE</div>
-<div class='card'><div class='muted'>{title}</div>{player_box(white)}<div class='result'>VS · {html.escape(str(result))}</div>{player_box(black)}
-<div class='muted'>{html.escape(clock_text)} · aggiornamento automatico ogni 15 secondi</div></div>
-<div class='card'><strong>Ultime mosse</strong><p>{html.escape(" ".join(move_text[-24:]) or "Nessuna mossa registrata")}</p></div>
-<div class='muted'>Pagina informativa in sola lettura sulla rete locale del torneo.</div></main></body></html>"""
+:root{{color-scheme:dark;--bg:#101720;--panel:#1b2633;--line:#344252;--gold:#e3c07f;--muted:#aab5c2}}
+*{{box-sizing:border-box}}body{{margin:0;padding:clamp(12px,3vw,28px);background:var(--bg);color:#edf1f5;font-family:Segoe UI,Arial,sans-serif}}
+main{{max-width:1080px;margin:auto}}header{{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap}}
+.brand{{color:#c9a15b;font-weight:900;letter-spacing:2px}}.live{{color:#78d6a0;font-size:13px;font-weight:800;letter-spacing:1px}}
+.card{{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:clamp(14px,2.5vw,22px);margin:14px 0}}
+.match{{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:16px}}
+.player{{display:flex;gap:14px;align-items:center;min-width:0}}.avatar{{width:64px;height:64px;border-radius:50%;object-fit:cover;flex:none}}
+.initials{{display:grid;place-items:center;background:#40566e;font-size:28px;font-weight:800}}
+.player strong{{display:block;font-size:clamp(15px,2vw,19px);overflow-wrap:anywhere}}
+.player span,.player a{{display:block;color:#b9c4d0;margin-top:5px;font-size:13px;overflow-wrap:anywhere}}a{{color:var(--gold)}}
+.score{{text-align:center;color:var(--gold);font-size:clamp(18px,3vw,24px);font-weight:900;white-space:nowrap}}
+.match-meta{{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:14px;color:var(--muted);font-size:13px}}
+.live-layout{{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(250px,.8fr);gap:16px;align-items:start}}
+.board-card{{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:clamp(12px,2vw,20px)}}
+.board-top{{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:12px}}
+.board-top strong{{font-size:14px;letter-spacing:.6px}}.turn{{color:var(--gold);font-weight:800;font-size:13px}}
+.board{{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));width:100%;aspect-ratio:1;border:4px solid #263648;border-radius:7px;overflow:hidden}}
+.square{{position:relative;display:grid;place-items:center;aspect-ratio:1;min-width:0;min-height:0}}
+.light{{background:#f0d9b5}}.dark{{background:#b58863}}
+.square.last-from,.square.last-to{{box-shadow:inset 0 0 0 4px rgba(250,204,21,.72)}}
+.piece{{font-family:'Segoe UI Symbol','DejaVu Sans',serif;font-size:clamp(22px,5.7vw,62px);line-height:1;user-select:none}}
+.piece.white{{color:#fffdf4;text-shadow:1px 1px 2px #282828,-1px -1px 1px #282828,1px -1px 1px #282828,-1px 1px 1px #282828}}
+.piece.black{{color:#171717;text-shadow:0 1px 1px rgba(255,255,255,.25)}}
+.coord{{position:absolute;font-size:clamp(8px,1.15vw,11px);font-weight:800;opacity:.72;line-height:1}}
+.coord.rank{{top:3px;left:4px}}.coord.file{{right:4px;bottom:3px}}
+.moves-card{{min-width:0}}.moves-title{{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px}}
+.move-count{{color:var(--muted);font-size:12px}}.move-list{{max-height:min(66vw,620px);overflow:auto;line-height:1.9;overflow-wrap:anywhere;font-family:ui-monospace,Consolas,monospace;font-size:14px;color:#edf1f5;white-space:normal}}
+.moves-empty{{color:var(--muted)}}.footer{{text-align:center;color:var(--muted);font-size:12px;padding:12px}}
+@media(max-width:680px){{.live-layout{{grid-template-columns:1fr}}.match{{grid-template-columns:1fr auto 1fr;gap:8px}}.avatar{{width:44px;height:44px}}.player{{gap:8px}}.player span,.player a{{font-size:11px}}.score{{font-size:17px}}.move-list{{max-height:240px}}}}
+</style></head><body><main>
+<header><div class='brand'>COPPA DEI 5 RE · LIVE</div><div class='live'>● AGGIORNAMENTO IN DIRETTA</div></header>
+<section class='card'>
+<div class='muted'>{title}</div>
+<div class='match'>{player_box(white,'white')}<div class='score'>VS<br><span id='result'>{html.escape(state['result'])}</span></div>{player_box(black,'black')}</div>
+<div class='match-meta'><span id='clock'>{html.escape(state['clock_text'] or 'Orologio non avviato')}</span><span id='turn'>Muove il {html.escape(state['turn'])}</span></div>
+</section>
+<section class='live-layout'>
+<div class='board-card'><div class='board-top'><strong>SCACCHIERA LIVE</strong><span class='turn' id='board-status'>Partita in corso</span></div>
+<div id='board' class='board' role='img' aria-label='Scacchiera aggiornata in tempo reale'></div>
+<div class='footer'>Vista spettatore · Bianco in basso · Ultima mossa evidenziata</div></div>
+<aside class='card moves-card'><div class='moves-title'><strong>CRONOLOGIA MOSSE</strong><span id='move-count' class='move-count'>{state['ply']} ply</span></div>
+<div id='move-list' class='move-list'>{html.escape(state['move_text'])}</div>
+<div class='footer'>La pagina controlla automaticamente le nuove mosse.</div></aside>
+</section>
+<div class='footer'>Coppa dei 5 Re · Pagina informativa in sola lettura sulla rete locale del torneo.</div>
+</main><script>
+const INITIAL_STATE={state_json};
+const STATE_URL={json.dumps(state_path)};
+const GLYPHS={{K:'♔',Q:'♕',R:'♖',B:'♗',N:'♘',P:'♙',k:'♚',q:'♛',r:'♜',b:'♝',n:'♞',p:'♟'}};
+const files='abcdefgh';
+function renderBoard(state){{
+  const parts=String(state.fen||'').split(' ');
+  const ranks=(parts[0]||'').split('/');
+  if(ranks.length!==8)return;
+  const last=String(state.last_move||'');
+  const from=last.length>=4?last.slice(0,2):'';
+  const to=last.length>=4?last.slice(2,4):'';
+  const board=document.getElementById('board');
+  const fragment=document.createDocumentFragment();
+  ranks.forEach((rank,row)=>{{
+    let file=0;
+    for(const token of rank){{
+      if(/[1-8]/.test(token)){{file+=Number(token);continue;}}
+      if(file>=8)break;
+      const squareName=files[file]+String(8-row);
+      const square=document.createElement('div');
+      square.className='square '+(((row+file)%2===1)?'dark':'light');
+      if(squareName===from)square.classList.add('last-from');
+      if(squareName===to)square.classList.add('last-to');
+      const piece=document.createElement('span');
+      piece.className='piece '+(token===token.toUpperCase()?'white':'black');
+      piece.textContent=GLYPHS[token]||'';
+      square.appendChild(piece);
+      if(file===0){{const coord=document.createElement('span');coord.className='coord rank';coord.textContent=String(8-row);square.appendChild(coord);}}
+      if(row===7){{const coord=document.createElement('span');coord.className='coord file';coord.textContent=files[file];square.appendChild(coord);}}
+      fragment.appendChild(square);
+      file+=1;
+    }}
+    while(file<8){{
+      const squareName=files[file]+String(8-row);
+      const square=document.createElement('div');
+      square.className='square '+(((row+file)%2===1)?'dark':'light');
+      if(squareName===from)square.classList.add('last-from');
+      if(squareName===to)square.classList.add('last-to');
+      if(file===0){{const coord=document.createElement('span');coord.className='coord rank';coord.textContent=String(8-row);square.appendChild(coord);}}
+      if(row===7){{const coord=document.createElement('span');coord.className='coord file';coord.textContent=files[file];square.appendChild(coord);}}
+      fragment.appendChild(square);file+=1;
+    }}
+  }});
+  board.replaceChildren(fragment);
+}}
+function renderState(state){{
+  renderBoard(state);
+  document.getElementById('result').textContent=state.result||'Da disputare';
+  document.getElementById('clock').textContent=state.clock_text||'Orologio non avviato';
+  document.getElementById('turn').textContent='Muove il '+(state.turn||'—');
+  document.getElementById('move-list').textContent=state.move_text||'Nessuna mossa registrata';
+  document.getElementById('move-count').textContent=String(state.ply||0)+' ply';
+  document.getElementById('board-status').textContent=state.result&&state.result!=='Da disputare'?'Partita conclusa':'Partita in corso';
+}}
+renderState(INITIAL_STATE);
+let pollBusy=false;
+async function poll(){{
+  if(pollBusy||document.hidden)return;
+  pollBusy=true;
+  try{{
+    const response=await fetch(STATE_URL+'?t='+Date.now(),{{cache:'no-store'}});
+    if(response.ok)renderState(await response.json());
+  }}catch(error){{}}
+  finally{{pollBusy=false;}}
+}}
+window.setInterval(poll,1000);
+document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}});
+</script></body></html>"""
 
     def start_match_web_server(self,host_hint=None):
         if self.match_http_server is not None:
@@ -3124,13 +3260,27 @@ span,a{{display:block;color:#b9c4d0;margin-top:5px}}a{{color:#e3c07f}}
                     self.send_header("Content-Type","text/plain; charset=utf-8")
                     self.send_header("Content-Length",str(len(body)))
                     self.end_headers(); self.wfile.write(body); return
-                if parsed.path.startswith("/match/"):
-                    gid=urllib.parse.unquote(parsed.path[len("/match/"):])
-                    content=app.match_web_html(gid)
-                    if content is None:
+                if parsed.path.startswith("/api/match/"):
+                    gid=urllib.parse.unquote(parsed.path[len("/api/match/"):])
+                    state=app.match_web_state(gid)
+                    if state is None:
                         self.send_error(404,"Partita non trovata")
                         return
-                    body=content.encode("utf-8")
+                    body=json.dumps(state,ensure_ascii=True).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type","application/json; charset=utf-8")
+                    self.send_header("Content-Length",str(len(body)))
+                    self.send_header("Cache-Control","no-store")
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                if parsed.path.startswith("/match/"):
+                    gid=urllib.parse.unquote(parsed.path[len("/match/"):])
+                    page=app.match_web_html(gid)
+                    if page is None:
+                        self.send_error(404,"Partita non trovata")
+                        return
+                    body=page.encode("utf-8")
                     self.send_response(200)
                     self.send_header("Content-Type","text/html; charset=utf-8")
                     self.send_header("Content-Length",str(len(body)))
