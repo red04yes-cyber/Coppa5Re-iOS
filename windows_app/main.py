@@ -5955,7 +5955,7 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
         temp_root=Path(tempfile.mkdtemp(prefix="c5r-final-report-"))
         try:
             report_path=temp_root/"Report-Ufficiale-C5R.pdf"
-            self.export_tournament_report_pdf(report_path,announce=False)
+            self.export_tournament_report_pdf(str(report_path),announce=False)
             pgn_dir=temp_root/"PGN"
             pgn_dir.mkdir(parents=True,exist_ok=True)
             exporter=chess.pgn.StringExporter(headers=True,variations=False,comments=True)
