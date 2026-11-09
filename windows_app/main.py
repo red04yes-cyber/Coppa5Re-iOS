@@ -3816,7 +3816,7 @@ document.addEventListener('visibilitychange',()=>{{if(!document.hidden)poll();}}
             layout.addWidget(mode)
             image=QLabel(); image.setAlignment(Qt.AlignmentFlag.AlignCenter)
             layout.addWidget(image)
-            link=QLineEdit(); link.setReadOnly(True); link.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            link=QLineEdit(); link.setReadOnly(True)  # QLineEdit non espone setTextInteractionFlags in PySide6
             layout.addWidget(link)
             hint=ui_label("Accesso da Internet disponibile solo quando il tunnel HTTPS è attivo e inoltra alla porta locale indicata nelle Impostazioni.","muted",wrap=True)
             layout.addWidget(hint)
