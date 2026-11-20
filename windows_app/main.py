@@ -461,6 +461,11 @@ class BoardCard(QFrame):
         self.next_move_btn=QPushButton("Mossa successiva  ▶"); self.next_move_btn.clicked.connect(self.next_move)
         self.view_ply=QLabel("0 / 0"); self.view_ply.setObjectName("Muted")
         nav.addWidget(self.prev_move_btn); nav.addWidget(self.view_ply,1); nav.addWidget(self.next_move_btn); lay.addLayout(nav)
+        counters=QHBoxLayout()
+        self.total_moves=QLabel("MOSSE GIOCATE · 0"); self.total_moves.setObjectName("Eyebrow")
+        self.no_progress=QLabel("SENZA CATTURE / MOSSE DI PEDONE · 0/100"); self.no_progress.setObjectName("Muted")
+        counters.addWidget(self.total_moves); counters.addStretch(); counters.addWidget(self.no_progress)
+        lay.addLayout(counters)
         self.history=QLabel("MOSSE  ·  Nessuna mossa"); self.history.setObjectName("Muted"); self.history.setWordWrap(True); self.history.setMaximumHeight(48); lay.addWidget(self.history)
         self.move_quality=QLabel("GAME REVIEW C5R · in attesa della prima mossa")
         self.move_quality.setObjectName("Muted"); self.move_quality.setWordWrap(True); lay.addWidget(self.move_quality)
@@ -556,6 +561,15 @@ class BoardCard(QFrame):
         )
         self.clock_btn.setEnabled(not finished and not state.get("started"))
         self.clock_btn.setText("OROLOGIO IN CORSO" if state.get("started") else "AVVIA OROLOGIO")
+    def refresh_move_counters(self, board, total_plies=None):
+        total = len(board.move_stack) if total_plies is None else total_plies
+        # python-chess halfmove_clock counts half-moves since the last pawn move or capture.
+        # The FIDE 50-move claim threshold is 100 half-moves.
+        quiet_plies = min(100, board.halfmove_clock)
+        self.total_moves.setText(f"MOSSE GIOCATE · {total}")
+        self.no_progress.setText(
+            f"SENZA CATTURE / MOSSE DI PEDONE · {quiet_plies}/100 semimosse"
+        )
     def refresh_move_quality(self):
         reviews=self.app.move_reviews.get(self.game_id,[])
         if not reviews:
@@ -614,6 +628,7 @@ class BoardCard(QFrame):
                           f"AL MUOVERE: {'BIANCO' if board.turn else 'NERO'} · {board.fullmove_number}ª mossa")
         self.board.set_position(board,finished)
         self.update_evaluation(gid,board)
+        self.refresh_move_counters(board,ply)
         self.view_ply.setText(f"{ply} / {ply}")
         self.prev_move_btn.setEnabled(ply>0)
         self.next_move_btn.setEnabled(False)
@@ -660,6 +675,7 @@ class BoardCard(QFrame):
                           f"{'REVISIONE · ' if self.history_index<len(board.move_stack) else ''}AL MUOVERE: {'BIANCO' if visible.turn else 'NERO'} · {visible.fullmove_number}ª mossa")
         self.board.set_position(visible,bool(self.app.results.get(gid)) or self.history_index<len(board.move_stack))
         self.update_evaluation(gid, visible)
+        self.refresh_move_counters(visible,len(board.move_stack))
         self.view_ply.setText(f"{self.history_index} / {len(board.move_stack)}")
         self.prev_move_btn.setEnabled(self.history_index>0)
         self.next_move_btn.setEnabled(self.history_index<len(board.move_stack))
