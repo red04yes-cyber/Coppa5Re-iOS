@@ -492,13 +492,17 @@ class BoardCard(QFrame):
         notes=QPushButton("NOTA"); notes.clicked.connect(lambda:self.app.prompt_match_note(self.game_id))
         view_notes=QPushButton("VEDI NOTE"); view_notes.clicked.connect(lambda:self.app.show_match_notes(self.game_id))
         draw_offer=QPushButton("PATTA CONCORDATA"); draw_offer.clicked.connect(lambda:self.app.offer_draw(self.game_id))
+        self.claim_draw_btn=QPushButton("RECLAMA PATTA · RIPETIZIONE")
+        self.claim_draw_btn.setToolTip("Disponibile quando la posizione è ripetuta tre volte o si raggiungono 50 mosse senza catture né mosse di pedone.")
+        self.claim_draw_btn.clicked.connect(lambda:self.app.claim_draw(self.game_id))
         resign=QPushButton("ABBANDONO"); resign.clicked.connect(lambda:self.app.resign_game(self.game_id))
         force=QPushButton("FORZA RISULTATO"); force.clicked.connect(lambda:self.app.force_game_result(self.game_id))
         control_top.addWidget(self.undo); control_top.addWidget(self.clock_btn); control_top.addStretch()
         control_top.addWidget(self.rotate_btn); control_top.addWidget(self.theme_btn)
         control_top.addWidget(print_sheet); control_top.addWidget(show_qr)
         control_bottom.addWidget(notes); control_bottom.addWidget(view_notes)
-        control_bottom.addWidget(draw_offer); control_bottom.addWidget(resign); control_bottom.addWidget(force)
+        control_bottom.addWidget(draw_offer); control_bottom.addWidget(self.claim_draw_btn)
+        control_bottom.addWidget(resign); control_bottom.addWidget(force)
         control_bottom.addWidget(self.engine_btn); control_bottom.addStretch(); control_bottom.addWidget(pgn); control_bottom.addWidget(reset)
         controls.addLayout(control_top); controls.addLayout(control_bottom); lay.addLayout(controls)
         self.refresh()
@@ -561,6 +565,17 @@ class BoardCard(QFrame):
         )
         self.clock_btn.setEnabled(not finished and not state.get("started"))
         self.clock_btn.setText("OROLOGIO IN CORSO" if state.get("started") else "AVVIA OROLOGIO")
+        self.refresh_claim_draw_button(board)
+    def refresh_claim_draw_button(self, board):
+        finished = self.app.results.get(self.game_id) is not None
+        claimable = board.can_claim_threefold_repetition() or board.can_claim_fifty_moves()
+        self.claim_draw_btn.setEnabled(not finished and claimable)
+        if board.can_claim_threefold_repetition():
+            self.claim_draw_btn.setText("RECLAMA PATTA · 3 RIPETIZIONI")
+        elif board.can_claim_fifty_moves():
+            self.claim_draw_btn.setText("RECLAMA PATTA · 50 MOSSE")
+        else:
+            self.claim_draw_btn.setText("RECLAMA PATTA · NON DISPONIBILE")
     def refresh_move_counters(self, board, total_plies=None):
         total = len(board.move_stack) if total_plies is None else total_plies
         # python-chess halfmove_clock counts half-moves since the last pawn move or capture.
@@ -1072,13 +1087,15 @@ class MainWindow(QMainWindow):
             service=self.get_engine_service()
             if service is not None:
                 service.request_move(gid,board_before,move.uci(),player_id,len(b.move_stack))
-            outcome=b.outcome(claim_draw=True)
+            # Only automatic endings are applied here (e.g. fivefold repetition
+            # or 75 moves). Threefold repetition and the 50-move rule require a claim.
+            outcome=b.outcome(claim_draw=False)
             if outcome is not None:
                 clock["started"]=False
                 reason=outcome.termination.name.replace("_"," ").lower()
                 self._move_save_timer.stop()
                 self._move_save_pending=False
-                self.set_result(gid,b.result(claim_draw=True),confirm=False,detail=reason,termination="normal")
+                self.set_result(gid,b.result(claim_draw=False),confirm=False,detail=reason,termination="normal")
                 self.statusBar().showMessage("Partita terminata automaticamente: "+reason,5000)
                 return
             card=next((item for item in getattr(self,"live_cards",[]) if item.game_id==gid),None)
@@ -1113,6 +1130,28 @@ class MainWindow(QMainWindow):
         for card in getattr(self,"live_cards",[]):
             if card.game_id==gid:
                 card.refresh_move_quality()
+    def claim_draw(self,gid):
+        if self.results.get(gid):
+            return
+        board=self.get_board(gid)
+        if board.can_claim_threefold_repetition():
+            detail="Patta reclamata per triplice ripetizione"
+        elif board.can_claim_fifty_moves():
+            detail="Patta reclamata per regola delle 50 mosse"
+        else:
+            self.statusBar().showMessage("Patta non reclamabile: nessuna triplice ripetizione o soglia delle 50 mosse raggiunta.",4000)
+            self.refresh_all()
+            return
+        _,_,white,black=game(gid)
+        answer=QMessageBox.question(
+            self,"Conferma reclamo di patta",
+            f"{detail}. Confermare la patta tra {name(white)} e {name(black)}?",
+            QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer==QMessageBox.StandardButton.Yes:
+            self.set_result(gid,"1/2-1/2",confirm=False,detail=detail,termination="normal")
+            self.statusBar().showMessage(detail+" · risultato registrato.",4500)
     def offer_draw(self,gid):
         if self.results.get(gid): return
         _,_,white,black=game(gid)
