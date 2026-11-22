@@ -632,9 +632,9 @@ class BoardCard(QFrame):
             self._history_entries=self._history_entries[-12:]
             self._history_cache_ply=ply
             self.history.setText("MOSSE  ·  "+"  ".join(self._history_entries))
-        self.refresh_fifty_move_counter(board)
         else:
             self._render_move_history(board,ply)
+        self.refresh_fifty_move_counter(board)
         self.undo.setEnabled(bool(ply) and not finished)
 
     def refresh_fifty_move_counter(self,board):
@@ -1198,6 +1198,7 @@ class MainWindow(QMainWindow):
         else:
             self.results[gid]=value
             self.clock_data(gid)["started"]=False
+            self.clock_data(gid)["paused"]=False
             self.game_terminations[gid]={"termination":termination or ("adjudication" if value=="VOID" else "normal"),"detail":detail}
         round_key = str(game(gid)[1])
         if round_key in self.round_closures:
