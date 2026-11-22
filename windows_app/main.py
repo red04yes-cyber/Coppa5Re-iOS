@@ -463,9 +463,12 @@ class BoardCard(QFrame):
         nav.addWidget(self.prev_move_btn); nav.addWidget(self.view_ply,1); nav.addWidget(self.next_move_btn); lay.addLayout(nav)
         counters=QHBoxLayout()
         self.total_moves=QLabel("MOSSE GIOCATE · 0"); self.total_moves.setObjectName("Eyebrow")
-        self.no_progress=QLabel("SENZA CATTURE / MOSSE DI PEDONE · 0/100"); self.no_progress.setObjectName("Muted")
+        self.no_progress=QLabel("SENZA CATTURE / MOSSE DI PEDONE · 0/150"); self.no_progress.setObjectName("Muted")
         counters.addWidget(self.total_moves); counters.addStretch(); counters.addWidget(self.no_progress)
         lay.addLayout(counters)
+        self.auto_draw_countdown=QLabel("PATTA AUTOMATICA · MANCANO 150 SEMIMOSSE")
+        self.auto_draw_countdown.setObjectName("Muted")
+        lay.addWidget(self.auto_draw_countdown)
         self.history=QLabel("MOSSE  ·  Nessuna mossa"); self.history.setObjectName("Muted"); self.history.setWordWrap(True); self.history.setMaximumHeight(48); lay.addWidget(self.history)
         self.move_quality=QLabel("GAME REVIEW C5R · in attesa della prima mossa")
         self.move_quality.setObjectName("Muted"); self.move_quality.setWordWrap(True); lay.addWidget(self.move_quality)
@@ -578,12 +581,26 @@ class BoardCard(QFrame):
             self.claim_draw_btn.setText("RECLAMA PATTA · NON DISPONIBILE")
     def refresh_move_counters(self, board, total_plies=None):
         total = len(board.move_stack) if total_plies is None else total_plies
-        # python-chess halfmove_clock counts half-moves since the last pawn move or capture.
-        # The FIDE 50-move claim threshold is 100 half-moves.
-        quiet_plies = min(100, board.halfmove_clock)
-        self.total_moves.setText(f"MOSSE GIOCATE · {total}")
+        # halfmove_clock counts individual moves (plies) since the last pawn move or capture.
+        # A draw can be claimed at 100 plies (50 moves); it is automatic at 150 plies (75 moves),
+        # unless the last move delivered checkmate.
+        quiet_plies = min(150, board.halfmove_clock)
+        remaining_plies = max(0, 150 - board.halfmove_clock)
+        self.total_moves.setText(f"MOSSE GIOCATE · {total} SEMIMOSSE")
         self.no_progress.setText(
-            f"SENZA CATTURE / MOSSE DI PEDONE · {quiet_plies}/100 semimosse"
+            f"SENZA CATTURE / MOSSE DI PEDONE · {quiet_plies}/150 semimosse"
+        )
+        if board.is_checkmate():
+            countdown = "MATTO · LA PATTA AUTOMATICA NON SI APPLICA"
+        elif remaining_plies == 0:
+            countdown = "PATTA AUTOMATICA · SOGLIA DI 75 MOSSE RAGGIUNTA"
+        else:
+            countdown = f"PATTA AUTOMATICA TRA {remaining_plies} SEMIMOSSE"
+        self.auto_draw_countdown.setText(countdown)
+        self.auto_draw_countdown.setToolTip(
+            "La patta automatica scatta dopo 75 mosse per ciascun giocatore (150 semimosse) "
+            "senza catture né mosse di pedone. A 50 mosse (100 semimosse) la patta è reclamabile, "
+            "non automatica. Il matto all'ultima mossa prevale."
         )
     def refresh_move_quality(self):
         reviews=self.app.move_reviews.get(self.game_id,[])
