@@ -462,6 +462,7 @@ class BoardCard(QFrame):
         self.view_ply=QLabel("0 / 0"); self.view_ply.setObjectName("Muted")
         nav.addWidget(self.prev_move_btn); nav.addWidget(self.view_ply,1); nav.addWidget(self.next_move_btn); lay.addLayout(nav)
         self.history=QLabel("MOSSE  ·  Nessuna mossa"); self.history.setObjectName("Muted"); self.history.setWordWrap(True); self.history.setMaximumHeight(48); lay.addWidget(self.history)
+        self.fifty_move_label=QLabel("REGOLA 50 MOSSE · 0/100 semimosse"); self.fifty_move_label.setObjectName("Muted"); lay.addWidget(self.fifty_move_label)
         self.move_quality=QLabel("GAME REVIEW C5R · in attesa della prima mossa")
         self.move_quality.setObjectName("Muted"); self.move_quality.setWordWrap(True); lay.addWidget(self.move_quality)
         self.eval_bar=QProgressBar(); self.eval_bar.setRange(0,1000); self.eval_bar.setValue(500)
@@ -480,6 +481,7 @@ class BoardCard(QFrame):
         reset=QPushButton("Reset"); reset.clicked.connect(lambda:self.app.reset_board(self.game_id))
         self.engine_btn=QPushButton("STOCKFISH · ON" if self.app.engine_enabled else "STOCKFISH · OFF"); self.engine_btn.clicked.connect(self.app.toggle_engine); self.engine_btn.setEnabled(bool(self.app.find_engine()))
         self.clock_btn=QPushButton("AVVIA OROLOGIO"); self.clock_btn.clicked.connect(lambda:self.app.start_clock(self.game_id))
+        self.pause_btn=QPushButton("PAUSA"); self.pause_btn.clicked.connect(lambda:self.app.pause_clock(self.game_id))
         self.rotate_btn=QPushButton("RUOTA"); self.rotate_btn.clicked.connect(self.board.toggle_orientation)
         self.theme_btn=QPushButton("TEMA"); self.theme_btn.clicked.connect(self.board.cycle_theme)
         print_sheet=QPushButton("STAMPA SCHEDA"); print_sheet.clicked.connect(lambda:self.app.export_match_sheet_pdf(self.game_id))
@@ -489,7 +491,7 @@ class BoardCard(QFrame):
         draw_offer=QPushButton("PATTA CONCORDATA"); draw_offer.clicked.connect(lambda:self.app.offer_draw(self.game_id))
         resign=QPushButton("ABBANDONO"); resign.clicked.connect(lambda:self.app.resign_game(self.game_id))
         force=QPushButton("FORZA RISULTATO"); force.clicked.connect(lambda:self.app.force_game_result(self.game_id))
-        control_top.addWidget(self.undo); control_top.addWidget(self.clock_btn); control_top.addStretch()
+        control_top.addWidget(self.undo); control_top.addWidget(self.clock_btn); control_top.addWidget(self.pause_btn); control_top.addStretch()
         control_top.addWidget(self.rotate_btn); control_top.addWidget(self.theme_btn)
         control_top.addWidget(print_sheet); control_top.addWidget(show_qr)
         control_bottom.addWidget(notes); control_bottom.addWidget(view_notes)
@@ -554,8 +556,11 @@ class BoardCard(QFrame):
             state.get("black", 0),
             running and board.turn == chess.BLACK,
         )
+        paused=bool(state.get("paused"))
         self.clock_btn.setEnabled(not finished and not state.get("started"))
-        self.clock_btn.setText("OROLOGIO IN CORSO" if state.get("started") else "AVVIA OROLOGIO")
+        self.clock_btn.setText("OROLOGIO IN CORSO" if state.get("started") else ("RIPRENDI OROLOGIO" if paused else "AVVIA OROLOGIO"))
+        self.pause_btn.setEnabled(not finished and bool(state.get("started")))
+        self.pause_btn.setText("PAUSA" if state.get("started") else "IN PAUSA" if paused else "PAUSA")
     def refresh_move_quality(self):
         reviews=self.app.move_reviews.get(self.game_id,[])
         if not reviews:
@@ -629,7 +634,15 @@ class BoardCard(QFrame):
             self.history.setText("MOSSE  ·  "+"  ".join(self._history_entries))
         else:
             self._render_move_history(board,ply)
+        self.refresh_fifty_move_counter(board)
         self.undo.setEnabled(bool(ply) and not finished)
+
+    def refresh_fifty_move_counter(self,board):
+        halfmoves=min(100,int(board.halfmove_clock))
+        self.fifty_move_label.setText(
+            f"REGOLA 50 MOSSE · {halfmoves}/100 semimosse "
+            f"({halfmoves/2:.1f}/50 mosse) · si azzera con cattura o mossa di pedone"
+        )
 
     def _render_move_history(self,board,ply):
         replay=chess.Board()
@@ -641,6 +654,7 @@ class BoardCard(QFrame):
         self._history_entries=entries[-12:]
         self._history_cache_ply=ply
         self.history.setText("MOSSE  ·  "+("  ".join(self._history_entries) if entries else "Nessuna mossa"))
+        self.refresh_fifty_move_counter(board)
 
     def refresh(self):
         self.refresh_selector()
@@ -1021,6 +1035,8 @@ class MainWindow(QMainWindow):
     def record_move(self,gid,uci):
         if self.results.get(gid):
             self.statusBar().showMessage("Partita conclusa: rimuovi il risultato prima di continuare.",3500); return
+        if self.clock_data(gid).get("paused"):
+            self.statusBar().showMessage("Partita in pausa: riprendi l'orologio prima di giocare.",3500); return
         b=self.get_board(gid)
         try:
             move=chess.Move.from_uci(uci)
@@ -1182,6 +1198,7 @@ class MainWindow(QMainWindow):
         else:
             self.results[gid]=value
             self.clock_data(gid)["started"]=False
+            self.clock_data(gid)["paused"]=False
             self.game_terminations[gid]={"termination":termination or ("adjudication" if value=="VOID" else "normal"),"detail":detail}
         round_key = str(game(gid)[1])
         if round_key in self.round_closures:
@@ -1210,12 +1227,13 @@ class MainWindow(QMainWindow):
         control=self.time_control_for_game(gid)
         if gid not in self.clocks:
             base,_=control.split("+"); seconds=int(base)*60
-            self.clocks[gid]={"white":seconds,"black":seconds,"started":False,"last_wall":time.time()}
+            self.clocks[gid]={"white":seconds,"black":seconds,"started":False,"paused":False,"last_wall":time.time()}
         else:
             base,_=control.split("+"); seconds=int(base)*60
             self.clocks[gid].setdefault("white",seconds)
             self.clocks[gid].setdefault("black",seconds)
             self.clocks[gid].setdefault("started",False)
+            self.clocks[gid].setdefault("paused",False)
             self.clocks[gid].setdefault("last_wall",time.time())
             self.clocks[gid].setdefault("started_at",None)
             self.clocks[gid].setdefault("overlong_alerted",False)
@@ -1251,12 +1269,30 @@ class MainWindow(QMainWindow):
         if self.results.get(gid): return
         clock=self.clock_data(gid)
         clock["started"]=True
+        clock["paused"]=False
         clock["started_at"]=clock.get("started_at") or time.time()
         clock["overlong_alerted"]=bool(clock.get("overlong_alerted",False))
         clock["last_wall"]=time.time(); self._clock_runtime[gid]=time.monotonic()
         self.log_operation("Orologio avviato",gid,"fermo",self.time_control_for_game(gid))
         self.save(); self.save_recovery(); self.refresh_all()
         self.statusBar().showMessage("Cronometro avviato.",2000)
+    def pause_clock(self,gid):
+        if self.results.get(gid):
+            return
+        clock=self.clock_data(gid)
+        if not clock.get("started"):
+            return
+        side,remaining,_=self._advance_clock(gid)
+        if remaining<=0:
+            self.tick_clocks()
+            return
+        clock["started"]=False
+        clock["paused"]=True
+        self._clock_runtime.pop(gid,None)
+        self.log_operation("Orologio messo in pausa",gid,"in corso","in pausa")
+        self.save(); self.save_recovery(); self.refresh_all()
+        self.statusBar().showMessage("Partita in pausa: entrambi i cronometri sono fermi.",2500)
+
     def set_time_control(self,value):
         # I controlli sono vincolati all'Art. 5: 15+3 in qualificazione, 30+10 nei playoff.
         self.time_control="15+3"
